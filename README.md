@@ -18,5 +18,39 @@ elysium-agents provides a modular architecture for creating AI agents with custo
 
 ### Prerequisites
 
-- Python 3.8+
-- uv for package management
+- Python 3.11+ (as specified in `pyproject.toml`)
+- [uv](https://github.com/astral-sh/uv) for package management
+
+### Installation
+
+1. **Clone the repository** (if applicable):
+
+   ```bash
+   git clone <repository-url>
+   cd elysium-agents
+   ```
+
+2. **Install dependencies using uv**:
+
+   ```bash
+   uv sync
+   ```
+
+   This will install all Python dependencies including Playwright.
+
+3. **Install Playwright browsers**:
+   After installing the Python package, you need to install the browser binaries:
+
+   ```bash
+   uv run playwright install chromium
+   ```
+
+   For production environments, you may want to install only the system dependencies:
+
+   ```bash
+   uv run playwright install-deps chromium
+   ```
+
+   ```bash
+   playwright install
+   ```
