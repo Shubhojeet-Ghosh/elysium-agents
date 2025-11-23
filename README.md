@@ -52,5 +52,9 @@ elysium-agents provides a modular architecture for creating AI agents with custo
    ```
 
    ```bash
+   playwright install-deps
+   ```
+
+   ```bash
    playwright install
    ```
