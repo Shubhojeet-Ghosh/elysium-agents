@@ -1,6 +1,10 @@
 from typing import Dict, Any
 
-from controller.elysium_atlas_controller_files.atlas_url_controllers import ping_url_controller, scrape_urls_controller
+from controller.elysium_atlas_controller_files.atlas_url_controllers import (
+    ping_url_controller,
+    scrape_urls_controller,
+    extract_url_links_controller
+)
 
 from fastapi import APIRouter
 
@@ -15,3 +19,8 @@ async def ping_url_route(requestData: Dict[str, Any]):
 @elysium_atlas_router.post("/v1/scrape-urls")
 async def scrape_urls_route(requestData: Dict[str, Any]):
     return await scrape_urls_controller(requestData)
+
+# Async POST method to get all the links for a given link or from a sitemap
+@elysium_atlas_router.post("/v1/extract-url-links")
+async def extract_url_links_route(requestData: Dict[str, Any]):
+    return await extract_url_links_controller(requestData)

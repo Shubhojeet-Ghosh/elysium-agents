@@ -8,6 +8,11 @@ from bs4 import BeautifulSoup
 
 from playwright.async_api import async_playwright, Browser, Page, TimeoutError as PlaywrightTimeoutError
 from logging_config import get_logger
+from config.url_filters import (
+    FILTERED_SCHEMES,
+    FILTERED_DOMAINS,
+    FILTER_EMPTY
+)
 
 logger = get_logger()
 
@@ -524,14 +529,70 @@ def extract_hrefs_from_html(html_content: str, base_url: str = None) -> Dict[str
         }
 
 
-async def fetch_multiple_urls_content(urls: List[str], timeout: int = 30000, wait_until: str = "networkidle", headless: bool = True) -> List[Dict[str, Any]]:
+def filter_urls(urls: List[str]) -> List[str]:
+    """
+    Filter out invalid and unnecessary URLs from a list.
+    Removes URLs with filtered schemes, domains, and patterns.
+    
+    Args:
+        urls: List of URLs to filter
+        
+    Returns:
+        Filtered list of URLs with invalid/unnecessary links removed
+    """
+    if not urls or not isinstance(urls, list):
+        return []
+    
+    filtered_urls = []
+    
+    for url in urls:
+        if not url or not isinstance(url, str):
+            continue
+        
+        url = url.strip()
+        
+        # Filter empty URLs
+        if FILTER_EMPTY and not url:
+            continue
+        
+        # Parse URL to check scheme and domain
+        try:
+            parsed = urlparse(url)
+            
+            # Filter by scheme
+            if parsed.scheme and parsed.scheme.lower() in FILTERED_SCHEMES:
+                continue
+            
+            # Filter by domain
+            if parsed.netloc:
+                domain = parsed.netloc.lower()
+                # Remove www. prefix for comparison
+                domain_clean = domain.removeprefix("www.")
+                
+                # Check if domain matches any filtered domain
+                if any(filtered_domain in domain_clean for filtered_domain in FILTERED_DOMAINS):
+                    continue
+            
+            # If URL passed all filters, add it
+            filtered_urls.append(url)
+            
+        except Exception as e:
+            # If URL parsing fails, skip it
+            logger.debug(f"Skipping invalid URL during filtering: {url} - {str(e)}")
+            continue
+    
+    logger.info(f"Filtered {len(urls)} URLs to {len(filtered_urls)} valid URLs")
+    return filtered_urls
+
+
+async def fetch_multiple_urls_content(urls: List[str], timeout: int = 60000, wait_until: str = "networkidle", headless: bool = True) -> List[Dict[str, Any]]:
     """
     Process multiple URLs: validate, normalize, fetch HTML content, and extract text.
     This is a comprehensive service function that handles the complete workflow for multiple URLs.
     
     Args:
         urls: List of URLs to process
-        timeout: Maximum time to wait for page load in milliseconds (default: 30000 = 30 seconds)
+        timeout: Maximum time to wait for page load in milliseconds (default: 60000 = 60 seconds)
         wait_until: When to consider navigation succeeded. Options: 'load', 'domcontentloaded', 'networkidle'
         headless: Whether to run browser in headless mode (default: True)
         
@@ -610,7 +671,41 @@ async def fetch_multiple_urls_content(urls: List[str], timeout: int = 30000, wai
                 hrefs_result = extract_hrefs_from_html(html_content, base_url=final_url)
                 if hrefs_result.get("success"):
                     hrefs = hrefs_result.get("hrefs")
-                    hrefs_count = hrefs_result.get("hrefs_count")
+                    
+                    # Ensure the normalized URL (with trailing slash) is the first element
+                    normalized_url_for_href = html_result.get("normalized_url")
+                    if normalized_url_for_href:
+                        # Ensure normalized URL ends with '/' for the base URL
+                        if not normalized_url_for_href.endswith('/'):
+                            # Parse and reconstruct with trailing slash
+                            parsed = urlparse(normalized_url_for_href)
+                            normalized_url_for_href = urlunparse((
+                                parsed.scheme,
+                                parsed.netloc,
+                                parsed.path.rstrip('/') + '/' if parsed.path != '/' else '/',
+                                parsed.params,
+                                parsed.query,
+                                ''  # Remove fragment
+                            ))
+                        
+                        # Prepend normalized URL as first element if not already present
+                        if normalized_url_for_href not in hrefs:
+                            hrefs.insert(0, normalized_url_for_href)
+                        else:
+                            # If it exists, move it to the first position
+                            hrefs.remove(normalized_url_for_href)
+                            hrefs.insert(0, normalized_url_for_href)
+                    
+                    # Remove any duplicate URLs while preserving order (normalized URL should remain first)
+                    seen = set()
+                    unique_hrefs = []
+                    for href in hrefs:
+                        if href and href not in seen:
+                            seen.add(href)
+                            unique_hrefs.append(href)
+                    
+                    hrefs = unique_hrefs
+                    hrefs_count = len(hrefs)
             
             # Step 4: Build result dictionary
             result = {
