@@ -24,6 +24,10 @@ class Settings(BaseSettings):
     AWS_SECRET_ACCESS_KEY: str
     AWS_REGION: str
     JWT_SECRET: str
+    APPLICATION_PASSKEY: str
+    REDIS_HOST: str = Field(default="localhost")
+    REDIS_PORT: int = Field(default=6379)
+    REDIS_DB: int = Field(default=0)
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

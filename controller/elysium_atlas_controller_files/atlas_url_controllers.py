@@ -24,8 +24,14 @@ async def ping_url_controller(requestData: Dict[str, Any]):
             "error": str(e)
         })
 
-async def scrape_urls_controller(requestData: Dict[str, Any]):
+async def scrape_urls_controller(requestData: Dict[str, Any],userData: dict):
     try:
+        if userData is None or userData.get("success") == False:
+            return JSONResponse(status_code=401, content={"success": False, "message": userData.get("message")})
+
+        if(userData.get("success")):
+            logger.info(f"User data: {userData}")
+            
         urls = requestData.get("urls") or requestData.get("url")
         
         # Handle both single URL (string) and multiple URLs (list)
@@ -61,8 +67,14 @@ async def scrape_urls_controller(requestData: Dict[str, Any]):
             "error": str(e)
         })
 
-async def extract_url_links_controller(requestData: Dict[str, Any]):
+async def extract_url_links_controller(requestData: Dict[str, Any],userData: dict):
     try:
+        if userData is None or userData.get("success") == False:
+            return JSONResponse(status_code=401, content={"success": False, "message": userData.get("message")})
+
+        if(userData.get("success")):
+            logger.info(f"User data: {userData}")
+
         source = requestData.get("source")
         if not source:
             return JSONResponse(status_code=400, content={"success": False, "message": "Source is required"})

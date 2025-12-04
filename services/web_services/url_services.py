@@ -4,7 +4,7 @@ URL Validator Service - Check if URLs are valid and reachable
 import httpx
 from typing import Dict, Optional, Any, List
 from urllib.parse import urlparse, urljoin, urlunparse
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, NavigableString
 
 from playwright.async_api import async_playwright, Browser, Page, TimeoutError as PlaywrightTimeoutError
 from logging_config import get_logger
@@ -328,13 +328,15 @@ async def fetch_html_content(
         }
 
 
-def extract_text_from_html(html_content: str) -> Dict[str, Any]:
+def extract_text_from_html(html_content: str, base_url: str = None) -> Dict[str, Any]:
     """
     Extract clean text content from HTML using Beautiful Soup.
     Handles UTF-8 encoding safely to prevent encoding errors.
+    Includes link URLs in the extracted text for RAG purposes.
     
     Args:
         html_content: HTML content string or bytes to extract text from
+        base_url: Base URL to convert relative URLs to absolute URLs (optional)
         
     Returns:
         Dictionary containing:
@@ -367,6 +369,28 @@ def extract_text_from_html(html_content: str) -> Dict[str, Any]:
         # Remove script, style, and other non-content elements
         for element in soup(["script", "style", "meta", "link", "noscript", "head"]):
             element.decompose()
+        
+        # Before extracting text, include link URLs in the text content for RAG purposes
+        # Find all anchor tags with href attributes and append the URL to their text
+        for anchor_tag in soup.find_all('a', href=True):
+            href = anchor_tag.get('href', '').strip()
+            
+            # If there's a valid href, append it to the link text
+            if href:
+                # Convert relative URLs to absolute if base_url is provided
+                if base_url:
+                    try:
+                        absolute_href = urljoin(base_url, href).strip()
+                        if absolute_href:
+                            href = absolute_href
+                    except Exception:
+                        # If URL joining fails, use the original href
+                        pass
+                
+                # Create a new NavigableString with the URL in brackets
+                # This will be appended after the existing content so nested tags are preserved
+                url_text = NavigableString(f" [{href}]")
+                anchor_tag.append(url_text)
         
         # Get text content
         text_content = soup.get_text(separator=' ', strip=True)
@@ -661,8 +685,8 @@ async def fetch_multiple_urls_content(urls: List[str], timeout: int = 60000, wai
                 html_content = html_result.get("html_content")
                 final_url = html_result.get("final_url") or html_result.get("normalized_url")
                 
-                # Extract text content
-                text_result = extract_text_from_html(html_content)
+                # Extract text content (include links in text for RAG purposes)
+                text_result = extract_text_from_html(html_content, base_url=final_url)
                 if text_result.get("success"):
                     text_content = text_result.get("text_content")
                     text_length = text_result.get("text_length")

@@ -1,4 +1,6 @@
 from typing import Dict, Any
+from fastapi import Depends
+from middlewares.jwt_middleware import authorize_user
 
 from controller.elysium_atlas_controller_files.atlas_url_controllers import (
     ping_url_controller,
@@ -17,10 +19,10 @@ async def ping_url_route(requestData: Dict[str, Any]):
 
 # Async POST method to scrape URLs and get the html content, text content, hrefs, etc.
 @elysium_atlas_router.post("/v1/scrape-urls")
-async def scrape_urls_route(requestData: Dict[str, Any]):
-    return await scrape_urls_controller(requestData)
+async def scrape_urls_route(requestData: Dict[str, Any],user: dict = Depends(authorize_user)):
+    return await scrape_urls_controller(requestData,user)
 
 # Async POST method to get all the links for a given link or from a sitemap
 @elysium_atlas_router.post("/v1/extract-url-links")
-async def extract_url_links_route(requestData: Dict[str, Any]):
-    return await extract_url_links_controller(requestData)
+async def extract_url_links_route(requestData: Dict[str, Any],user: dict = Depends(authorize_user)):
+    return await extract_url_links_controller(requestData,user)

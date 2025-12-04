@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 from logging_config import get_logger
 from config.settings import settings
 from routes.main_router import main_router
+from services.redis_services import initialize_redis_client, close_redis_client
 
 logger = get_logger()
 
@@ -20,10 +21,16 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info(f"Starting {settings.PROJECT_TITLE} in {settings.ENVIRONMENT} mode...")
     
+    # Initialize Redis client connection
+    initialize_redis_client()
+    
     yield
     
     # Shutdown
     logger.info(f"Shutting down {settings.PROJECT_TITLE}...")
+    
+    # Close Redis client connection
+    close_redis_client()
 
 
 # Initialize FastAPI app
