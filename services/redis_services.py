@@ -132,4 +132,3 @@ def cache_clear_all():
     except Exception as e:
         logger.error(f"Error while clearing Redis cache: {e}")
         raise
-

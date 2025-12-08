@@ -12,6 +12,7 @@ from logging_config import get_logger
 from config.settings import settings
 from routes.main_router import main_router
 from services.redis_services import initialize_redis_client, close_redis_client
+from sockets.sockets import socketio_app
 
 logger = get_logger()
 
@@ -52,7 +53,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
 # Global exception handler
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
@@ -82,6 +82,9 @@ async def root():
 
 # Include the main router, which in turn includes all other route modules
 app.include_router(main_router)
+
+# Mount Socket.IO app
+app.mount("/socket.io", socketio_app)
 
 if __name__ == "__main__":
     import uvicorn

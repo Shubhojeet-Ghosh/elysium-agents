@@ -1,0 +1,3 @@
+{
+  "redis_keys_in_use": ["socket:global_connections"]
+}
