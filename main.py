@@ -12,7 +12,7 @@ from logging_config import get_logger
 from config.settings import settings
 from routes.main_router import main_router
 from services.redis_services import initialize_redis_client, close_redis_client
-from sockets.sockets import socketio_app
+from sockets import socketio_app
 
 logger = get_logger()
 

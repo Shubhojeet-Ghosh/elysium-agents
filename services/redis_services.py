@@ -132,3 +132,109 @@ def cache_clear_all():
     except Exception as e:
         logger.error(f"Error while clearing Redis cache: {e}")
         raise
+
+
+# Redis Set operations for efficient socket connection management
+def set_add(key: str, *members):
+    """
+    Add one or more members to a Redis Set.
+    O(1) per operation.
+    
+    Args:
+        key: Redis key for the set
+        *members: One or more members to add to the set
+        
+    Returns:
+        int: Number of members that were added (not already present)
+    """
+    if redis_client is None:
+        raise RuntimeError("Redis client is not initialized. Call initialize_redis_client() first.")
+    try:
+        return redis_client.sadd(key, *members)
+    except Exception as e:
+        logger.error(f"set_add failed for key {key}: {e}")
+        raise
+
+
+def set_remove(key: str, *members):
+    """
+    Remove one or more members from a Redis Set.
+    O(1) per operation.
+    
+    Args:
+        key: Redis key for the set
+        *members: One or more members to remove from the set
+        
+    Returns:
+        int: Number of members that were removed
+    """
+    if redis_client is None:
+        raise RuntimeError("Redis client is not initialized. Call initialize_redis_client() first.")
+    try:
+        return redis_client.srem(key, *members)
+    except Exception as e:
+        logger.error(f"set_remove failed for key {key}: {e}")
+        raise
+
+
+def set_members(key: str):
+    """
+    Get all members of a Redis Set.
+    O(N) where N is the number of members.
+    
+    Args:
+        key: Redis key for the set
+        
+    Returns:
+        set: Set of all members, empty set if key doesn't exist
+    """
+    if redis_client is None:
+        raise RuntimeError("Redis client is not initialized. Call initialize_redis_client() first.")
+    try:
+        members = redis_client.smembers(key)
+        return members if members is not None else set()
+    except Exception as e:
+        logger.error(f"set_members failed for key {key}: {e}")
+        raise
+
+
+def set_count(key: str):
+    """
+    Get the number of members in a Redis Set.
+    O(1) operation - very efficient for getting count.
+    
+    Args:
+        key: Redis key for the set
+        
+    Returns:
+        int: Number of members in the set, 0 if key doesn't exist
+    """
+    if redis_client is None:
+        raise RuntimeError("Redis client is not initialized. Call initialize_redis_client() first.")
+    try:
+        count = redis_client.scard(key)
+        return count if count is not None else 0
+    except Exception as e:
+        logger.error(f"set_count failed for key {key}: {e}")
+        raise
+
+
+def set_contains(key: str, member):
+    """
+    Check if a member exists in a Redis Set.
+    O(1) operation.
+    
+    Args:
+        key: Redis key for the set
+        member: Member to check
+        
+    Returns:
+        bool: True if member exists, False otherwise
+    """
+    if redis_client is None:
+        raise RuntimeError("Redis client is not initialized. Call initialize_redis_client() first.")
+    try:
+        return bool(redis_client.sismember(key, member))
+    except Exception as e:
+        logger.error(f"set_contains failed for key {key}: {e}")
+        raise
