@@ -61,8 +61,8 @@ async def chat_with_model_controller(requestData, authorized):
         response_text = ""
         if stream and hasattr(response_obj, "__aiter__"):
             async for chunk in response_obj:
-                print(f"[chat_with_model_controller] stream chunk: {chunk}")
                 response_text += chunk
+                # print(f"{chunk}", end="", flush=True)
             print(f"[chat_with_model_controller] Streaming completed for model '{model}'")
         else:
             response_text = response_obj
