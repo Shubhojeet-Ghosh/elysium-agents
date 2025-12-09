@@ -18,4 +18,5 @@ dependencies = [
     "motor>=3.7.1",
     "qdrant-client>=1.16.1",
     "openai>=1.0.0",
+    "groq>=0.9.0",
 ]

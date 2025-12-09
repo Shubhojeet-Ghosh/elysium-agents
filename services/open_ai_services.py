@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Optional, Dict, Any, AsyncGenerator, Union
 from openai import AsyncOpenAI
 from logging_config import get_logger
 from config.settings import settings
@@ -66,3 +66,101 @@ async def get_embeddings(
         logger.error(f"Error generating embeddings: {e}")
         raise
 
+
+async def openai_chat_completion_non_reasoning(params: Dict[str, Any]) -> Union[str, AsyncGenerator[str, None]]:
+    """
+    General chat completion (non-reasoning) with configurable temperature.
+
+    Args:
+        params: Dictionary of parameters. Supported keys:
+            - messages (list, required): OpenAI chat messages format
+            - model (str): Defaults to "gpt-4o-mini"
+            - temperature (float): Defaults to 0.7
+            - max_completion_tokens (int): Defaults to 500 (use this instead of max_tokens)
+            - top_p (float): Defaults to 1.0
+            - response_format (dict | None): OpenAI response_format
+
+    Returns:
+        str (non-stream) or async generator of str (stream)
+    """
+    model = params.get("model", "gpt-4o-mini")
+    messages = params.get("messages") or []
+    temperature = params.get("temperature", 0.7)
+    stream = bool(params.get("stream", False))
+
+    if not isinstance(messages, list) or len(messages) == 0:
+        logger.warning("chat_completion called without messages; returning empty string")
+        return ""
+
+    try:
+        client = get_openai_client()
+        response = await client.chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=temperature,
+            stream=stream,
+        )
+
+        if stream:
+            async def stream_generator() -> AsyncGenerator[str, None]:
+                async for chunk in response:
+                    if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
+                        yield chunk.choices[0].delta.content
+
+            logger.debug(f"Chat completion using model={model}, temperature={temperature}, stream=True")
+            return stream_generator()
+
+        content = response.choices[0].message.content if response.choices else ""
+        logger.debug(f"Chat completion using model={model}, temperature={temperature}, stream=False")
+        return content or ""
+    except Exception as e:
+        logger.error(f"Error calling chat completion: {e}")
+        raise
+
+
+async def openai_chat_completion_reasoning(params: Dict[str, Any]) -> Union[str, AsyncGenerator[str, None]]:
+    """
+    Reasoning-oriented completion without temperature (deterministic by default).
+
+    Args:
+        params: Dictionary of parameters. Supported keys:
+            - messages (list, required): OpenAI chat messages format
+            - model (str): Defaults to "gpt-4o-mini"
+            - max_completion_tokens (int): Defaults to 500 (use this instead of max_tokens)
+            - top_p (float): Defaults to 1.0
+            - response_format (dict | None): OpenAI response_format
+
+    Returns:
+        str (non-stream) or async generator of str (stream)
+    """
+    model = params.get("model", "gpt-4o-mini")
+    messages = params.get("messages") or []
+    stream = bool(params.get("stream", False))
+
+    if not isinstance(messages, list) or len(messages) == 0:
+        logger.warning("reasoning_completion called without messages; returning empty string")
+        return ""
+
+    try:
+        client = get_openai_client()
+        response = await client.chat.completions.create(
+            model=model,
+            messages=messages,
+            stream=stream,
+        )
+
+        if stream:
+            async def stream_generator() -> AsyncGenerator[str, None]:
+                async for chunk in response:
+                    if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
+                        yield chunk.choices[0].delta.content
+
+            logger.debug(f"Reasoning completion using model={model}, stream=True")
+            return stream_generator()
+
+        content = response.choices[0].message.content if response.choices else ""
+        logger.debug(f"Reasoning completion using model={model}, stream=False")
+        return content or ""
+    except Exception as e:
+        logger.error(f"Error calling reasoning completion: {e}")
+        raise
