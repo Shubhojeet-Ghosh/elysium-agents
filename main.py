@@ -12,6 +12,8 @@ from logging_config import get_logger
 from config.settings import settings
 from routes.main_router import main_router
 from services.redis_services import initialize_redis_client, close_redis_client
+from services.mongo_services import initialize_mongo_client, close_mongo_client
+from services.qdrant_services import initialize_qdrant_client, close_qdrant_client
 from sockets import socketio_app
 
 logger = get_logger()
@@ -25,10 +27,26 @@ async def lifespan(app: FastAPI):
     # Initialize Redis client connection
     initialize_redis_client()
     
+    # Initialize MongoDB client connection
+    await initialize_mongo_client()
+    
+    # Initialize Qdrant client connection
+    await initialize_qdrant_client()
+    
+    # Ensure agent knowledge base collection exists
+    from services.elysium_atlas_services.qdrant_collection_helpers import ensure_agent_knowledge_base_collection_exists
+    await ensure_agent_knowledge_base_collection_exists()
+    
     yield
     
     # Shutdown
     logger.info(f"Shutting down {settings.PROJECT_TITLE}...")
+    
+    # Close Qdrant client connection
+    await close_qdrant_client()
+    
+    # Close MongoDB client connection
+    await close_mongo_client()
     
     # Close Redis client connection
     close_redis_client()

@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     REDIS_HOST: str = Field(default="localhost")
     REDIS_PORT: int = Field(default=6379)
     REDIS_DB: int = Field(default=0)
+    QDRANT_CLUSTER_ENDPOINT:str
+    QDRANT_API_KEY:str
+    OPENAI_API_KEY:str
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

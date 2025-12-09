@@ -1,6 +1,7 @@
 """
 URL Validator Service - Check if URLs are valid and reachable
 """
+import asyncio
 import httpx
 from typing import Dict, Optional, Any, List
 from urllib.parse import urlparse, urljoin, urlunparse
@@ -609,44 +610,30 @@ def filter_urls(urls: List[str]) -> List[str]:
     return filtered_urls
 
 
-async def fetch_multiple_urls_content(urls: List[str], timeout: int = 60000, wait_until: str = "networkidle", headless: bool = True) -> List[Dict[str, Any]]:
+async def _process_single_url(
+    url: str,
+    semaphore: asyncio.Semaphore,
+    timeout: int,
+    wait_until: str,
+    headless: bool
+) -> Dict[str, Any]:
     """
-    Process multiple URLs: validate, normalize, fetch HTML content, and extract text.
-    This is a comprehensive service function that handles the complete workflow for multiple URLs.
+    Helper function to process a single URL with semaphore-controlled concurrency.
     
     Args:
-        urls: List of URLs to process
-        timeout: Maximum time to wait for page load in milliseconds (default: 60000 = 60 seconds)
-        wait_until: When to consider navigation succeeded. Options: 'load', 'domcontentloaded', 'networkidle'
-        headless: Whether to run browser in headless mode (default: True)
+        url: URL to process
+        semaphore: Asyncio semaphore to limit concurrent executions
+        timeout: Maximum time to wait for page load in milliseconds
+        wait_until: When to consider navigation succeeded
+        headless: Whether to run browser in headless mode
         
     Returns:
-        List of dictionaries, each containing:
-            - success: bool - Whether the operation was successful
-            - url: str - Original URL provided
-            - normalized_url: str - Validated and normalized URL (None if validation failed)
-            - final_url: str - Final URL after redirects (None if failed)
-            - html_content: str - HTML content of the page (None if failed)
-            - text_content: str - Clean extracted text content (None if failed or HTML unavailable)
-            - text_length: int - Length of extracted text (None if failed)
-            - hrefs: List[str] - List of all href links found in the HTML (None if failed or HTML unavailable)
-            - hrefs_count: int - Number of unique hrefs found (None if failed)
-            - title: str - Page title (None if failed)
-            - status_code: int - HTTP status code (None if failed)
-            - error: str - Error message if failed (None if successful)
+        Dictionary with processing results
     """
-    results = []
-    
-    if not urls or not isinstance(urls, list):
-        logger.warning("Invalid URLs input: must be a non-empty list")
-        return results
-    
-    logger.info(f"Processing {len(urls)} URLs")
-    
-    for url in urls:
+    async with semaphore:
         if not url or not isinstance(url, str):
             logger.warning(f"Skipping invalid URL entry: {url}")
-            results.append({
+            return {
                 "success": False,
                 "url": str(url) if url else None,
                 "normalized_url": None,
@@ -659,8 +646,7 @@ async def fetch_multiple_urls_content(urls: List[str], timeout: int = 60000, wai
                 "title": None,
                 "status_code": None,
                 "error": "Invalid URL: must be a non-empty string"
-            })
-            continue
+            }
         
         try:
             # Step 1: Validate and normalize URL
@@ -747,17 +733,17 @@ async def fetch_multiple_urls_content(urls: List[str], timeout: int = 60000, wai
                 "error": html_result.get("error")
             }
             
-            results.append(result)
-            
             if result["success"]:
                 logger.info(f"Successfully processed URL: {url}")
             else:
                 logger.warning(f"Failed to process URL: {url} - {html_result.get('error')}")
+            
+            return result
                 
         except ValueError as e:
             # URL validation/normalization failed
             logger.warning(f"URL validation failed for {url}: {str(e)}")
-            results.append({
+            return {
                 "success": False,
                 "url": url,
                 "normalized_url": None,
@@ -770,12 +756,12 @@ async def fetch_multiple_urls_content(urls: List[str], timeout: int = 60000, wai
                 "title": None,
                 "status_code": None,
                 "error": f"URL validation error: {str(e)}"
-            })
+            }
             
         except Exception as e:
             # Unexpected error
             logger.error(f"Unexpected error processing URL {url}: {str(e)}")
-            results.append({
+            return {
                 "success": False,
                 "url": url,
                 "normalized_url": None,
@@ -788,8 +774,92 @@ async def fetch_multiple_urls_content(urls: List[str], timeout: int = 60000, wai
                 "title": None,
                 "status_code": None,
                 "error": f"Unexpected error: {str(e)}"
+            }
+
+
+async def fetch_multiple_urls_content(
+    urls: List[str], 
+    timeout: int = 60000, 
+    wait_until: str = "networkidle", 
+    headless: bool = True,
+    batch_size: int = 5
+) -> List[Dict[str, Any]]:
+    """
+    Process multiple URLs: validate, normalize, fetch HTML content, and extract text.
+    This is a comprehensive service function that handles the complete workflow for multiple URLs.
+    Processes URLs in batches with controlled concurrency to manage memory usage.
+    
+    Args:
+        urls: List of URLs to process
+        timeout: Maximum time to wait for page load in milliseconds (default: 60000 = 60 seconds)
+        wait_until: When to consider navigation succeeded. Options: 'load', 'domcontentloaded', 'networkidle'
+        headless: Whether to run browser in headless mode (default: True)
+        batch_size: Number of URLs to process concurrently (default: 5, suitable for 2GB RAM machines)
+        
+    Returns:
+        List of dictionaries, each containing:
+            - success: bool - Whether the operation was successful
+            - url: str - Original URL provided
+            - normalized_url: str - Validated and normalized URL (None if validation failed)
+            - final_url: str - Final URL after redirects (None if failed)
+            - html_content: str - HTML content of the page (None if failed)
+            - text_content: str - Clean extracted text content (None if failed or HTML unavailable)
+            - text_length: int - Length of extracted text (None if failed)
+            - hrefs: List[str] - List of all href links found in the HTML (None if failed or HTML unavailable)
+            - hrefs_count: int - Number of unique hrefs found (None if failed)
+            - title: str - Page title (None if failed)
+            - status_code: int - HTTP status code (None if failed)
+            - error: str - Error message if failed (None if successful)
+    """
+    if not urls or not isinstance(urls, list):
+        logger.warning("Invalid URLs input: must be a non-empty list")
+        return []
+    
+    # Validate batch_size
+    if batch_size < 1:
+        logger.warning(f"Invalid batch_size {batch_size}, using default value of 5")
+        batch_size = 5
+    elif batch_size > 10:
+        logger.warning(f"batch_size {batch_size} is high for 2GB RAM machines, consider using 5-7")
+    
+    logger.info(f"Processing {len(urls)} URLs in batches of {batch_size} concurrent requests")
+    
+    # Create semaphore to limit concurrent executions
+    semaphore = asyncio.Semaphore(batch_size)
+    
+    # Create tasks for all URLs
+    tasks = [
+        _process_single_url(url, semaphore, timeout, wait_until, headless)
+        for url in urls
+    ]
+    
+    # Execute all tasks concurrently (limited by semaphore)
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    
+    # Handle any exceptions that weren't caught in the task
+    processed_results = []
+    for i, result in enumerate(results):
+        if isinstance(result, Exception):
+            logger.error(f"Unexpected exception processing URL {urls[i]}: {str(result)}")
+            processed_results.append({
+                "success": False,
+                "url": urls[i] if i < len(urls) else None,
+                "normalized_url": None,
+                "final_url": None,
+                "html_content": None,
+                "text_content": None,
+                "text_length": None,
+                "hrefs": None,
+                "hrefs_count": None,
+                "title": None,
+                "status_code": None,
+                "error": f"Task exception: {str(result)}"
             })
+        else:
+            processed_results.append(result)
     
-    logger.info(f"Completed processing {len(urls)} URLs. Success: {sum(1 for r in results if r.get('success'))}, Failed: {sum(1 for r in results if not r.get('success'))}")
+    success_count = sum(1 for r in processed_results if r.get('success'))
+    failed_count = len(processed_results) - success_count
+    logger.info(f"Completed processing {len(urls)} URLs. Success: {success_count}, Failed: {failed_count}")
     
-    return results
+    return processed_results
