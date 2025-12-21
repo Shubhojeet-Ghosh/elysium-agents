@@ -1,6 +1,6 @@
 from typing import Dict, Any
 from middlewares.jwt_middleware import generate_jwt_token
-from controller.elysium_atlas_controller_files.atlas_user_auth_controllers import generate_jwt_token_controller
+from controllers.elysium_atlas_controller_files.atlas_user_auth_controllers import generate_jwt_token_controller
 from fastapi import APIRouter
 
 elysium_atlas_user_auth_router = APIRouter(prefix = "/elysium-atlas/user-auth",tags=["Elysium Atlas User Auth"])

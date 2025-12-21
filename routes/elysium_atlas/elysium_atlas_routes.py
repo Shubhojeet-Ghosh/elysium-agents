@@ -2,7 +2,7 @@ from typing import Dict, Any
 from fastapi import Depends
 from middlewares.jwt_middleware import authorize_user
 
-from controller.elysium_atlas_controller_files.atlas_url_controllers import (
+from controllers.elysium_atlas_controller_files.atlas_url_controllers import (
     ping_url_controller,
     scrape_urls_controller,
     extract_url_links_controller

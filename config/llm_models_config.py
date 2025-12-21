@@ -24,6 +24,11 @@ MODEL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "mode": "non-reasoning",
         "handler": openai_chat_completion_non_reasoning,
     },
+    "gpt-4.1-mini": {
+        "family": "gpt-4.1-mini-2025-04-14",
+        "mode": "non-reasoning",
+        "handler": openai_chat_completion_non_reasoning,
+    },
     # Reasoning-oriented (no temperature)
     "gpt-5-nano-2025-08-07": {
         "family": "openai-gpt-5-nano",

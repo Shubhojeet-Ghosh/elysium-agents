@@ -2,7 +2,7 @@ from typing import Dict, Any
 
 from fastapi import APIRouter, Depends
 
-from controller.general_controller_files.chat_with_llm_models_controllers import chat_with_model_controller
+from controllers.general_controller_files.chat_with_llm_models_controllers import chat_with_model_controller
 from middlewares.application_passkey_auth import verify_application_passkey
 
 elysium_chat_router = APIRouter(prefix="/elysium-chat", tags=["Elysium Chat"])

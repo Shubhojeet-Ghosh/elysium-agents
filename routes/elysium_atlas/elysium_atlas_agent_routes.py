@@ -4,7 +4,7 @@ from fastapi import Depends
 from middlewares.jwt_middleware import authorize_user
 from fastapi import BackgroundTasks
 
-from controller.elysium_atlas_controller_files.atlas_controllers import build_agent_controller_v1, pre_build_agent_operations_controller
+from controllers.elysium_atlas_controller_files.atlas_controllers import build_update_agent_controller_v1, pre_build_agent_operations_controller,generate_presigned_url_controller
 
 elysium_atlas_agent_router = APIRouter(prefix = "/elysium-atlas/agent",tags=["Elysium Atlas - Agent Routes"])
 
@@ -13,7 +13,12 @@ elysium_atlas_agent_router = APIRouter(prefix = "/elysium-atlas/agent",tags=["El
 async def pre_build_agent_operations_route_v1(requestData: Dict[str, Any],user: dict = Depends(authorize_user)):
     return await pre_build_agent_operations_controller(requestData,user)
 
+# Async POST method to generate presigned urls for the agent
+@elysium_atlas_agent_router.post("/v1/generate-presigned-urls")
+async def generate_presigned_urls_route_v1(requestData: Dict[str, Any],user: dict = Depends(authorize_user)):
+    return await generate_presigned_url_controller(requestData,user)
+
 # Async POST method to build the agent
-@elysium_atlas_agent_router.post("/v1/build-agent")
-async def build_agent_route_v1(requestData: Dict[str, Any],user: dict = Depends(authorize_user),background_tasks: BackgroundTasks = BackgroundTasks()):
-    return await build_agent_controller_v1(requestData,user,background_tasks)
+@elysium_atlas_agent_router.post("/v1/build-update-agent")
+async def build_update_agent_route_v1(requestData: Dict[str, Any],user: dict = Depends(authorize_user),background_tasks: BackgroundTasks = BackgroundTasks()):
+    return await build_update_agent_controller_v1(requestData,user,background_tasks)
