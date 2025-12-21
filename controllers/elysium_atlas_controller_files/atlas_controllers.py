@@ -8,19 +8,27 @@ from services.aws_services.s3_service import generate_presigned_upload_url
 
 logger = get_logger()
 
-async def pre_build_agent_operations_controller(requestData: Dict[str, Any],user: dict):
+async def pre_build_agent_operations_controller(requestData: Dict[str, Any],userData: dict):
     try:
+        if userData is None or userData.get("success") == False:
+            return JSONResponse(status_code=401, content={"success": False, "message": userData.get("message")})
+        
+        # logger.info(f"User data: {userData}")
+
+        user_id = userData.get("user_id")
 
         initial_data = ELYSIUM_ATLAS_AGENT_CONFIG_DATA.get("agent_init_config")
+        
+        initial_data["owner_user_id"] = user_id
 
         if requestData.get("agent_name") is not None:
             initial_data["agent_name"] = requestData.get("agent_name")
 
         agent_id = await create_agent_document(initial_data)
         if agent_id is None:
-            return JSONResponse(status_code=500, content={"success": False, "message": "Failed to create agent document"})
+            return JSONResponse(status_code=500, content={"success": False, "message": "Failed to create the agent."})
         
-        return JSONResponse(status_code=200, content={"success": True, "message": "Agent document created", "agent_id": agent_id})
+        return JSONResponse(status_code=200, content={"success": True, "message": "Agent created successfully.", "agent_id": agent_id})
 
     except Exception as e:
         return JSONResponse(status_code=500, content={"success": False, "message": f"An error occurred while building the agent.", "error": str(e)})

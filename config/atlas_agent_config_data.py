@@ -1,6 +1,7 @@
 ELYSIUM_ATLAS_AGENT_CONFIG_DATA = {
     "agent_init_config": {
         "agent_name": "my-agent",
+        "owner_user_id":None,
         "agent_aliases":[],
         "agent_icon":None,
         "base_url":None,

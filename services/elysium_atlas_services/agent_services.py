@@ -84,6 +84,7 @@ async def initialize_agent_build_update(requestData: Dict[str, Any]) -> bool:
 
 
         return True
+        
     except Exception as e:
         logger.error(f"Error storing agent URLs: {e}")
         return False
