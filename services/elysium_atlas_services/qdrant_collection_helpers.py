@@ -6,6 +6,7 @@ logger = get_logger()
 
 # Collection constants
 AGENT_KNOWLEDGE_BASE_COLLECTION_NAME = "agent_knowledge_base"
+AGENT_WEB_CATALOG_COLLECTION_NAME = "agent_web_catalog"
 # Embedding dimension for text-embedding-3-small
 EMBEDDING_DIM = 1536
 EMBEDDING_MODEL = "text-embedding-3-small"
@@ -51,6 +52,76 @@ AGENT_KNOWLEDGE_BASE_POINT_PAYLOAD_KEYS = {
             "required": False,
             "type": "string (ISO format)",
             "description": "Timestamp when this point was created"
+        }
+    }
+}
+
+# Reference dictionary for point structure in agent_web_catalog collection
+# This is for developer reference only - documents the complete structure of points
+AGENT_WEB_CATALOG_POINT_PAYLOAD_KEYS = {
+    "vector": {
+        "required": True,
+        "type": "list[float]",
+        "dimension": EMBEDDING_DIM,
+        "model": EMBEDDING_MODEL,
+        "source_key": "summary",
+        "description": f"Vector embeddings of the summary field. Generated using {EMBEDDING_MODEL} model with dimension {EMBEDDING_DIM}. The vector represents the semantic meaning of the page summary for agent routing and semantic search."
+    },
+    "payload": {
+        "agent_id": {
+            "required": True,
+            "type": "string",
+            "description": "The ID of the agent that owns this web catalog entry"
+        },
+        "url": {
+            "required": True,
+            "type": "string",
+            "description": "The canonical URL of the page. Used as unique identifier per agent (one point per URL per agent)."
+        },
+        "page_type": {
+            "required": True,
+            "type": "string (Literal['product', 'content'])",
+            "description": "Type of page: 'product' for product pages, 'content' for non-product pages"
+        },
+        "summary": {
+            "required": True,
+            "type": "string",
+            "description": "LLM-generated semantic summary of the page (150-300 tokens). Used for embeddings and agent routing."
+        },
+        "product_name": {
+            "required": False,
+            "type": "string | None",
+            "description": "Display name of the product as shown in the store (only for product pages)"
+        },
+        "product_id": {
+            "required": False,
+            "type": "string | None",
+            "description": "Unique product identifier or SKU (only for product pages)"
+        },
+        "category": {
+            "required": False,
+            "type": "string | None",
+            "description": "Product category (e.g., 'Filter Units', 'Jackets', 'Shoes')"
+        },
+        "price": {
+            "required": False,
+            "type": "float | None",
+            "description": "Product price if available"
+        },
+        "currency": {
+            "required": False,
+            "type": "string | None",
+            "description": "Currency code (e.g., 'EUR', 'USD', 'INR')"
+        },
+        "is_available": {
+            "required": False,
+            "type": "bool | None",
+            "description": "True if the product is currently available"
+        },
+        "created_at": {
+            "required": False,
+            "type": "string (ISO format)",
+            "description": "Timestamp when this point was created/updated"
         }
     }
 }
@@ -128,6 +199,76 @@ async def ensure_agent_knowledge_base_collection_exists():
             
     except Exception as e:
         logger.error(f"Error ensuring agent knowledge base collection exists: {e}")
+        raise
+
+
+# Track if agent_web_catalog collection has been ensured
+_web_catalog_collection_ensured = False
+
+
+async def ensure_agent_web_catalog_collection_exists():
+    """
+    Ensure the Qdrant collection 'agent_web_catalog' exists, create it if it doesn't.
+    Also ensures payload indexes exist for agent_id and url fields.
+    This collection stores metadata about web pages/products for agent routing.
+    This function is idempotent and can be called multiple times safely.
+    """
+    global _web_catalog_collection_ensured
+    
+    # If already ensured, return early
+    if _web_catalog_collection_ensured:
+        return
+    
+    try:
+        client = get_qdrant_client_instance()
+        
+        # Check if collection exists
+        collections = await client.get_collections()
+        collection_names = [col.name for col in collections.collections]
+        
+        if AGENT_WEB_CATALOG_COLLECTION_NAME not in collection_names:
+            # Create collection with embedding vector config (for summary embeddings)
+            await client.create_collection(
+                collection_name=AGENT_WEB_CATALOG_COLLECTION_NAME,
+                vectors_config=VectorParams(
+                    size=EMBEDDING_DIM,
+                    distance=Distance.COSINE
+                )
+            )
+            logger.info(f"Created Qdrant collection: {AGENT_WEB_CATALOG_COLLECTION_NAME} with dimension {EMBEDDING_DIM}")
+        
+        # Create payload indexes for agent_id and url if they don't exist
+        try:
+            # Create index for agent_id (keyword type for exact matching)
+            await client.create_payload_index(
+                collection_name=AGENT_WEB_CATALOG_COLLECTION_NAME,
+                field_name="agent_id",
+                field_schema="keyword"
+            )
+        except Exception as e:
+            # Index might already exist, which is fine
+            error_msg = str(e).lower()
+            if "already exists" not in error_msg and "index already" not in error_msg:
+                pass
+        
+        try:
+            # Create index for url (keyword type for exact matching)
+            await client.create_payload_index(
+                collection_name=AGENT_WEB_CATALOG_COLLECTION_NAME,
+                field_name="url",
+                field_schema="keyword"
+            )
+        except Exception as e:
+            # Index might already exist, which is fine
+            error_msg = str(e).lower()
+            if "already exists" not in error_msg and "index already" not in error_msg:
+                pass
+        
+        # Mark as ensured after successful completion
+        _web_catalog_collection_ensured = True
+            
+    except Exception as e:
+        logger.error(f"Error ensuring agent web catalog collection exists: {e}")
         raise
 
 

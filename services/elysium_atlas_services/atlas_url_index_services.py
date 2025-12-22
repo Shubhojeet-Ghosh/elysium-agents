@@ -4,7 +4,8 @@ from datetime import datetime, timezone
 from logging_config import get_logger
 from services.mongo_services import get_collection
 from services.web_services.url_services import fetch_multiple_urls_content
-from services.elysium_atlas_services.atlas_qdrant_services import index_links_in_qdrant
+from services.elysium_atlas_services.atlas_qdrant_services import index_metadata_in_web_catalog
+from services.elysium_atlas_services.atlas_metadata_extraction_services import extract_metadata_from_fetch_results
 from pymongo import UpdateOne
 
 logger = get_logger()
@@ -84,8 +85,17 @@ async def index_agent_urls(agent_id: str, links: List[str], batch_size: int = 5)
                 ]
             
             # Process all results in batch for Qdrant indexing
+            metadata_results = []
             try:
-                qdrant_result = await index_links_in_qdrant(agent_id, fetch_results)
+                # logger.info(f"Fetch results: {fetch_results}")
+                
+                # Extract metadata from fetch results using OpenAI structured output
+                # metadata_results format - [{'success': True,'url': 'https://www.google.com', 'normalized_url': 'https://www.google.com', 'text_content': 'Google','text_length': 100, 'hrefs': ['https://www.google.com/search?q=google'],'status_code': 200, 'metadata': {'page_type': 'website', 'price': 100, 'summary': 'Google is a search engine'}}, {},...]
+                metadata_results = await extract_metadata_from_fetch_results(fetch_results)
+                # logger.info(f"Metadata extraction results: {metadata_results}")
+                
+                qdrant_result = await index_metadata_in_web_catalog(agent_id, metadata_results)
+
                 if qdrant_result.get("errors"):
                     for error in qdrant_result["errors"]:
                         logger.warning(f"Qdrant indexing error: {error}")
@@ -95,11 +105,18 @@ async def index_agent_urls(agent_id: str, links: List[str], batch_size: int = 5)
             
             # Prepare bulk operations for MongoDB
             bulk_operations = []
-            for result in fetch_results:
+            for idx, result in enumerate(fetch_results):
                 # Determine the link to use (prefer normalized_url, fallback to url)
                 link = result.get("normalized_url") or result.get("url")
                 if not link:
                     continue
+                
+                # Extract page_type from metadata if available
+                page_type = None
+                if idx < len(metadata_results):
+                    metadata = metadata_results[idx].get("metadata")
+                    if metadata and isinstance(metadata, dict):
+                        page_type = metadata.get("page_type")
                 
                 # Prepare update document - text_content is stored in Qdrant, not MongoDB
                 update_doc = {
@@ -113,6 +130,10 @@ async def index_agent_urls(agent_id: str, links: List[str], batch_size: int = 5)
                         "created_at": current_time
                     }
                 }
+                
+                # Add page_type to $set if available
+                if page_type:
+                    update_doc["$set"]["page_type"] = page_type
                 
                 # Create UpdateOne operation for bulk write
                 bulk_operations.append(

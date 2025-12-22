@@ -2,15 +2,29 @@
 Central registry for structured output Pydantic models.
 Add new models here to make them available for structured extraction.
 """
-from typing import Literal, Optional, Type, Dict, Any
-from pydantic import BaseModel
+from typing import Literal, Optional, Type, Dict, Any, List
+from pydantic import BaseModel, Field
 
 
 class WebsiteContentExtraction(BaseModel):
     """Pydantic model for extracting structured information from website content."""
-    page_type: Literal["website", "product"]
-    colors: list[str]
-    price: Optional[float] = None
+    page_type: Literal["website", "product"] = Field(
+        ...,
+        description="Type of page: website for general pages, product for product pages"
+    )
+    colors: List[str] = Field(
+        ...,
+        description="Available colors for the product or page"
+    )
+    price: Optional[float] = Field(
+        default=None,
+        description="Product price if available"
+    )
+    description: str = Field(
+        ...,
+        description="3 word description of the website content or product."
+    )
+    description: str
 
 
 class LeadExtraction(BaseModel):
