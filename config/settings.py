@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     QDRANT_API_KEY:str
     OPENAI_API_KEY:str
     GROQ_API_KEY:str
+    ANTHROPIC_API_KEY:str = Field(default="")
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
