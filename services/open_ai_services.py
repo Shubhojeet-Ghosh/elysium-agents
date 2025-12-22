@@ -1,7 +1,10 @@
-from typing import List, Optional, Dict, Any, AsyncGenerator, Union
+from typing import List, Optional, Dict, Any, AsyncGenerator, Union, Type, TypeVar
 from openai import AsyncOpenAI
+from pydantic import BaseModel
 from logging_config import get_logger
 from config.settings import settings
+
+T = TypeVar('T', bound=BaseModel)
 
 logger = get_logger()
 
@@ -163,4 +166,78 @@ async def openai_chat_completion_reasoning(params: Dict[str, Any]) -> Union[str,
         return content or ""
     except Exception as e:
         logger.error(f"Error calling reasoning completion: {e}")
+        raise
+
+
+async def openai_structured_output(
+    model: str,
+    messages: List[Dict[str, str]],
+    response_format: Type[T]
+) -> Dict[str, Any]:
+    """
+    Get structured output from OpenAI using Pydantic BaseModel for parsing.
+    
+    Args:
+        model: The OpenAI model to use (e.g., "gpt-4o-2024-08-06")
+        messages: List of chat messages in OpenAI format
+        response_format: A Pydantic BaseModel class that defines the expected structure
+        
+    Returns:
+        Dict[str, Any]: The parsed structured output as a dictionary (JSON-serializable)
+        
+    Raises:
+        Exception: If the API call fails or parsing fails
+        
+    Example:
+        ```python
+        from pydantic import BaseModel
+        
+        class ResearchPaperExtraction(BaseModel):
+            title: str
+            authors: list[str]
+            abstract: str
+            keywords: list[str]
+        
+        result = await openai_structured_output(
+            model="gpt-4o-2024-08-06",
+            messages=[
+                {"role": "system", "content": "Extract research paper data."},
+                {"role": "user", "content": "..."}
+            ],
+            response_format=ResearchPaperExtraction
+        )
+        ```
+    """
+    if not isinstance(messages, list) or len(messages) == 0:
+        logger.warning("structured_output called without messages")
+        raise ValueError("Messages list cannot be empty")
+    
+    if not issubclass(response_format, BaseModel):
+        logger.error("response_format must be a Pydantic BaseModel class")
+        raise ValueError("response_format must be a Pydantic BaseModel class")
+    
+    try:
+        client = get_openai_client()
+        response = await client.chat.completions.parse(
+            model=model,
+            messages=messages,
+            response_format=response_format,
+        )
+        
+        if not response.choices:
+            logger.error("No choices returned from OpenAI API")
+            raise ValueError("No choices returned from OpenAI API")
+        
+        parsed = response.choices[0].message.parsed
+        if parsed is None:
+            logger.error("Failed to parse structured output")
+            raise ValueError("Failed to parse structured output")
+        
+        # Convert Pydantic model to dict (JSON-serializable)
+        result = parsed.model_dump()
+        logger.debug(f"Structured output parsed successfully using model={model}")
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error calling structured output parsing: {e}")
         raise

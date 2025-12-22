@@ -85,7 +85,7 @@ async def structured_outputs_controller(requestData: Dict[str, Any], authorized:
             content={
                 "success": True,
                 "message": "Structured output generated successfully",
-                "data": structured_output,
+                "structured_output": structured_output,
                 "usage": usage_info
             },
         )
