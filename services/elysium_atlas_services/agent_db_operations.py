@@ -21,7 +21,7 @@ async def update_agent_current_task(agent_id: str, current_task: str) -> bool:
         collection = get_collection("atlas_agents")
         current_time = datetime.now(timezone.utc)
 
-        # Convert agent_id to ObjectId if it's a string
+        # Convert agent_id to ObjectId if it's a strinzg
         if isinstance(agent_id, str):
             agent_id = ObjectId(agent_id)
 
@@ -40,4 +40,41 @@ async def update_agent_current_task(agent_id: str, current_task: str) -> bool:
 
     except Exception as e:
         logger.error(f"Error updating agent_current_task for agent_id {agent_id}: {e}")
+        return False
+
+
+async def update_agent_status(agent_id: str, agent_status: str) -> bool:
+    """
+    Update the `agent_status` field for a specific agent document in the 'atlas_agents' collection.
+
+    Args:
+        agent_id: The ID of the agent to update.
+        agent_status: The status to set for the agent.
+
+    Returns:
+        bool: True if the update was successful, False otherwise.
+    """
+    try:
+        collection = get_collection("atlas_agents")
+        current_time = datetime.now(timezone.utc)
+
+        # Convert agent_id to ObjectId if it's a string
+        if isinstance(agent_id, str):
+            agent_id = ObjectId(agent_id)
+
+        # Update the agent document with the new status
+        result = await collection.update_one(
+            {"_id": agent_id},
+            {"$set": {"agent_status": agent_status, "updated_at": current_time}}
+        )
+
+        if result.modified_count > 0:
+            logger.info(f"Updated agent_status for agent_id: {agent_id} to '{agent_status}'")
+            return True
+        else:
+            logger.warning(f"No document found to update for agent_id: {agent_id}")
+            return False
+
+    except Exception as e:
+        logger.error(f"Error updating agent_status for agent_id {agent_id}: {e}")
         return False

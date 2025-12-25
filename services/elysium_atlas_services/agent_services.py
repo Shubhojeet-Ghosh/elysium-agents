@@ -1,3 +1,4 @@
+
 from typing import Dict, Any, Optional
 from logging_config import get_logger
 from services.elysium_atlas_services.atlas_url_index_services import index_agent_urls
@@ -6,6 +7,7 @@ from services.mongo_services import get_collection
 from datetime import datetime, timezone
 from config.atlas_agent_config_data import ELYSIUM_ATLAS_AGENT_CONFIG_DATA
 from bson import ObjectId
+from services.elysium_atlas_services.agent_db_operations import update_agent_status
 
 logger = get_logger()
 
@@ -61,16 +63,19 @@ async def initialize_agent_build_update(requestData: Dict[str, Any]) -> bool:
         else:
             operation = "update"
         requestData["operation"] = operation
-        
+
+        # Set agent status to 'indexing' after creation/update
+        await update_agent_status(agent_id, "indexing")
+
         ### Process the links for the agent
         links = requestData.get("links")
 
         ### Index the links for the agent in DB
-        link_index_result = await index_agent_urls(agent_id,links)
+        link_index_result = await index_agent_urls(agent_id, links)
         if not link_index_result:
             logger.error("Failed to store agent URLs")
             return False
-        
+
         ### End of processing the links for the agent
 
         ### Process the files for the agent
@@ -85,7 +90,8 @@ async def initialize_agent_build_update(requestData: Dict[str, Any]) -> bool:
         qa_pairs = requestData.get("qa_pairs")
         ### End of extracting custom Q&As
 
-
+        # Set agent status to 'active' just before returning True
+        await update_agent_status(agent_id, "active")
         return True
         
     except Exception as e:
