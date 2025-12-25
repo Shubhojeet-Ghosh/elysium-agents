@@ -14,6 +14,13 @@ ELYSIUM_ATLAS_AGENT_CONFIG_DATA = {
         "text_color":"#000000",
         "quick_prompts":[],
         "footer":None,
-        "agent_personality":None
-    }
+        "agent_personality":None,
+        "agent_status":"inactive",
+        "agent_current_task": "initializing",
+    },
+    "agent_task_progress": {
+        "initializing": 0,
+        "Indexing Links": 5,
+        "Links Indexed": 10,
+    },
 }

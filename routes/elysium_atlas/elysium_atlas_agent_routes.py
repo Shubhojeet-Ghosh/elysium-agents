@@ -3,8 +3,9 @@ from typing import Dict, Any
 from fastapi import Depends
 from middlewares.jwt_middleware import authorize_user
 from fastapi import BackgroundTasks
+from fastapi.responses import JSONResponse
 
-from controllers.elysium_atlas_controller_files.atlas_controllers import build_update_agent_controller_v1, pre_build_agent_operations_controller,generate_presigned_url_controller
+from controllers.elysium_atlas_controller_files.atlas_controllers import build_update_agent_controller_v1, pre_build_agent_operations_controller,generate_presigned_url_controller, list_agents_controller, delete_agent_controller
 
 elysium_atlas_agent_router = APIRouter(prefix = "/elysium-atlas/agent",tags=["Elysium Atlas - Agent Routes"])
 
@@ -22,3 +23,13 @@ async def generate_presigned_urls_route_v1(requestData: Dict[str, Any],user: dic
 @elysium_atlas_agent_router.post("/v1/build-update-agent")
 async def build_update_agent_route_v1(requestData: Dict[str, Any],user: dict = Depends(authorize_user),background_tasks: BackgroundTasks = BackgroundTasks()):
     return await build_update_agent_controller_v1(requestData,user,background_tasks)
+
+# Async POST method to list all agents for a user
+@elysium_atlas_agent_router.post("/v1/list-agents")
+async def list_agents_route_v1(user: dict = Depends(authorize_user)):
+    return await list_agents_controller(user)
+
+# Async POST method to delete an agent
+@elysium_atlas_agent_router.post("/v1/delete-agent")
+async def delete_agent_route_v1(requestData: Dict[str, Any], user: dict = Depends(authorize_user)):
+    return await delete_agent_controller(requestData, user)

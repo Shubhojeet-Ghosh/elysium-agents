@@ -1,7 +1,8 @@
 from typing import Dict, Any
 from fastapi.responses import JSONResponse
 from logging_config import get_logger
-from services.elysium_atlas_services.agent_services import initialize_agent_build_update, create_agent_document
+from services.elysium_atlas_services.agent_services import initialize_agent_build_update, create_agent_document, list_agents_for_user, remove_agent_by_id
+from services.elysium_atlas_services.agent_auth_services import is_user_owner_of_agent
 from config.atlas_agent_config_data import ELYSIUM_ATLAS_AGENT_CONFIG_DATA
 from config.elysium_atlas_s3_config import ELYSIUM_ATLAS_BUCKET_NAME, ELYSIUM_CDN_BASE_URL, ELYSIUM_GLOBAL_BUCKET_NAME
 from services.aws_services.s3_service import generate_presigned_upload_url
@@ -84,3 +85,69 @@ async def generate_presigned_url_controller(requestData,userData):
         return JSONResponse(status_code=200, content={"success": True, "message": "Presigned urls generated", "presigned_urls": presigned_urls})
     except Exception as e:
         return JSONResponse(status_code=500, content={"success": False, "message": f"An error occurred while generating presigned urls.", "error": str(e)})
+
+async def list_agents_controller(userData: dict):
+    """
+    Controller to handle the logic for listing all agents for a given user_id.
+
+    Returns:
+        JSONResponse: A response containing the list of agents or an error message.
+    """
+    try:
+        if userData is None or userData.get("success") == False:
+            return JSONResponse(status_code=401, content={"success": False, "message": userData.get("message")})
+        
+        user_id = userData.get("user_id")
+
+        if not user_id:
+            return JSONResponse(status_code=400, content={"success": False, "message": "user_id is required to list agents."})
+        
+        logger.info(f"Listing agents for user_id: {user_id}")
+        agents = await list_agents_for_user(user_id)
+        return JSONResponse(status_code=200, content={"success": True, "agents": agents})
+
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "message": "An error occurred while listing agents.", "error": str(e)})
+
+async def delete_agent_controller(requestData: dict, userData: dict):
+    """
+    Controller to handle the deletion of an agent by its ID.
+
+    Args:
+        agent_id: The ID of the agent to be deleted.
+        userData: The user data containing the user_id.
+
+    Returns:
+        JSONResponse: A response indicating the success or failure of the operation.
+    """
+    try:
+        if userData is None or userData.get("success") == False:
+            return JSONResponse(status_code=401, content={"success": False, "message": userData.get("message")})
+        
+        logger.info(f"User data: {userData}")
+
+        user_id = userData.get("user_id")
+
+        if not user_id:
+            return JSONResponse(status_code=400, content={"success": False, "message": "user_id is required."})
+        
+        agent_id = requestData.get("agent_id")
+        logger.info(f"Request to delete agent_id: {agent_id} by user_id: {user_id}")
+
+        # Check if the user is the owner of the agent
+        is_owner = await is_user_owner_of_agent(user_id, agent_id)
+
+        if not is_owner:
+            return JSONResponse(status_code=403, content={"success": False, "message": "You are not authorized to delete this agent."})
+
+        # Proceed to delete the agent
+        deletion_success = await remove_agent_by_id(agent_id)
+
+        if deletion_success:
+            return JSONResponse(status_code=200, content={"success": True, "message": "Agent deleted successfully."})
+        else:
+            return JSONResponse(status_code=404, content={"success": False, "message": "Agent not found."})
+
+    except Exception as e:
+        logger.error(f"Error in delete_agent_controller for agent_id {agent_id}: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": "An error occurred while deleting the agent.", "error": str(e)})

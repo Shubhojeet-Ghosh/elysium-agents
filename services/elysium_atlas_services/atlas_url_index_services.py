@@ -4,9 +4,10 @@ from datetime import datetime, timezone
 from logging_config import get_logger
 from services.mongo_services import get_collection
 from services.web_services.url_services import fetch_multiple_urls_content
-from services.elysium_atlas_services.atlas_qdrant_services import index_metadata_in_web_catalog
+from services.elysium_atlas_services.atlas_qdrant_services import index_metadata_in_web_catalog, index_links_in_knowledge_base
 from services.elysium_atlas_services.atlas_metadata_extraction_services import extract_metadata_from_fetch_results
 from pymongo import UpdateOne
+from services.elysium_atlas_services.agent_db_operations import update_agent_current_task
 
 logger = get_logger()
 
@@ -24,6 +25,9 @@ async def index_agent_urls(agent_id: str, links: List[str], batch_size: int = 5)
         bool: True if links were stored successfully, False otherwise
     """
     try:
+        
+        # Update agent_current_task to 'Indexing Links' at the start
+        await update_agent_current_task(agent_id, "Indexing Links")
         
         # Validate links exist, is a list, has length > 0, and each link is truthy
         if not links:
@@ -99,7 +103,14 @@ async def index_agent_urls(agent_id: str, links: List[str], batch_size: int = 5)
                 if qdrant_result.get("errors"):
                     for error in qdrant_result["errors"]:
                         logger.warning(f"Qdrant indexing error: {error}")
-                logger.info(f"Qdrant indexing: {qdrant_result.get('total_processed', 0)} links processed, {qdrant_result.get('total_chunks', 0)} chunks indexed")
+                logger.info(f"Qdrant indexing for agent_web_catalog : {qdrant_result.get('total_processed', 0)} links processed, {qdrant_result.get('total_chunks', 0)} chunks indexed")
+
+                # Directly pass metadata_results to index_links_in_knowledge_base
+                try:
+                    knowledge_base_result = await index_links_in_knowledge_base(agent_id, metadata_results)
+                    logger.info(f"Knowledge base indexing completed for agent_knowledge_base : {knowledge_base_result}")
+                except Exception as knowledge_base_error:
+                    logger.warning(f"Error indexing links in knowledge base: {knowledge_base_error}")
             except Exception as qdrant_error:
                 logger.warning(f"Error indexing batch in Qdrant: {qdrant_error}")
             
@@ -118,11 +129,14 @@ async def index_agent_urls(agent_id: str, links: List[str], batch_size: int = 5)
                     if metadata and isinstance(metadata, dict):
                         page_type = metadata.get("page_type")
                 
+                # Determine status based on fetch result success
+                status = "indexed" if result.get("success", False) else "failed"
+
                 # Prepare update document - text_content is stored in Qdrant, not MongoDB
                 update_doc = {
                     "$set": {
                         "updated_at": current_time,
-                        "status": "indexing"
+                        "status": status
                     },
                     "$setOnInsert": {
                         "agent_id": agent_id,
@@ -157,6 +171,10 @@ async def index_agent_urls(agent_id: str, links: List[str], batch_size: int = 5)
             logger.info(f"Progress: Processed {min(batch_end, total_links)}/{total_links} links ({total_inserted} inserted/updated)")
         
         logger.info(f"Completed processing links: {total_inserted}/{total_links} links processed (inserted/updated) in atlas_agent_urls collection")
+        
+        # Update agent_current_task to 'Links Indexed' after MongoDB operations
+        await update_agent_current_task(agent_id, "Links Indexed")
+        
         return total_inserted > 0
         
     except Exception as e:
