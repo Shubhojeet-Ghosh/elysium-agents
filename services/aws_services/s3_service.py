@@ -46,6 +46,7 @@ def generate_presigned_upload_url(
             "upload_url": url,
             "s3_key": s3_key,
             "s3_object_url": s3_url,
+            "filename": filename,
             "visibility": "private"
         }
         
