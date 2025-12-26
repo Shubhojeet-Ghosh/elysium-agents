@@ -25,6 +25,7 @@ async def extract_urls_from_sitemap(sitemap_url: str, timeout: int = 30) -> Dict
             - success: bool - Whether the operation was successful
             - message: str - Success or error message
             - urls: List[str] - List of URLs found (empty list if failed or no URLs found)
+            - base_url: str - Base URL of the sitemap domain (only present on success)
     """
     if not sitemap_url or not isinstance(sitemap_url, str):
         logger.warning("Invalid sitemap URL provided")
@@ -150,11 +151,17 @@ async def extract_urls_from_sitemap(sitemap_url: str, timeout: int = 30) -> Dict
                             "error": str(e)
                         }
             
+            # Extract base URL from the normalized sitemap URL
+            parsed_sitemap = urlparse(normalized_sitemap_url)
+            base_url = f"{parsed_sitemap.scheme}://{parsed_sitemap.netloc}"
+            base_url = normalize_url(base_url)
+            
             logger.info(f"Extracted {len(urls)} URLs from sitemap {normalized_sitemap_url}")
             return {
                 "success": True,
                 "message": f"Successfully extracted {len(urls)} URLs from sitemap",
-                "urls": urls
+                "urls": urls,
+                "base_url": base_url
             }
             
     except Exception as e:

@@ -85,6 +85,8 @@ async def extract_url_links_controller(requestData: Dict[str, Any],userData: dic
         
         if source == "url":
             
+            normalized_url = normalize_url(link)
+
             # Call fetch_multiple_urls_content with link in a list
             results = await fetch_multiple_urls_content([link])
             
@@ -111,7 +113,8 @@ async def extract_url_links_controller(requestData: Dict[str, Any],userData: dic
                     "success": True,
                     "message": "Successfully extracted links from URL",
                     "links": filtered_links,
-                    "links_count": len(filtered_links)
+                    "links_count": len(filtered_links),
+                    "base_url": normalized_url,
                 }
             )
 
@@ -139,7 +142,8 @@ async def extract_url_links_controller(requestData: Dict[str, Any],userData: dic
                     "success": True,
                     "message": result.get("message", "Successfully extracted links from sitemap"),
                     "links": result.get("urls", []),
-                    "links_count": len(result.get("urls", []))
+                    "links_count": len(result.get("urls", [])),
+                    "base_url": result.get("base_url", None),
                 }
             )
         else:
