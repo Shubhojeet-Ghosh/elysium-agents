@@ -12,29 +12,29 @@ from logging_config import get_logger
 logger = get_logger()
 
 def get_soffice_path() -> str:
-    """
-    Resolve LibreOffice 'soffice' executable path cross-platform.
-    - Uses PATH if available
-    - Falls back to common Windows install locations
-    """
-    soffice = shutil.which("soffice")
-    if soffice:
-        return soffice
+    try:
+        """
+        Resolve LibreOffice 'soffice' executable path cross-platform.
+        - Uses PATH if available
+        - Falls back to common Windows install locations
+        """
+        soffice = shutil.which("soffice")
+        if soffice:
+            return soffice
 
-    # Windows fallback paths
-    windows_paths = [
-        r"C:\Program Files\LibreOffice\program\soffice.exe",
-        r"C:\Program Files (x86)\LibreOffice\program\soffice.exe",
-    ]
+        # Windows fallback paths
+        windows_paths = [
+            r"C:\Program Files\LibreOffice\program\soffice.exe",
+            r"C:\Program Files (x86)\LibreOffice\program\soffice.exe",
+        ]
 
-    for path in windows_paths:
-        if os.path.exists(path):
-            return path
+        for path in windows_paths:
+            if os.path.exists(path):
+                return path
 
-    raise RuntimeError(
-        "LibreOffice 'soffice' executable not found. "
-        "Install LibreOffice and ensure it is available in PATH."
-    )
+    except Exception as e:
+        logger.error(f"Error resolving soffice path: {e}")
+        return None
 
 async def extract_text_from_word_document(
     bucket_name: str,
