@@ -3,6 +3,10 @@ from fastapi import HTTPException
 from config.settings import settings
 from config.elysium_atlas_s3_config import ELYSIUM_CDN_BASE_URL
 import urllib.parse
+import asyncio
+from logging_config import get_logger
+
+logger = get_logger()
 
 def generate_presigned_upload_url(
     bucket_name: str,
@@ -76,3 +80,69 @@ def construct_s3_object_url(
     """
     encoded_key = urllib.parse.quote(file_key)
     return f"https://{bucket_name}.s3.{region_name}.amazonaws.com/{encoded_key}"
+
+
+async def extract_text_from_pdf(bucket_name: str, file_key: str) -> str:
+    try:
+        textract_client = boto3.client(
+            "textract",
+            aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
+            aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
+            region_name=settings.AWS_REGION
+        )
+
+        # 1️⃣ Start Textract job
+        response = textract_client.start_document_text_detection(
+            DocumentLocation={
+                "S3Object": {
+                    "Bucket": bucket_name,
+                    "Name": file_key
+                }
+            }
+        )
+
+        job_id = response["JobId"]
+        logger.info(f"Started Textract job {job_id} for {file_key}")
+
+        # 2️⃣ Poll until completed
+        while True:
+            status_response = textract_client.get_document_text_detection(
+                JobId=job_id
+            )
+            status = status_response["JobStatus"]
+
+            if status == "SUCCEEDED":
+                break
+            if status == "FAILED":
+                raise RuntimeError(f"Textract job failed for {file_key}")
+
+            await asyncio.sleep(5)
+
+        # 3️⃣ Paginated result fetching
+        text_lines = []
+        next_token = None
+
+        while True:
+            if next_token:
+                response = textract_client.get_document_text_detection(
+                    JobId=job_id,
+                    NextToken=next_token
+                )
+            else:
+                response = textract_client.get_document_text_detection(
+                    JobId=job_id
+                )
+
+            for block in response.get("Blocks", []):
+                if block["BlockType"] == "LINE":
+                    text_lines.append(block["Text"])
+
+            next_token = response.get("NextToken")
+            if not next_token:
+                break
+
+        return "\n".join(text_lines).strip()
+
+    except Exception as e:
+        logger.error(f"Error extracting text from PDF {file_key}: {e}")
+        return ""

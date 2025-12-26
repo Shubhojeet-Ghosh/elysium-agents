@@ -6,6 +6,7 @@ from services.elysium_atlas_services.agent_auth_services import is_user_owner_of
 from config.atlas_agent_config_data import ELYSIUM_ATLAS_AGENT_CONFIG_DATA
 from config.elysium_atlas_s3_config import ELYSIUM_ATLAS_BUCKET_NAME, ELYSIUM_CDN_BASE_URL, ELYSIUM_GLOBAL_BUCKET_NAME
 from services.aws_services.s3_service import generate_presigned_upload_url
+from services.elysium_atlas_services.agent_db_operations import check_agent_name_exists
 
 logger = get_logger()
 
@@ -23,6 +24,10 @@ async def pre_build_agent_operations_controller(requestData: Dict[str, Any],user
         initial_data["owner_user_id"] = user_id
 
         if requestData.get("agent_name") is not None:
+            agent_exists = await check_agent_name_exists(user_id, requestData.get("agent_name"))
+            if agent_exists:
+                return JSONResponse(status_code=200, content={"success": False, "message": "An agent with this name already exists. Please choose a different name."})
+            
             initial_data["agent_name"] = requestData.get("agent_name")
 
         agent_id = await create_agent_document(initial_data)
@@ -41,7 +46,7 @@ async def build_update_agent_controller_v1(requestData,userData,background_tasks
         
         logger.info(f"User data: {userData}")
         
-        logger.info(f"buil/update agent with request data: {requestData}")
+        # logger.info(f"buil/update agent with request data: {requestData}")
         
         # Store links in MongoDB
         background_tasks.add_task(initialize_agent_build_update,requestData)

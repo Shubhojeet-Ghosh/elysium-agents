@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from config.atlas_agent_config_data import ELYSIUM_ATLAS_AGENT_CONFIG_DATA
 from bson import ObjectId
 from services.elysium_atlas_services.agent_db_operations import update_agent_status
+from services.elysium_atlas_services.atlas_files_index_services import index_agent_files
 
 logger = get_logger()
 
@@ -49,7 +50,7 @@ async def create_agent_document(initial_data: Optional[Dict[str, Any]] = None) -
 
 async def initialize_agent_build_update(requestData: Dict[str, Any]) -> bool:
     try:
-        logger.info(f"Initializing agent build/update with request data: {requestData}")
+        # logger.info(f"Initializing agent build/update with request data: {requestData}")
         
         agent_id = requestData.get("agent_id")
         
@@ -80,6 +81,12 @@ async def initialize_agent_build_update(requestData: Dict[str, Any]) -> bool:
 
         ### Process the files for the agent
         files = requestData.get("files")
+        if(files):
+            files_index_result = await index_agent_files(agent_id, files)
+            if not files_index_result:
+                logger.error("Failed to index agent files")
+                return False
+
         ### End of processing the files for the agent
 
         ### Extract custom texts for the agent

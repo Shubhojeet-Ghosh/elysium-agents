@@ -78,3 +78,28 @@ async def update_agent_status(agent_id: str, agent_status: str) -> bool:
     except Exception as e:
         logger.error(f"Error updating agent_status for agent_id {agent_id}: {e}")
         return False
+
+
+async def check_agent_name_exists(owner_user_id: str, agent_name: str) -> bool:
+    """
+    Check if an agent with the given name already exists for the specified owner user ID.
+
+    Args:
+        owner_user_id: The ID of the owner user.
+        agent_name: The name of the agent to check.
+
+    Returns:
+        bool: True if an agent with the name exists for the owner, False otherwise.
+    """
+    try:
+        collection = get_collection("atlas_agents")
+        count = await collection.count_documents({"owner_user_id": owner_user_id, "agent_name": agent_name})
+        exists = count > 0
+        if exists:
+            logger.info(f"Agent name '{agent_name}' already exists for owner_user_id: {owner_user_id}")
+        else:
+            logger.info(f"Agent name '{agent_name}' does not exist for owner_user_id: {owner_user_id}")
+        return exists
+    except Exception as e:
+        logger.error(f"Error checking agent name existence for owner_user_id {owner_user_id} and agent_name '{agent_name}': {e}")
+        return False

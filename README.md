@@ -58,3 +58,21 @@ elysium-agents provides a modular architecture for creating AI agents with custo
    ```bash
    playwright install
    ```
+
+## System Dependencies
+
+Some document formats require native system tools in addition to Python packages.
+
+### LibreOffice (required for `.doc` files)
+
+LibreOffice is used in **headless mode** to extract text from legacy `.doc` files.
+
+#### Ubuntu / Debian (minimal headless install)
+
+```bash
+sudo apt update
+sudo apt install -y --no-install-recommends \
+  libreoffice-core \
+  libreoffice-writer \
+  libreoffice-common
+```
