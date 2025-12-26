@@ -120,7 +120,7 @@ async def is_url_reachable(url: str, timeout: int = 10) -> Dict[str, Any]:
             
             return {
                 "reachable": is_success,
-                "url": normalized_url,
+                "normalized_url": normalized_url,
                 "status_code": status_code,
                 "final_url": str(response.url),  # In case of redirects
                 "error": None
