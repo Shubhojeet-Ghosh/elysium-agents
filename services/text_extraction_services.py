@@ -54,7 +54,7 @@ async def extract_text_from_word_document(
     temp_path = None
 
     try:
-        SOFFICE_PATH = get_soffice_path()
+        SOFFICE_PATH = "/usr/bin/soffice"
 
         # 1️⃣ Create S3 client
         s3_client = boto3.client(
