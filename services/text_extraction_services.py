@@ -13,33 +13,32 @@ logger = get_logger()
 
 def get_soffice_path() -> str:
     """
-    Resolve LibreOffice 'soffice' executable path cross-platform.
-    - Uses PATH if available
-    - Falls back to common Windows install locations
+    Resolve LibreOffice 'soffice' executable path.
+    Safe for systemd environments.
     """
+    # 1. Try PATH (works in dev shells)
     soffice = shutil.which("soffice")
     if soffice:
         return soffice
 
-    # Windows fallback paths
+    # 2. Linux default
+    linux_path = "/usr/bin/soffice"
+    if os.path.exists(linux_path):
+        return linux_path
+
+    # 3. Windows fallbacks
     windows_paths = [
         r"C:\Program Files\LibreOffice\program\soffice.exe",
         r"C:\Program Files (x86)\LibreOffice\program\soffice.exe",
     ]
-
     for path in windows_paths:
         if os.path.exists(path):
             return path
 
     raise RuntimeError(
         "LibreOffice 'soffice' executable not found. "
-        "Install LibreOffice and ensure it is available in PATH."
+        "Ensure LibreOffice is installed."
     )
-
-
-SOFFICE_PATH = get_soffice_path()
-logger.info(f"Using LibreOffice soffice path: {SOFFICE_PATH}")
-# If PATH is set correctly, you can just use "soffice"
 
 async def extract_text_from_word_document(
     bucket_name: str,
@@ -55,6 +54,8 @@ async def extract_text_from_word_document(
     temp_path = None
 
     try:
+        SOFFICE_PATH = get_soffice_path()
+
         # 1️⃣ Create S3 client
         s3_client = boto3.client(
             "s3",

@@ -72,10 +72,8 @@ async def initialize_agent_build_update(requestData: Dict[str, Any]) -> bool:
         links = requestData.get("links")
 
         ### Index the links for the agent in DB
-        link_index_result = await index_agent_urls(agent_id, links)
-        if not link_index_result:
-            logger.error("Failed to store agent URLs")
-            return False
+        if(links):
+            link_index_result = await index_agent_urls(agent_id, links)
 
         ### End of processing the links for the agent
 
