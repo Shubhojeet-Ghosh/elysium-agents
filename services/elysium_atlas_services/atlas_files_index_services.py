@@ -5,6 +5,7 @@ from services.text_extraction_services import extract_texts_from_files
 from services.elysium_atlas_services.atlas_qdrant_services import index_files_in_knowledge_base
 from services.mongo_services import get_collection
 from pymongo import UpdateOne
+from services.elysium_atlas_services.agent_db_operations import update_agent_current_task
 
 from logging_config import get_logger
 logger = get_logger()
@@ -12,7 +13,8 @@ logger = get_logger()
 async def index_agent_files(agent_id, files):
     try:
         logger.info(f"Indexing files for agent_id: {agent_id} with files : {files}")
-        
+        await update_agent_current_task(agent_id, "Indexing Files")
+
         # files format - [{"file_name": "example.pdf", "file_key": "s3 path/to/example.pdf"}, ...]
         # files_data format - [{"file_name": "example.pdf","file_key": "s3 path/to/example.pdf", "text": "extracted text from pdf"}, ...]
         files_data = await extract_texts_from_files(files)
@@ -55,6 +57,7 @@ async def index_agent_files(agent_id, files):
                 bulk_result = await collection.bulk_write(bulk_operations, ordered=False)
                 logger.info(f"MongoDB bulk write: {bulk_result.upserted_count} inserted, {bulk_result.modified_count} updated in atlas_agent_files collection for agent_id {agent_id}")
         
+        await update_agent_current_task(agent_id, "Files Indexed")
         return True
 
     except Exception as e:

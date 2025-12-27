@@ -5,11 +5,13 @@ from logging_config import get_logger
 
 from services.elysium_atlas_services.atlas_qdrant_services import index_custom_texts_in_knowledge_base,index_qa_pairs_in_knowledge_base
 from services.mongo_services import get_collection
+from services.elysium_atlas_services.agent_db_operations import update_agent_current_task
 
 logger = get_logger()
 
 async def index_custom_knowledge_for_agent(agent_id, custom_texts, qa_pairs):
     try:
+        await update_agent_current_task(agent_id, "Indexing Custom Knowledge")
         if(custom_texts):
             custom_text_index_result = await index_custom_texts_in_knowledge_base(agent_id, custom_texts)
             logger.info(f"Custom texts index result for agent_id {agent_id}: {custom_text_index_result}")
@@ -71,7 +73,8 @@ async def index_custom_knowledge_for_agent(agent_id, custom_texts, qa_pairs):
                 logger.info(f"Upserted {len(qa_pairs)} QA pairs in MongoDB for agent_id {agent_id}")
             except Exception as e:
                 logger.error(f"Error upserting QA pairs in MongoDB for agent_id {agent_id}: {e}")
-
+        
+        await update_agent_current_task(agent_id, "Custom Knowledge Indexed")
         return True
 
     except  Exception as e:

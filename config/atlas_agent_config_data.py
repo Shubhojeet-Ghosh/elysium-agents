@@ -21,6 +21,10 @@ ELYSIUM_ATLAS_AGENT_CONFIG_DATA = {
     "agent_task_progress": {
         "initializing": 0,
         "Indexing Links": 5,
-        "Links Indexed": 10,
+        "Links Indexed": 25,
+        "Indexing Files": 30,
+        "Files Indexed": 50,
+        "Indexing Custom Knowledge": 75,
+        "Custom Knowledge Indexed": 90,
     },
 }
