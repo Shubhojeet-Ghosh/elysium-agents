@@ -7,7 +7,8 @@ from services.mongo_services import get_collection
 from datetime import datetime, timezone
 from config.atlas_agent_config_data import ELYSIUM_ATLAS_AGENT_CONFIG_DATA
 from bson import ObjectId
-from services.elysium_atlas_services.agent_db_operations import update_agent_status
+from services.elysium_atlas_services.agent_db_operations import update_agent_status, update_agent_fields
+from services.web_services.url_services import normalize_url
 from services.elysium_atlas_services.atlas_files_index_services import index_agent_files
 from services.elysium_atlas_services.atlas_custom_knowledge_services import index_custom_knowledge_for_agent
 import asyncio
@@ -69,6 +70,12 @@ async def initialize_agent_build_update(requestData: Dict[str, Any]) -> bool:
 
         # Set agent status to 'indexing' after creation/update
         await update_agent_status(agent_id, "indexing")
+        
+        base_url = requestData.get("base_url")
+        if(base_url):
+            base_url = normalize_url(base_url)
+            requestData["base_url"] = base_url
+            update_result = await update_agent_fields(agent_id, {"base_url": base_url})
 
         ### Process the links for the agent
         links = requestData.get("links")

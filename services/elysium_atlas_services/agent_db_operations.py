@@ -103,3 +103,43 @@ async def check_agent_name_exists(owner_user_id: str, agent_name: str) -> bool:
     except Exception as e:
         logger.error(f"Error checking agent name existence for owner_user_id {owner_user_id} and agent_name '{agent_name}': {e}")
         return False
+
+
+async def update_agent_fields(agent_id: str, fields: Dict[str, Any]) -> bool:
+    """
+    Update or add fields for a specific agent document in the 'atlas_agents' collection.
+
+    Args:
+        agent_id: The ID of the agent to update.
+        fields: A dictionary of key-value pairs to update or add.
+
+    Returns:
+        bool: True if the update was successful, False otherwise.
+    """
+    try:
+        collection = get_collection("atlas_agents")
+        current_time = datetime.now(timezone.utc)
+
+        # Convert agent_id to ObjectId if it's a string
+        if isinstance(agent_id, str):
+            agent_id = ObjectId(agent_id)
+
+        # Prepare the update dict
+        update_dict = {**fields, "updated_at": current_time}
+
+        # Update the agent document
+        result = await collection.update_one(
+            {"_id": agent_id},
+            {"$set": update_dict}
+        )
+
+        if result.modified_count > 0:
+            logger.info(f"Updated fields for agent_id: {agent_id} with {fields}")
+            return True
+        else:
+            logger.warning(f"No document found to update for agent_id: {agent_id}")
+            return False
+
+    except Exception as e:
+        logger.error(f"Error updating fields for agent_id {agent_id}: {e}")
+        return False
