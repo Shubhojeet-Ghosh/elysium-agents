@@ -176,12 +176,15 @@ async def remove_agent_by_id(agent_id: str) -> bool:
         # Attempt to delete the agent with the given agent_id
         agent_result = await collection.delete_one({"_id": ObjectId(agent_id)})
 
-        # Call the remove_agent_urls function to delete related links
+        # Call the remove functions for related data
         urls_deleted_count = await remove_agent_urls(agent_id)
+        files_deleted_count = await remove_agent_files(agent_id)
+        custom_texts_deleted_count = await remove_agent_custom_texts(agent_id)
+        qa_pairs_deleted_count = await remove_agent_qa_pairs(agent_id)
 
         if agent_result.deleted_count == 1:
             logger.info(f"Successfully removed agent with ID: {agent_id}")
-            logger.info(f"Successfully removed {urls_deleted_count} related links for agent ID: {agent_id}")
+            logger.info(f"Successfully removed {urls_deleted_count} related links, {files_deleted_count} files, {custom_texts_deleted_count} custom texts, and {qa_pairs_deleted_count} QA pairs for agent ID: {agent_id}")
             return True
         else:
             logger.warning(f"No agent found with ID: {agent_id} to remove.")
@@ -215,6 +218,78 @@ async def remove_agent_urls(agent_id: str) -> int:
 
     except Exception as e:
         logger.error(f"Error removing URLs for agent ID {agent_id}: {e}")
+        return 0
+
+async def remove_agent_files(agent_id: str) -> int:
+    """
+    Remove all file documents related to the given agent_id from the 'atlas_agent_files' collection.
+
+    Args:
+        agent_id: The ID of the agent whose related files are to be removed.
+
+    Returns:
+        int: The number of file documents removed.
+    """
+    try:
+        files_collection = get_collection("atlas_agent_files")
+ 
+        # Attempt to delete all related files for the agent
+        files_result = await files_collection.delete_many({"agent_id": agent_id})
+        
+        logger.info(f"Successfully removed {files_result.deleted_count} related files for agent ID: {agent_id}")
+        
+        return files_result.deleted_count
+
+    except Exception as e:
+        logger.error(f"Error removing files for agent ID {agent_id}: {e}")
+        return 0
+
+async def remove_agent_custom_texts(agent_id: str) -> int:
+    """
+    Remove all custom text documents related to the given agent_id from the 'atlas_custom_texts' collection.
+
+    Args:
+        agent_id: The ID of the agent whose related custom texts are to be removed.
+
+    Returns:
+        int: The number of custom text documents removed.
+    """
+    try:
+        custom_texts_collection = get_collection("atlas_custom_texts")
+ 
+        # Attempt to delete all related custom texts for the agent
+        custom_texts_result = await custom_texts_collection.delete_many({"agent_id": agent_id})
+        
+        logger.info(f"Successfully removed {custom_texts_result.deleted_count} related custom texts for agent ID: {agent_id}")
+        
+        return custom_texts_result.deleted_count
+
+    except Exception as e:
+        logger.error(f"Error removing custom texts for agent ID {agent_id}: {e}")
+        return 0
+
+async def remove_agent_qa_pairs(agent_id: str) -> int:
+    """
+    Remove all QA pair documents related to the given agent_id from the 'atlas_qa_pairs' collection.
+
+    Args:
+        agent_id: The ID of the agent whose related QA pairs are to be removed.
+
+    Returns:
+        int: The number of QA pair documents removed.
+    """
+    try:
+        qa_pairs_collection = get_collection("atlas_qa_pairs")
+ 
+        # Attempt to delete all related QA pairs for the agent
+        qa_pairs_result = await qa_pairs_collection.delete_many({"agent_id": agent_id})
+        
+        logger.info(f"Successfully removed {qa_pairs_result.deleted_count} related QA pairs for agent ID: {agent_id}")
+        
+        return qa_pairs_result.deleted_count
+
+    except Exception as e:
+        logger.error(f"Error removing QA pairs for agent ID {agent_id}: {e}")
         return 0
 
 async def fetch_agent_document(agent_id: str) -> Optional[Dict[str, Any]]:
