@@ -170,12 +170,6 @@ async def get_agent_details_controller(requestData: dict, userData: dict):
             return JSONResponse(status_code=400, content={"success": False, "message": "agent_id is required."})
         
         logger.info(f"Request to get details for agent_id: {agent_id} by user_id: {user_id}")
-
-        # Check if the user is the owner of the agent
-        is_owner = await is_user_owner_of_agent(user_id, agent_id)
-
-        if not is_owner:
-            return JSONResponse(status_code=403, content={"success": False, "message": "You are not authorized to delete this agent."})
         
         agent_data = await fetch_agent_details_by_id(agent_id)
         
