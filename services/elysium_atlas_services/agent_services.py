@@ -9,6 +9,8 @@ from config.atlas_agent_config_data import ELYSIUM_ATLAS_AGENT_CONFIG_DATA
 from bson import ObjectId
 from services.elysium_atlas_services.agent_db_operations import update_agent_status
 from services.elysium_atlas_services.atlas_files_index_services import index_agent_files
+from services.elysium_atlas_services.atlas_custom_knowledge_services import index_custom_knowledge_for_agent
+import asyncio
 
 logger = get_logger()
 
@@ -74,6 +76,8 @@ async def initialize_agent_build_update(requestData: Dict[str, Any]) -> bool:
         ### Index the links for the agent in DB
         if(links):
             link_index_result = await index_agent_urls(agent_id, links)
+            if not link_index_result:
+                logger.error("Failed to index agent URLs")
 
         ### End of processing the links for the agent
 
@@ -83,17 +87,21 @@ async def initialize_agent_build_update(requestData: Dict[str, Any]) -> bool:
             files_index_result = await index_agent_files(agent_id, files)
             if not files_index_result:
                 logger.error("Failed to index agent files")
-                return False
 
         ### End of processing the files for the agent
 
         ### Extract custom texts for the agent
-        custom_texts = requestData.get("custom_text_list")
-        ### End of extracting custom texts
+        custom_texts = requestData.get("custom_texts")
 
         ### Extract custom Q&As for the agent
         qa_pairs = requestData.get("qa_pairs")
-        ### End of extracting custom Q&As
+
+        if custom_texts or qa_pairs:
+            custom_texts_result = await index_custom_knowledge_for_agent(agent_id, custom_texts, qa_pairs)
+            if not custom_texts_result:
+                logger.error("Failed to store custom texts/QA pairs for agent")
+        
+        ### End of extracting custom texts for the agent
 
         # Set agent status to 'active' just before returning True
         await update_agent_status(agent_id, "active")
@@ -209,3 +217,116 @@ async def remove_agent_urls(agent_id: str) -> int:
         logger.error(f"Error removing URLs for agent ID {agent_id}: {e}")
         return 0
 
+async def fetch_agent_document(agent_id: str) -> Optional[Dict[str, Any]]:
+    try:
+        collection = get_collection("atlas_agents")
+        document = await collection.find_one({"_id": ObjectId(agent_id)})
+        if document:
+            # Convert _id to string and set as agent_id
+            document["agent_id"] = str(document.pop("_id"))
+            
+            # Convert datetime fields to strings
+            if "created_at" in document and document["created_at"] and isinstance(document["created_at"], datetime):
+                document["created_at"] = document["created_at"].isoformat()
+            if "updated_at" in document and document["updated_at"] and isinstance(document["updated_at"], datetime):
+                document["updated_at"] = document["updated_at"].isoformat()
+            
+            return document
+        else:
+            logger.warning(f"No agent found with ID: {agent_id}")
+            return None
+    except Exception as e:
+        logger.error(f"Error fetching agent document for agent_id {agent_id}: {e}")
+        return None
+
+async def fetch_agent_urls(agent_id: str) -> list[Dict[str, Any]]:
+    try:
+        urls_collection = get_collection("atlas_agent_urls")
+        urls_cursor = urls_collection.find({"agent_id": agent_id})
+        urls = []
+        async for url_doc in urls_cursor:
+            url_doc.pop("_id", None)
+            if "created_at" in url_doc and url_doc["created_at"] and isinstance(url_doc["created_at"], datetime):
+                url_doc["created_at"] = url_doc["created_at"].isoformat()
+            if "updated_at" in url_doc and url_doc["updated_at"] and isinstance(url_doc["updated_at"], datetime):
+                url_doc["updated_at"] = url_doc["updated_at"].isoformat()
+            urls.append(url_doc)
+        logger.info(f"Fetched {len(urls)} URLs for agent_id {agent_id}")
+        return urls
+    except Exception as e:
+        logger.error(f"Error fetching URLs for agent_id {agent_id}: {e}")
+        return []
+
+async def fetch_agent_files(agent_id: str) -> list[Dict[str, Any]]:
+    try:
+        files_collection = get_collection("atlas_agent_files")
+        files_cursor = files_collection.find({"agent_id": agent_id})
+        files = []
+        async for file_doc in files_cursor:
+            file_doc.pop("_id", None)
+            if "created_at" in file_doc and file_doc["created_at"] and isinstance(file_doc["created_at"], datetime):
+                file_doc["created_at"] = file_doc["created_at"].isoformat()
+            if "updated_at" in file_doc and file_doc["updated_at"] and isinstance(file_doc["updated_at"], datetime):
+                file_doc["updated_at"] = file_doc["updated_at"].isoformat()
+            files.append(file_doc)
+        logger.info(f"Fetched {len(files)} files for agent_id {agent_id}")
+        return files
+    except Exception as e:
+        logger.error(f"Error fetching files for agent_id {agent_id}: {e}")
+        return []
+
+async def fetch_agent_custom_knowledge(agent_id: str) -> tuple[list[Dict[str, Any]], list[Dict[str, Any]]]:
+    try:
+        # Fetch all custom texts for the agent
+        custom_texts_collection = get_collection("atlas_custom_texts")
+        custom_texts_cursor = custom_texts_collection.find({"agent_id": agent_id})
+        custom_texts = []
+        async for ct_doc in custom_texts_cursor:
+            ct_doc.pop("_id", None)
+            if "created_at" in ct_doc and ct_doc["created_at"] and isinstance(ct_doc["created_at"], datetime):
+                ct_doc["created_at"] = ct_doc["created_at"].isoformat()
+            if "updated_at" in ct_doc and ct_doc["updated_at"] and isinstance(ct_doc["updated_at"], datetime):
+                ct_doc["updated_at"] = ct_doc["updated_at"].isoformat()
+            custom_texts.append(ct_doc)
+        
+        # Fetch all QA pairs for the agent
+        qa_pairs_collection = get_collection("atlas_qa_pairs")
+        qa_pairs_cursor = qa_pairs_collection.find({"agent_id": agent_id})
+        qa_pairs = []
+        async for qa_doc in qa_pairs_cursor:
+            qa_doc.pop("_id", None)
+            if "created_at" in qa_doc and qa_doc["created_at"] and isinstance(qa_doc["created_at"], datetime):
+                qa_doc["created_at"] = qa_doc["created_at"].isoformat()
+            if "updated_at" in qa_doc and qa_doc["updated_at"] and isinstance(qa_doc["updated_at"], datetime):
+                qa_doc["updated_at"] = qa_doc["updated_at"].isoformat()
+            qa_pairs.append(qa_doc)
+        
+        logger.info(f"Fetched {len(custom_texts)} custom texts and {len(qa_pairs)} QA pairs for agent_id {agent_id}")
+        return custom_texts, qa_pairs
+    except Exception as e:
+        logger.error(f"Error fetching custom knowledge for agent_id {agent_id}: {e}")
+        return [], []
+
+async def fetch_agent_details_by_id(agent_id: str) -> Optional[Dict[str, Any]]:
+    try:
+        document = await fetch_agent_document(agent_id)
+        if not document:
+            return None
+        
+        urls, files, custom_knowledge = await asyncio.gather(
+            fetch_agent_urls(agent_id),
+            fetch_agent_files(agent_id),
+            fetch_agent_custom_knowledge(agent_id)
+        )
+        
+        custom_texts, qa_pairs = custom_knowledge
+        
+        document["links"] = urls
+        document["files"] = files
+        document["custom_texts"] = custom_texts
+        document["qa_pairs"] = qa_pairs
+        
+        return document
+    except Exception as e:
+        logger.error(f"Error fetching agent details for agent_id {agent_id}: {e}")
+        return None

@@ -425,3 +425,494 @@ async def index_metadata_in_web_catalog(agent_id: str, metadata_results: List[Di
             "total_indexed": 0,
             "errors": [str(e)]
         }
+    
+async def index_files_in_knowledge_base(agent_id, files_data):
+    """
+    Index file chunks in Qdrant collection 'agent_knowledge_base'.
+    Chunks text content from files and stores chunks with embeddings.
+    Removes old chunks for the same agent_id and file_name combinations before indexing new ones.
+
+    Args:
+        agent_id: The ID of the agent
+        files_data: List of file dictionaries, each containing:
+            - file_name: The file name (required)
+            - file_key: The S3 key (not used for indexing)
+            - text: The extracted text content (required for processing)
+
+    Returns:
+        dict: Dictionary with 'total_processed', 'total_chunks', and 'errors' keys
+    """
+    try:
+        # Ensure collection exists
+        await ensure_agent_knowledge_base_collection_exists()
+
+        # Filter results to only process those with text
+        valid_files = []
+        for file_dict in files_data:
+            if file_dict and file_dict.get("text") and file_dict.get("file_name"):
+                valid_files.append(file_dict)
+
+        if not valid_files:
+            logger.warning(f"No valid files with text found for agent_id: {agent_id}")
+            return {
+                "total_processed": 0,
+                "total_chunks": 0,
+                "errors": []
+            }
+
+        logger.info(f"Processing {len(valid_files)} files for agent_id: {agent_id}")
+
+        # Get Qdrant client
+        client = get_qdrant_client_instance()
+
+        # Prepare all points and delete filters
+        current_time = datetime.now(timezone.utc).isoformat()
+        all_chunks = []  # Store all chunks with metadata for embedding generation
+        all_points = []
+        delete_filters = []
+        total_chunks = 0
+        errors = []
+
+        # Process each file to chunk text and prepare delete filters
+        for file_dict in valid_files:
+            file_name = file_dict["file_name"]
+            text_content = file_dict["text"]
+
+            try:
+                # Chunk the text content
+                chunks = chunk_text_content(text_content)
+
+                if not chunks:
+                    logger.warning(f"No chunks generated for file: {file_name}")
+                    continue
+
+                logger.debug(f"Generated {len(chunks)} chunks for file: {file_name}")
+                total_chunks += len(chunks)
+
+                # Create delete filter for this file_name
+                delete_filter = Filter(
+                    must=[
+                        FieldCondition(key="agent_id", match=MatchValue(value=agent_id)),
+                        FieldCondition(key="knowledge_source", match=MatchValue(value=file_name))
+                    ]
+                )
+                delete_filters.append((file_name, delete_filter))
+
+                # Store chunks with metadata for later embedding generation
+                for index, chunk_text in enumerate(chunks):
+                    all_chunks.append({
+                        "text_content": chunk_text,
+                        "agent_id": agent_id,
+                        "knowledge_source": file_name,
+                        "text_index": index
+                    })
+
+            except Exception as e:
+                error_msg = f"Error processing file {file_name}: {e}"
+                logger.error(error_msg)
+                errors.append(error_msg)
+
+        # Generate embeddings for all chunks in batch
+        if all_chunks:
+            try:
+                # Extract all chunk texts for embedding generation
+                chunk_texts = [chunk["text_content"] for chunk in all_chunks]
+
+                # Generate embeddings in batch
+                logger.info(f"Generating embeddings for {len(chunk_texts)} chunks using {EMBEDDING_MODEL}")
+                embeddings = await get_embeddings(
+                    texts=chunk_texts,
+                    model=EMBEDDING_MODEL,
+                    dimensions=EMBEDDING_DIM
+                )
+
+                # Create points with embeddings
+                for chunk_data, embedding in zip(all_chunks, embeddings):
+                    # Generate deterministic UUID5 based on agent_id + file_name + text_index
+                    composite_key = f"{agent_id}:{chunk_data['knowledge_source']}:{chunk_data['text_index']}"
+                    point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, composite_key))
+
+                    point = PointStruct(
+                        id=point_id,
+                        vector=embedding,  # Vector embeddings of text_content
+                        payload={
+                            "agent_id": chunk_data["agent_id"],
+                            "knowledge_source": chunk_data["knowledge_source"],
+                            "text_index": chunk_data["text_index"],
+                            "text_content": chunk_data["text_content"],
+                            "knowledge_type": "file",
+                            "page_type": None,
+                            "created_at": current_time
+                        }
+                    )
+                    all_points.append(point)
+
+            except Exception as e:
+                error_msg = f"Error generating embeddings: {e}"
+                logger.error(error_msg)
+                errors.append(error_msg)
+
+        # Delete old chunks for all file_names
+        for file_name, delete_filter in delete_filters:
+            try:
+                delete_result = await client.delete(
+                    collection_name=AGENT_KNOWLEDGE_BASE_COLLECTION_NAME,
+                    points_selector=delete_filter
+                )
+                if delete_result.status == "acknowledged":
+                    logger.debug(f"Removed old chunks for agent_id: {agent_id}, file: {file_name}")
+            except Exception as e:
+                error_msg = f"Error deleting old chunks for {file_name}: {e}"
+                logger.warning(error_msg)
+                errors.append(error_msg)
+
+        # Upsert all points in one batch
+        if all_points:
+            try:
+                await client.upsert(
+                    collection_name=AGENT_KNOWLEDGE_BASE_COLLECTION_NAME,
+                    points=all_points
+                )
+                logger.info(f"Indexed {len(all_points)} chunks in Qdrant collection '{AGENT_KNOWLEDGE_BASE_COLLECTION_NAME}' for agent_id: {agent_id} ({len(valid_files)} files)")
+            except Exception as e:
+                error_msg = f"Error upserting points to Qdrant: {e}"
+                logger.error(error_msg)
+                errors.append(error_msg)
+
+        return {
+            "total_processed": len(valid_files),
+            "total_chunks": total_chunks,
+            "errors": errors
+        }
+
+    except Exception as e:
+        logger.error(f"Error indexing files in knowledge base: {e}")
+        return {
+            "total_processed": 0,
+            "total_chunks": 0,
+            "errors": [str(e)]
+        }
+    
+async def index_custom_texts_in_knowledge_base(agent_id: str, custom_texts: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Index custom text chunks in Qdrant collection 'agent_knowledge_base'.
+    Chunks text content from custom texts and stores chunks with embeddings.
+    Removes old chunks for the same agent_id and custom_text_alias combinations before indexing new ones.
+
+    Args:
+        agent_id: The ID of the agent
+        custom_texts: List of custom text dictionaries, each containing:
+            - custom_text_alias: The alias for the custom text (required)
+            - custom_text: The text content to chunk and index (required)
+
+    Returns:
+        dict: Dictionary with 'total_processed', 'total_chunks', and 'errors' keys
+    """
+    try:
+        # Ensure collection exists
+        await ensure_agent_knowledge_base_collection_exists()
+
+        # Filter results to only process those with custom_text and custom_text_alias
+        valid_texts = []
+        for ct in custom_texts:
+            if ct and ct.get("custom_text") and ct.get("custom_text_alias"):
+                valid_texts.append(ct)
+
+        if not valid_texts:
+            logger.warning(f"No valid custom texts found for agent_id: {agent_id}")
+            return {
+                "total_processed": 0,
+                "total_chunks": 0,
+                "errors": []
+            }
+
+        logger.info(f"Processing {len(valid_texts)} custom texts for agent_id: {agent_id}")
+
+        # Get Qdrant client
+        client = get_qdrant_client_instance()
+
+        # Prepare all points and delete filters
+        current_time = datetime.now(timezone.utc).isoformat()
+        all_chunks = []  # Store all chunks with metadata for embedding generation
+        all_points = []
+        delete_filters = []
+        total_chunks = 0
+        errors = []
+
+        # Process each custom text to chunk text and prepare delete filters
+        for ct in valid_texts:
+            custom_text_alias = ct["custom_text_alias"]
+            text_content = ct["custom_text"]
+
+            try:
+                # Chunk the text content
+                chunks = chunk_text_content(text_content)
+
+                if not chunks:
+                    logger.warning(f"No chunks generated for custom_text_alias: {custom_text_alias}")
+                    continue
+
+                logger.debug(f"Generated {len(chunks)} chunks for custom_text_alias: {custom_text_alias}")
+                total_chunks += len(chunks)
+
+                # Create delete filter for this custom_text_alias
+                delete_filter = Filter(
+                    must=[
+                        FieldCondition(key="agent_id", match=MatchValue(value=agent_id)),
+                        FieldCondition(key="knowledge_source", match=MatchValue(value=custom_text_alias))
+                    ]
+                )
+                delete_filters.append((custom_text_alias, delete_filter))
+
+                # Store chunks with metadata for later embedding generation
+                for index, chunk_text in enumerate(chunks):
+                    all_chunks.append({
+                        "text_content": chunk_text,
+                        "agent_id": agent_id,
+                        "knowledge_source": custom_text_alias,
+                        "text_index": index
+                    })
+
+            except Exception as e:
+                error_msg = f"Error processing custom_text_alias {custom_text_alias}: {e}"
+                logger.error(error_msg)
+                errors.append(error_msg)
+
+        # Generate embeddings for all chunks in batch
+        if all_chunks:
+            try:
+                # Extract all chunk texts for embedding generation
+                chunk_texts = [chunk["text_content"] for chunk in all_chunks]
+
+                # Generate embeddings in batch
+                logger.info(f"Generating embeddings for {len(chunk_texts)} chunks using {EMBEDDING_MODEL}")
+                embeddings = await get_embeddings(
+                    texts=chunk_texts,
+                    model=EMBEDDING_MODEL,
+                    dimensions=EMBEDDING_DIM
+                )
+
+                # Create points with embeddings
+                for chunk_data, embedding in zip(all_chunks, embeddings):
+                    # Generate deterministic UUID5 based on agent_id + custom_text_alias + text_index
+                    composite_key = f"{agent_id}:{chunk_data['knowledge_source']}:{chunk_data['text_index']}"
+                    point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, composite_key))
+
+                    point = PointStruct(
+                        id=point_id,
+                        vector=embedding,  # Vector embeddings of text_content
+                        payload={
+                            "agent_id": chunk_data["agent_id"],
+                            "knowledge_source": chunk_data["knowledge_source"],
+                            "text_index": chunk_data["text_index"],
+                            "text_content": chunk_data["text_content"],
+                            "knowledge_type": "custom_text",
+                            "page_type": None,
+                            "created_at": current_time
+                        }
+                    )
+                    all_points.append(point)
+
+            except Exception as e:
+                error_msg = f"Error generating embeddings: {e}"
+                logger.error(error_msg)
+                errors.append(error_msg)
+
+        # Delete old chunks for all custom_text_aliases
+        for custom_text_alias, delete_filter in delete_filters:
+            try:
+                delete_result = await client.delete(
+                    collection_name=AGENT_KNOWLEDGE_BASE_COLLECTION_NAME,
+                    points_selector=delete_filter
+                )
+                if delete_result.status == "acknowledged":
+                    logger.debug(f"Removed old chunks for agent_id: {agent_id}, custom_text_alias: {custom_text_alias}")
+            except Exception as e:
+                error_msg = f"Error deleting old chunks for {custom_text_alias}: {e}"
+                logger.warning(error_msg)
+                errors.append(error_msg)
+
+        # Upsert all points in one batch
+        if all_points:
+            try:
+                await client.upsert(
+                    collection_name=AGENT_KNOWLEDGE_BASE_COLLECTION_NAME,
+                    points=all_points
+                )
+                logger.info(f"Indexed {len(all_points)} chunks in Qdrant collection '{AGENT_KNOWLEDGE_BASE_COLLECTION_NAME}' for agent_id: {agent_id} ({len(valid_texts)} custom texts)")
+            except Exception as e:
+                error_msg = f"Error upserting points to Qdrant: {e}"
+                logger.error(error_msg)
+                errors.append(error_msg)
+
+        return {
+            "total_processed": len(valid_texts),
+            "total_chunks": total_chunks,
+            "errors": errors
+        }
+
+    except Exception as e:
+        logger.error(f"Error indexing custom texts in knowledge base: {e}")
+        return {
+            "total_processed": 0,
+            "total_chunks": 0,
+            "errors": [str(e)]
+        }
+    
+async def index_qa_pairs_in_knowledge_base(agent_id: str, qa_pairs: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Index Q&A pairs in Qdrant collection 'agent_knowledge_base'.
+    Stores each Q&A pair as a single point with embeddings.
+    Removes old points for the same agent_id and qna_alias combinations before indexing new ones.
+
+    Args:
+        agent_id: The ID of the agent
+        qa_pairs: List of Q&A dictionaries, each containing:
+            - qna_alias: The alias for the Q&A pair (required)
+            - question: The question text (required)
+            - answer: The answer text (required)
+
+    Returns:
+        dict: Dictionary with 'total_processed', 'total_indexed', and 'errors' keys
+    """
+    try:
+        # Ensure collection exists
+        await ensure_agent_knowledge_base_collection_exists()
+
+        # Filter results to only process those with qna_alias, question, and answer
+        valid_pairs = []
+        for qa in qa_pairs:
+            if qa and qa.get("qna_alias") and qa.get("question") and qa.get("answer"):
+                valid_pairs.append(qa)
+
+        if not valid_pairs:
+            logger.warning(f"No valid Q&A pairs found for agent_id: {agent_id}")
+            return {
+                "total_processed": 0,
+                "total_indexed": 0,
+                "errors": []
+            }
+
+        logger.info(f"Processing {len(valid_pairs)} Q&A pairs for agent_id: {agent_id}")
+
+        # Get Qdrant client
+        client = get_qdrant_client_instance()
+
+        # Prepare all points and delete filters
+        current_time = datetime.now(timezone.utc).isoformat()
+        all_texts = []  # Store all text_content for embedding generation
+        all_points = []
+        delete_filters = []
+        errors = []
+
+        # Process each Q&A pair to prepare text content and delete filters
+        for qa in valid_pairs:
+            qna_alias = qa["qna_alias"]
+            question = qa["question"]
+            answer = qa["answer"]
+
+            try:
+                # Join question and answer into single text_content (NO CHUNKING)
+                text_content = f"Question: {question} Answer: {answer}"
+
+                # Create delete filter for this qna_alias
+                delete_filter = Filter(
+                    must=[
+                        FieldCondition(key="agent_id", match=MatchValue(value=agent_id)),
+                        FieldCondition(key="knowledge_source", match=MatchValue(value=qna_alias))
+                    ]
+                )
+                delete_filters.append((qna_alias, delete_filter))
+
+                # Store text content with metadata for later embedding generation
+                all_texts.append({
+                    "text_content": text_content,
+                    "agent_id": agent_id,
+                    "knowledge_source": qna_alias
+                })
+
+            except Exception as e:
+                error_msg = f"Error processing qna_alias {qna_alias}: {e}"
+                logger.error(error_msg)
+                errors.append(error_msg)
+
+        # Generate embeddings for all text contents in batch (NO CHUNKING - one embedding per Q&A pair)
+        if all_texts:
+            try:
+                # Extract all text contents for embedding generation
+                text_contents = [text["text_content"] for text in all_texts]
+
+                # Generate embeddings in batch
+                logger.info(f"Generating embeddings for {len(text_contents)} Q&A pairs using {EMBEDDING_MODEL}")
+                embeddings = await get_embeddings(
+                    texts=text_contents,
+                    model=EMBEDDING_MODEL,
+                    dimensions=EMBEDDING_DIM
+                )
+
+                # Create points with embeddings (one point per Q&A pair)
+                for text_data, embedding in zip(all_texts, embeddings):
+                    # Generate deterministic UUID5 based on agent_id + qna_alias + text_index (always 0)
+                    composite_key = f"{agent_id}:{text_data['knowledge_source']}:0"
+                    point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, composite_key))
+
+                    point = PointStruct(
+                        id=point_id,
+                        vector=embedding,  # Vector embeddings of text_content
+                        payload={
+                            "agent_id": text_data["agent_id"],
+                            "knowledge_source": text_data["knowledge_source"],
+                            "text_index": 0,  # Always 0 since no chunking
+                            "text_content": text_data["text_content"],
+                            "knowledge_type": "custom_qa",
+                            "page_type": None,
+                            "created_at": current_time
+                        }
+                    )
+                    all_points.append(point)
+
+            except Exception as e:
+                error_msg = f"Error generating embeddings: {e}"
+                logger.error(error_msg)
+                errors.append(error_msg)
+
+        # Delete old points for all qna_aliases
+        for qna_alias, delete_filter in delete_filters:
+            try:
+                delete_result = await client.delete(
+                    collection_name=AGENT_KNOWLEDGE_BASE_COLLECTION_NAME,
+                    points_selector=delete_filter
+                )
+                if delete_result.status == "acknowledged":
+                    logger.debug(f"Removed old points for agent_id: {agent_id}, qna_alias: {qna_alias}")
+            except Exception as e:
+                error_msg = f"Error deleting old points for {qna_alias}: {e}"
+                logger.warning(error_msg)
+                errors.append(error_msg)
+
+        # Upsert all points in one batch
+        if all_points:
+            try:
+                await client.upsert(
+                    collection_name=AGENT_KNOWLEDGE_BASE_COLLECTION_NAME,
+                    points=all_points
+                )
+                logger.info(f"Indexed {len(all_points)} Q&A pairs in Qdrant collection '{AGENT_KNOWLEDGE_BASE_COLLECTION_NAME}' for agent_id: {agent_id}")
+            except Exception as e:
+                error_msg = f"Error upserting points to Qdrant: {e}"
+                logger.error(error_msg)
+                errors.append(error_msg)
+
+        return {
+            "total_processed": len(valid_pairs),
+            "total_indexed": len(all_points),
+            "errors": errors
+        }
+
+    except Exception as e:
+        logger.error(f"Error indexing Q&A pairs in knowledge base: {e}")
+        return {
+            "total_processed": 0,
+            "total_indexed": 0,
+            "errors": [str(e)]
+        }

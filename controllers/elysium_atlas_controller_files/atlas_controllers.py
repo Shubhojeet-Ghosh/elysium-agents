@@ -1,7 +1,7 @@
 from typing import Dict, Any
 from fastapi.responses import JSONResponse
 from logging_config import get_logger
-from services.elysium_atlas_services.agent_services import initialize_agent_build_update, create_agent_document, list_agents_for_user, remove_agent_by_id
+from services.elysium_atlas_services.agent_services import initialize_agent_build_update, create_agent_document, list_agents_for_user, remove_agent_by_id,fetch_agent_details_by_id
 from services.elysium_atlas_services.agent_auth_services import is_user_owner_of_agent
 from config.atlas_agent_config_data import ELYSIUM_ATLAS_AGENT_CONFIG_DATA
 from config.elysium_atlas_s3_config import ELYSIUM_ATLAS_BUCKET_NAME, ELYSIUM_CDN_BASE_URL, ELYSIUM_GLOBAL_BUCKET_NAME
@@ -156,3 +156,34 @@ async def delete_agent_controller(requestData: dict, userData: dict):
     except Exception as e:
         logger.error(f"Error in delete_agent_controller for agent_id {agent_id}: {e}")
         return JSONResponse(status_code=500, content={"success": False, "message": "An error occurred while deleting the agent.", "error": str(e)})
+    
+async def get_agent_details_controller(requestData: dict, userData: dict):
+    try:
+        
+        if userData is None or userData.get("success") == False:
+            return JSONResponse(status_code=401, content={"success": False, "message": userData.get("message")})
+        
+        user_id = userData.get("user_id")
+        agent_id = requestData.get("agent_id")
+
+        if not agent_id:
+            return JSONResponse(status_code=400, content={"success": False, "message": "agent_id is required."})
+        
+        logger.info(f"Request to get details for agent_id: {agent_id} by user_id: {user_id}")
+
+        # Check if the user is the owner of the agent
+        is_owner = await is_user_owner_of_agent(user_id, agent_id)
+
+        if not is_owner:
+            return JSONResponse(status_code=403, content={"success": False, "message": "You are not authorized to delete this agent."})
+        
+        agent_data = await fetch_agent_details_by_id(agent_id)
+        
+        if not agent_data:
+            return JSONResponse(status_code=404, content={"success": False, "message": "Agent not found."})
+        
+        return JSONResponse(status_code=200, content={"success": True, "agent_details": agent_data})
+    
+    except Exception as e:
+        logger.error(f"Error in get_agent_details_controller: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": "An error occurred while fetching agent details.", "error": str(e)})    
