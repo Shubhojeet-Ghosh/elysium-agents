@@ -26,5 +26,6 @@ ELYSIUM_ATLAS_AGENT_CONFIG_DATA = {
         "Files Indexed": 50,
         "Indexing Custom Knowledge": 75,
         "Custom Knowledge Indexed": 90,
+        "running": 100,
     },
 }

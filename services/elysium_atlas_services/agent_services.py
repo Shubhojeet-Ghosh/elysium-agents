@@ -7,7 +7,7 @@ from services.mongo_services import get_collection
 from datetime import datetime, timezone
 from config.atlas_agent_config_data import ELYSIUM_ATLAS_AGENT_CONFIG_DATA
 from bson import ObjectId
-from services.elysium_atlas_services.agent_db_operations import update_agent_status, update_agent_fields
+from services.elysium_atlas_services.agent_db_operations import update_agent_status, update_agent_fields,update_agent_current_task
 from services.web_services.url_services import normalize_url
 from services.elysium_atlas_services.atlas_files_index_services import index_agent_files
 from services.elysium_atlas_services.atlas_custom_knowledge_services import index_custom_knowledge_for_agent
@@ -110,6 +110,7 @@ async def initialize_agent_build_update(requestData: Dict[str, Any]) -> bool:
         
         ### End of extracting custom texts for the agent
 
+        await update_agent_current_task(agent_id, "running")
         # Set agent status to 'active' just before returning True
         await update_agent_status(agent_id, "active")
         return True
@@ -391,10 +392,15 @@ async def fetch_agent_custom_knowledge(agent_id: str) -> tuple[list[Dict[str, An
 
 async def fetch_agent_details_by_id(agent_id: str) -> Optional[Dict[str, Any]]:
     try:
+        agent_task_progress = ELYSIUM_ATLAS_AGENT_CONFIG_DATA.get("agent_task_progress", {})
+
         document = await fetch_agent_document(agent_id)
         if not document:
             return None
         
+        agent_current_task = document.get("agent_current_task", "initializing")
+        task_progress = agent_task_progress.get(agent_current_task,0)
+
         urls, files, custom_knowledge = await asyncio.gather(
             fetch_agent_urls(agent_id),
             fetch_agent_files(agent_id),
@@ -403,6 +409,7 @@ async def fetch_agent_details_by_id(agent_id: str) -> Optional[Dict[str, Any]]:
         
         custom_texts, qa_pairs = custom_knowledge
         
+        document["progress"] = task_progress
         document["links"] = urls
         document["files"] = files
         document["custom_texts"] = custom_texts
