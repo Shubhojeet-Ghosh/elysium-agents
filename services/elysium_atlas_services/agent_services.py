@@ -419,3 +419,100 @@ async def fetch_agent_details_by_id(agent_id: str) -> Optional[Dict[str, Any]]:
     except Exception as e:
         logger.error(f"Error fetching agent details for agent_id {agent_id}: {e}")
         return None
+
+async def initialize_agent_update(requestData: Dict[str, Any]) -> bool:
+    try:
+        # logger.info(f"Initializing agent build/update with request data: {requestData}")
+        
+        agent_id = requestData.get("agent_id")
+        
+        operation = "update"
+        requestData["operation"] = operation
+
+        if not agent_id:
+            logger.error("agent_id is required for update operation")
+            return False
+        
+        logger.info(f"Updating agent with ID: {agent_id}")
+
+        # Set agent status to 'indexing' after creation/update
+        await update_agent_status(agent_id, "updating")
+        
+        await update_agent_current_task(agent_id, "updating agent metadata")
+        
+        updates = {}
+        
+        base_url = requestData.get("base_url")
+        if(base_url):
+            base_url = normalize_url(base_url)
+            requestData["base_url"] = base_url
+            updates["base_url"] = base_url
+
+        agent_name = requestData.get("agent_name")
+        if(agent_name is not None):
+            updates["agent_name"] = agent_name
+
+        system_prompt = requestData.get("system_prompt")
+        if(system_prompt is not None):
+            updates["system_prompt"] = system_prompt
+
+        welcome_message = requestData.get("welcome_message")
+        if(welcome_message is not None):
+            updates["welcome_message"] = welcome_message
+
+        llm_model = requestData.get("llm_model")
+        if(llm_model is not None):
+            updates["llm_model"] = llm_model
+
+        temperature = requestData.get("temperature")
+        if isinstance(temperature, (int, float)):
+            updates["temperature"] = temperature
+        
+        if updates:
+            metadata_update_result = await update_agent_fields(agent_id, updates)
+            logger.info(f"Updated metadata for agent {agent_id}: {list(updates.keys())} - success: {metadata_update_result}")
+        
+        await update_agent_status(agent_id, "indexing")
+
+        ### Process the links for the agent
+        links = requestData.get("links")
+
+        ### Index the links for the agent in DB
+        if(links):
+            link_index_result = await index_agent_urls(agent_id, links)
+            if not link_index_result:
+                logger.error("Failed to index agent URLs")
+
+        ### End of processing the links for the agent
+
+        ### Process the files for the agent
+        files = requestData.get("files")
+        if(files):
+            files_index_result = await index_agent_files(agent_id, files)
+            if not files_index_result:
+                logger.error("Failed to index agent files")
+
+        ### End of processing the files for the agent
+
+        ### Extract custom texts for the agent
+        custom_texts = requestData.get("custom_texts")
+
+        ### Extract custom Q&As for the agent
+        qa_pairs = requestData.get("qa_pairs")
+
+        if custom_texts or qa_pairs:
+            custom_texts_result = await index_custom_knowledge_for_agent(agent_id, custom_texts, qa_pairs)
+            if not custom_texts_result:
+                logger.error("Failed to store custom texts/QA pairs for agent")
+
+        await update_agent_current_task(agent_id, "running")
+
+        # Set agent status to 'active' just before returning True
+        await update_agent_status(agent_id, "active")
+        
+        logger.info(f"Successfully updated agent with ID: {agent_id}")
+        return True
+    
+    except Exception as e:
+        logger.error(f"Error updating agent URLs: {e}")
+        return False

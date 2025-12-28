@@ -1,12 +1,13 @@
 from typing import Dict, Any
 from fastapi.responses import JSONResponse
 from logging_config import get_logger
-from services.elysium_atlas_services.agent_services import initialize_agent_build_update, create_agent_document, list_agents_for_user, remove_agent_by_id,fetch_agent_details_by_id
+from services.elysium_atlas_services.agent_services import initialize_agent_build_update, create_agent_document, list_agents_for_user, remove_agent_by_id,fetch_agent_details_by_id,initialize_agent_update
 from services.elysium_atlas_services.agent_auth_services import is_user_owner_of_agent
 from config.atlas_agent_config_data import ELYSIUM_ATLAS_AGENT_CONFIG_DATA
 from config.elysium_atlas_s3_config import ELYSIUM_ATLAS_BUCKET_NAME, ELYSIUM_CDN_BASE_URL, ELYSIUM_GLOBAL_BUCKET_NAME
 from services.aws_services.s3_service import generate_presigned_upload_url
 from services.elysium_atlas_services.agent_db_operations import check_agent_name_exists
+from services.elysium_atlas_services.agent_db_operations import update_agent_status
 
 logger = get_logger()
 
@@ -46,6 +47,17 @@ async def build_update_agent_controller_v1(requestData,userData,background_tasks
         
         logger.info(f"User data: {userData}")
         
+        agent_id = requestData.get("agent_id")
+        if not agent_id:
+            agent_id = await create_agent_document()
+            requestData["agent_id"] = agent_id
+            if not agent_id:
+                logger.error("Failed to create agent document")
+                return JSONResponse(status_code=200, content={"success": False, "message": "Failed to build the agent."})
+        
+        # Set agent status to 'indexing' after creation/update
+        await update_agent_status(agent_id, "indexing")
+
         # logger.info(f"buil/update agent with request data: {requestData}")
         
         # Store links in MongoDB
@@ -181,3 +193,28 @@ async def get_agent_details_controller(requestData: dict, userData: dict):
     except Exception as e:
         logger.error(f"Error in get_agent_details_controller: {e}")
         return JSONResponse(status_code=500, content={"success": False, "message": "An error occurred while fetching agent details.", "error": str(e)})    
+    
+async def update_agent_controller_v1(requestData,userData,background_tasks):
+    try:
+        if userData is None or userData.get("success") == False:
+            return JSONResponse(status_code=401, content={"success": False, "message": userData.get("message")})
+        
+        # logger.info(f"User data: {userData}")
+        
+        # logger.info(f"buil/update agent with request data: {requestData}")
+        
+        agent_id = requestData.get("agent_id")
+        if not agent_id:
+            logger.error("agent_id is required for update operation")
+            return JSONResponse(status_code=400, content={"success": False, "message": "You can't perform update without agent."})
+        
+        # Set agent status to 'indexing' after creation/update
+        await update_agent_status(agent_id, "updating")
+
+        # Store links in MongoDB
+        background_tasks.add_task(initialize_agent_update,requestData)
+        
+        return JSONResponse(status_code=200, content={"success": True, "message": "Your agent is being updated.", "agent_id": requestData.get("agent_id")})
+
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "message": f"An error occurred while updating the agent.", "error": str(e)})    
