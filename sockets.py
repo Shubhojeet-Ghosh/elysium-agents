@@ -8,6 +8,7 @@ from socketio import AsyncRedisManager
 from logging_config import get_logger
 from config.settings import settings
 from middlewares.socket_auth import extract_token_from_socket_environ
+from controllers.elysium_atlas_controller_files.atlas_chat_controllers import chat_with_agent_controller_v1
 
 from services.socket_connection_helpers import (
     add_socket_connection,
@@ -16,6 +17,7 @@ from services.socket_connection_helpers import (
     remove_user_socket_mapping,
     get_user_id_from_user_data
 )
+
 logger = get_logger()
 
 REDIS_URL = f'redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/{settings.REDIS_DB}'
@@ -45,6 +47,12 @@ async def connect(sid, environ, auth):
             
             # Add socket ID to user's socket mapping in Redis
             add_user_socket_mapping(user_data, sid)
+            
+            # Join socket to user's room for broadcasting
+            # user_id = get_user_id_from_user_data(user_data)
+            # if user_id:
+            #     await sio.enter_room(sid, user_id)
+            #     logger.info(f"Socket {sid} joined room {user_id}")
 
     except Exception as e:
         logger.error(f"Error adding socket connection {sid}: {e}")
@@ -61,9 +69,23 @@ async def disconnect(sid):
         if user_data:
             user_id = get_user_id_from_user_data(user_data)
             if user_id:
+                # # Leave user's room
+                # await sio.leave_room(sid, user_id)
+                # logger.info(f"Socket {sid} left room {user_id}")
                 remove_user_socket_mapping(user_id, sid)
         
         remove_socket_connection(sid)
         logger.info(f"Client disconnected: {sid}.")
     except Exception as e:
         logger.error(f"Error removing socket connection {sid}: {e}")
+
+
+# Handle 'handle-atlas-message' event - main chat orchestrator for atlas users
+@sio.on("handle-atlas-message")
+async def handle_atlas_user_message(sid,socketData):
+    logger.info("Event 'handle-atlas-message' received")
+    session = await sio.get_session(sid)
+    user_data = session.get("user_data") if session else None
+    logger.info(user_data)
+
+    response = await chat_with_agent_controller_v1(socketData, user_data, sid)

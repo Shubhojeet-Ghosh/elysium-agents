@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     OPENAI_API_KEY:str
     GROQ_API_KEY:str
     ANTHROPIC_API_KEY:str = Field(default="")
+    CREATE_INDEXES: bool = Field(default=True)
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
