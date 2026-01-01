@@ -6,6 +6,7 @@ from fastapi import BackgroundTasks
 from fastapi.responses import JSONResponse
 
 from controllers.elysium_atlas_controller_files.atlas_controllers import build_update_agent_controller_v1, pre_build_agent_operations_controller,generate_presigned_url_controller, list_agents_controller, delete_agent_controller,get_agent_details_controller,update_agent_controller_v1
+from controllers.elysium_atlas_controller_files.atlas_chat_controllers import chat_with_agent_controller_v1
 
 elysium_atlas_agent_router = APIRouter(prefix = "/elysium-atlas/agent",tags=["Elysium Atlas - Agent Routes"])
 
@@ -43,3 +44,8 @@ async def get_agent_details_route_v1(requestData: Dict[str, Any], user: dict = D
 @elysium_atlas_agent_router.post("/v1/update-agent")
 async def update_agent_route_v1(requestData: Dict[str, Any],user: dict = Depends(authorize_user),background_tasks: BackgroundTasks = BackgroundTasks()):
     return await update_agent_controller_v1(requestData,user,background_tasks)
+
+# Async POST method to query the agent
+@elysium_atlas_agent_router.post("/v1/query-agent")
+async def query_agent_route_v1(requestData: Dict[str, Any],user: dict = Depends(authorize_user)):
+    return await chat_with_agent_controller_v1(requestData,user)

@@ -81,7 +81,7 @@ async def disconnect(sid):
 
 
 # Handle 'handle-atlas-message' event - main chat orchestrator for atlas users
-@sio.on("handle-atlas-message")
+@sio.on("atlas-user-message")
 async def handle_atlas_user_message(sid,socketData):
     logger.info("Event 'handle-atlas-message' received")
     session = await sio.get_session(sid)
