@@ -518,13 +518,6 @@ async def initialize_agent_update(requestData: Dict[str, Any]) -> bool:
         return False
 
 
-async def fetch_agent_details_by_id(agent_id: str) -> Dict[str, Any] | None:
-    """
-    Fetch all details of an agent by ID.
-    """
-    return await get_agent_by_id(agent_id)
-
-
 async def fetch_agent_fields_by_id(agent_id: str, fields: list[str]) -> Dict[str, Any] | None:
     """
     Fetch specific fields of an agent by ID.
