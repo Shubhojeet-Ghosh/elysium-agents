@@ -7,7 +7,7 @@ from services.mongo_services import get_collection
 from datetime import datetime, timezone
 from config.atlas_agent_config_data import ELYSIUM_ATLAS_AGENT_CONFIG_DATA
 from bson import ObjectId
-from services.elysium_atlas_services.agent_db_operations import update_agent_status, update_agent_fields,update_agent_current_task
+from services.elysium_atlas_services.agent_db_operations import update_agent_status, update_agent_fields,update_agent_current_task, get_agent_by_id, get_agent_fields_by_id
 from services.web_services.url_services import normalize_url
 from services.elysium_atlas_services.atlas_files_index_services import index_agent_files
 from services.elysium_atlas_services.atlas_custom_knowledge_services import index_custom_knowledge_for_agent
@@ -516,3 +516,17 @@ async def initialize_agent_update(requestData: Dict[str, Any]) -> bool:
     except Exception as e:
         logger.error(f"Error updating agent URLs: {e}")
         return False
+
+
+async def fetch_agent_details_by_id(agent_id: str) -> Dict[str, Any] | None:
+    """
+    Fetch all details of an agent by ID.
+    """
+    return await get_agent_by_id(agent_id)
+
+
+async def fetch_agent_fields_by_id(agent_id: str, fields: list[str]) -> Dict[str, Any] | None:
+    """
+    Fetch specific fields of an agent by ID.
+    """
+    return await get_agent_fields_by_id(agent_id, fields)

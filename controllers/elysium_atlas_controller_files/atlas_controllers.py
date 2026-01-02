@@ -1,7 +1,7 @@
 from typing import Dict, Any
 from fastapi.responses import JSONResponse
 from logging_config import get_logger
-from services.elysium_atlas_services.agent_services import initialize_agent_build_update, create_agent_document, list_agents_for_user, remove_agent_by_id,fetch_agent_details_by_id,initialize_agent_update
+from services.elysium_atlas_services.agent_services import initialize_agent_build_update, create_agent_document, list_agents_for_user, remove_agent_by_id,fetch_agent_details_by_id,initialize_agent_update, fetch_agent_fields_by_id
 from services.elysium_atlas_services.agent_auth_services import is_user_owner_of_agent
 from config.atlas_agent_config_data import ELYSIUM_ATLAS_AGENT_CONFIG_DATA
 from config.elysium_atlas_s3_config import ELYSIUM_ATLAS_BUCKET_NAME, ELYSIUM_CDN_BASE_URL, ELYSIUM_GLOBAL_BUCKET_NAME
@@ -193,6 +193,35 @@ async def get_agent_details_controller(requestData: dict, userData: dict):
     except Exception as e:
         logger.error(f"Error in get_agent_details_controller: {e}")
         return JSONResponse(status_code=500, content={"success": False, "message": "An error occurred while fetching agent details.", "error": str(e)})    
+    
+async def get_agent_fields_controller(requestData: dict, userData: dict):
+    try:
+        
+        if userData is None or userData.get("success") == False:
+            return JSONResponse(status_code=401, content={"success": False, "message": userData.get("message")})
+        
+        user_id = userData.get("user_id")
+        agent_id = requestData.get("agent_id")
+        fields = requestData.get("fields")
+
+        if not agent_id:
+            return JSONResponse(status_code=400, content={"success": False, "message": "agent_id is required."})
+        
+        if not fields or not isinstance(fields, list):
+            return JSONResponse(status_code=400, content={"success": False, "message": "fields must be a list of strings."})
+        
+        logger.info(f"Request to get fields {fields} for agent_id: {agent_id} by user_id: {user_id}")
+        
+        agent_data = await fetch_agent_fields_by_id(agent_id, fields)
+        
+        if agent_data is None:
+            return JSONResponse(status_code=404, content={"success": False, "message": "Agent not found."})
+        
+        return JSONResponse(status_code=200, content={"success": True, "agent_fields": agent_data})
+    
+    except Exception as e:
+        logger.error(f"Error in get_agent_fields_controller: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": "An error occurred while fetching agent fields.", "error": str(e)})    
     
 async def update_agent_controller_v1(requestData,userData,background_tasks):
     try:

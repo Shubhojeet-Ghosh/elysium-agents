@@ -49,6 +49,54 @@ async def get_agent_by_id(agent_id: str) -> Dict[str, Any] | None:
         return None
 
 
+async def get_agent_fields_by_id(agent_id: str, fields: list[str]) -> Dict[str, Any] | None:
+    """
+    Retrieve specific fields of an agent document from the 'atlas_agents' collection by agent_id.
+
+    Args:
+        agent_id: The ID of the agent to retrieve.
+        fields: List of field names to retrieve.
+
+    Returns:
+        Dict[str, Any] | None: The agent document with only the specified fields if found, None otherwise.
+    """
+    try:
+        logger.info(f"Retrieving agent fields {fields} for agent_id: {agent_id}")
+
+        collection = get_collection("atlas_agents")
+
+        # Convert agent_id to ObjectId if it's a string
+        if isinstance(agent_id, str):
+            agent_id = ObjectId(agent_id)
+
+        # Find the agent document
+        agent = await collection.find_one({"_id": agent_id})
+
+        if agent:
+            # Convert ObjectId and datetime fields to strings
+            if "_id" in agent:
+                agent["_id"] = str(agent["_id"])
+            if "created_at" in agent and agent["created_at"]:
+                agent["created_at"] = agent["created_at"].isoformat()
+            if "updated_at" in agent and agent["updated_at"]:
+                agent["updated_at"] = agent["updated_at"].isoformat()
+            
+            # Create result with only requested fields, set missing ones to None
+            result = {}
+            for field in fields:
+                result[field] = agent.get(field, None)
+            
+            logger.info(f"Retrieved agent fields for agent_id: {agent_id}")
+            return result
+        else:
+            logger.warning(f"No agent found for agent_id: {agent_id}")
+            return None
+
+    except Exception as e:
+        logger.error(f"Error retrieving agent fields for agent_id {agent_id}: {e}")
+        return None
+
+
 async def update_agent_current_task(agent_id: str, current_task: str) -> bool:
     """
     Update the `agent_current_task` field for a specific agent document in the 'atlas_agents' collection.
