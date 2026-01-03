@@ -52,6 +52,15 @@ async def create_mongo_indexes():
         await elysium_atlas_users_collection.create_index("email", name="email_1", unique=True)
         logger.info("Unique index created on elysium_atlas_users.email")
 
+        # Create indexes for atlas_chat_sessions collection
+        atlas_chat_sessions_collection = get_collection("atlas_chat_sessions")
+        await atlas_chat_sessions_collection.create_index("chat_session_id", name="chat_session_id_index")
+        logger.info("Index created on atlas_chat_sessions.chat_session_id")
+        await atlas_chat_sessions_collection.create_index("agent_id", name="agent_id_index_chat_sessions")
+        logger.info("Index created on atlas_chat_sessions.agent_id")
+        await atlas_chat_sessions_collection.create_index([("chat_session_id", 1), ("agent_id", 1)], name="chat_session_id_agent_id_index")
+        logger.info("Compound index created on atlas_chat_sessions.chat_session_id and agent_id")
+
         logger.info("MongoDB indexes created / verified successfully.")
 
     except Exception as e:

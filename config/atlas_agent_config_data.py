@@ -30,4 +30,14 @@ ELYSIUM_ATLAS_AGENT_CONFIG_DATA = {
         "Custom Knowledge Indexed": 90,
         "running": 100,
     },
+    "chat_session_init_config": {
+        "chat_session_id": None,
+        "created_at": None,
+        "last_message_at": None,
+        "agent_name": None,
+        "agent_id": None,
+        "channel": None,
+        "status": "inactive",
+        "source": None,
+    },
 }

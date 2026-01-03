@@ -1,8 +1,10 @@
+import asyncio
 from typing import Dict, Any
 from fastapi.responses import JSONResponse
 from logging_config import get_logger
 from services.elysium_atlas_services.agent_services import initialize_agent_build_update, create_agent_document, list_agents_for_user, remove_agent_by_id,fetch_agent_details_by_id,initialize_agent_update, fetch_agent_fields_by_id
 from services.elysium_atlas_services.agent_auth_services import is_user_owner_of_agent
+from services.elysium_atlas_services.atlas_chat_session_services import get_chat_session_data
 from config.atlas_agent_config_data import ELYSIUM_ATLAS_AGENT_CONFIG_DATA
 from config.elysium_atlas_s3_config import ELYSIUM_ATLAS_BUCKET_NAME, ELYSIUM_CDN_BASE_URL, ELYSIUM_GLOBAL_BUCKET_NAME
 from services.aws_services.s3_service import generate_presigned_upload_url
@@ -199,6 +201,7 @@ async def get_agent_fields_controller(requestData: dict):
         
         agent_id = requestData.get("agent_id")
         fields = requestData.get("fields")
+        chat_session_id = requestData.get("chat_session_id")
 
         if not agent_id:
             return JSONResponse(status_code=400, content={"success": False, "message": "agent_id is required."})
@@ -208,12 +211,20 @@ async def get_agent_fields_controller(requestData: dict):
         
         logger.info(f"Request to get fields {fields} for agent_id: {agent_id}.")
         
-        agent_data = await fetch_agent_fields_by_id(agent_id, fields)
+        # Run async calls in parallel
+        if chat_session_id:
+            agent_data, chat_session_data = await asyncio.gather(
+                fetch_agent_fields_by_id(agent_id, fields),
+                get_chat_session_data(requestData)
+            )
+        else:
+            agent_data = await fetch_agent_fields_by_id(agent_id, fields)
+            chat_session_data = None
         
         if agent_data is None:
             return JSONResponse(status_code=404, content={"success": False, "message": "Agent not found."})
-        
-        return JSONResponse(status_code=200, content={"success": True, "agent_fields": agent_data})
+
+        return JSONResponse(status_code=200, content={"success": True, "agent_fields": agent_data , "chat_session_data": chat_session_data})
     
     except Exception as e:
         logger.error(f"Error in get_agent_fields_controller: {e}")
