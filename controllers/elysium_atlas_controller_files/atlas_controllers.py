@@ -194,13 +194,9 @@ async def get_agent_details_controller(requestData: dict, userData: dict):
         logger.error(f"Error in get_agent_details_controller: {e}")
         return JSONResponse(status_code=500, content={"success": False, "message": "An error occurred while fetching agent details.", "error": str(e)})    
     
-async def get_agent_fields_controller(requestData: dict, userData: dict):
+async def get_agent_fields_controller(requestData: dict):
     try:
         
-        if userData is None or userData.get("success") == False:
-            return JSONResponse(status_code=401, content={"success": False, "message": userData.get("message")})
-        
-        user_id = userData.get("user_id")
         agent_id = requestData.get("agent_id")
         fields = requestData.get("fields")
 
@@ -210,7 +206,7 @@ async def get_agent_fields_controller(requestData: dict, userData: dict):
         if not fields or not isinstance(fields, list):
             return JSONResponse(status_code=400, content={"success": False, "message": "fields must be a list of strings."})
         
-        logger.info(f"Request to get fields {fields} for agent_id: {agent_id} by user_id: {user_id}")
+        logger.info(f"Request to get fields {fields} for agent_id: {agent_id}.")
         
         agent_data = await fetch_agent_fields_by_id(agent_id, fields)
         

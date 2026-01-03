@@ -42,8 +42,8 @@ async def get_agent_details_route_v1(requestData: Dict[str, Any], user: dict = D
 
 # Async POST method to get specific fields of an agent
 @elysium_atlas_agent_router.post("/v1/get-agent-fields")
-async def get_agent_fields_route_v1(requestData: Dict[str, Any], user: dict = Depends(authorize_user)):
-    return await get_agent_fields_controller(requestData, user)
+async def get_agent_fields_route_v1(requestData: Dict[str, Any]):
+    return await get_agent_fields_controller(requestData)
 
 # Async POST method to build the agent
 @elysium_atlas_agent_router.post("/v1/update-agent")
