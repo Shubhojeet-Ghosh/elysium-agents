@@ -46,7 +46,7 @@ async def emit_atlas_response(sid=None, room=None, message=None, payload=None, s
         return {"success": False, "message": "Error emitting atlas_response"}
 
 
-async def emit_atlas_response_chunk(chunk, done=False, sid=None, room=None, skip_sid=None):
+async def emit_atlas_response_chunk(chunk, done=False, sid=None, room=None, skip_sid=None, full_response=None, message_id=None, created_at=None, role=None):
     """
     Emit a single atlas response chunk to a specific socket ID or room.
     Useful for streaming LLM responses one chunk at a time.
@@ -56,6 +56,10 @@ async def emit_atlas_response_chunk(chunk, done=False, sid=None, room=None, skip
     :param sid: The socket ID to emit to (mutually exclusive with room)
     :param room: The room ID to emit to (mutually exclusive with sid)
     :param skip_sid: The socket ID to skip when emitting to a room
+    :param full_response: Full response text (included only when done=True)
+    :param message_id: Generated message ID (included only when done=True)
+    :param created_at: Creation timestamp in ISO format (included only when done=True)
+    :param role: Role of the sender (included only when done=True)
     """
     try:
         from sockets import sio
@@ -79,8 +83,20 @@ async def emit_atlas_response_chunk(chunk, done=False, sid=None, room=None, skip
                 emit_kwargs["skip_sid"] = skip_sid
             target_info = f"room {room}"
 
+        # Build payload
+        payload = {"chunk": chunk, "done": done}
+        if done:
+            if full_response is not None:
+                payload["full_response"] = full_response
+            if message_id is not None:
+                payload["message_id"] = message_id
+            if created_at is not None:
+                payload["created_at"] = created_at
+            if role is not None:
+                payload["role"] = role
+
         # Emit the chunk
-        await sio.emit("atlas_response_chunk", {"chunk": chunk, "done": done}, **emit_kwargs)
+        await sio.emit("atlas_response_chunk", payload, **emit_kwargs)
         
         return {"success": True, "message": f"Emitted chunk to {target_info}"}
         

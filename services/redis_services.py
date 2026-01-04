@@ -19,6 +19,9 @@ def get_redis_client():
     Raises:
         redis.ConnectionError: If unable to connect to Redis server
     """
+    global redis_client
+    if redis_client is not None:
+        return redis_client
     client = redis.Redis(
         host=settings.REDIS_HOST,
         port=settings.REDIS_PORT,
@@ -27,6 +30,7 @@ def get_redis_client():
     )
     client.ping()  # Test connection - will raise ConnectionError if Redis is unavailable
     logger.info(f"Connected to Redis successfully on {settings.REDIS_HOST}:{settings.REDIS_PORT} database {settings.REDIS_DB}.")
+    redis_client = client
     return client
 
 def initialize_redis_client():

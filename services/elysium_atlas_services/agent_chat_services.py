@@ -185,7 +185,11 @@ async def chat_with_agent_v1(agent_id, message, sid=None, agent_name=None,additi
             
             # Send final "done" signal
             if sid:
-                await emit_atlas_response_chunk("", done=True, sid=sid)
+                import uuid
+                import datetime
+                message_id = str(uuid.uuid4())
+                created_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
+                await emit_atlas_response_chunk("", done=True, sid=sid, full_response=response_text, message_id=message_id, created_at=created_at, role="agent")
             
             logger.info(f"Streaming completed for model '{model}'")
         else:

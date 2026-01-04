@@ -17,6 +17,7 @@ from services.socket_connection_helpers import (
     remove_user_socket_mapping,
     get_user_id_from_user_data
 )
+from services.elysium_atlas_services.atlas_visitor_socket_services import handle_atlas_visitor_connected_service
 
 logger = get_logger()
 
@@ -74,18 +75,37 @@ async def disconnect(sid):
                 # logger.info(f"Socket {sid} left room {user_id}")
                 remove_user_socket_mapping(user_id, sid)
         
+        # Check if it's a visitor and remove from agent Redis
+        agent_id = session.get("agent_id") if session else None
+        if agent_id:
+            logger.info(f"Removing visitor socket {sid} from agent {agent_id} visitors")
+            from services.elysium_atlas_services.atlas_redis_services import remove_visitor_from_agent
+            remove_visitor_from_agent(agent_id, sid)
+        
         remove_socket_connection(sid)
         logger.info(f"Client disconnected: {sid}.")
     except Exception as e:
         logger.error(f"Error removing socket connection {sid}: {e}")
 
 
-# Handle 'handle-atlas-message' event - main chat orchestrator for atlas users
-@sio.on("atlas-user-message")
-async def handle_atlas_user_message(sid,socketData):
-    logger.info("Event 'handle-atlas-message' received")
+# Handle 'atlas-visitor-message' event - main chat orchestrator for atlas users
+@sio.on("atlas-visitor-message")
+async def handle_atlas_visitor_message(sid,socketData):
+    logger.info("Event 'atlas-visitor-message' received")
     session = await sio.get_session(sid)
     user_data = session.get("user_data") if session else None
     logger.info(user_data)
 
     response = await chat_with_agent_controller_v1(socketData, user_data, sid)
+
+# Handle 'atlas-visitor-connected' event
+@sio.on("atlas-visitor-connected")
+async def handle_atlas_visitor_connected(sid, socketData):
+    
+    # Save agent_id to session for disconnect handling
+    agent_id = socketData.get("agent_id")
+    if agent_id:
+        logger.info(f"Saving agent_id {agent_id} to session for socket {sid}")
+        await sio.save_session(sid, {"agent_id": agent_id})
+
+    await handle_atlas_visitor_connected_service(socketData, sid)
