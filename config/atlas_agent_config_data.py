@@ -37,7 +37,9 @@ ELYSIUM_ATLAS_AGENT_CONFIG_DATA = {
         "agent_name": None,
         "agent_id": None,
         "channel": None,
-        "status": "inactive",
+        "status": "active",
+        "visitor_at": None,
+        "visitor_online": False,
         "source": None,
     },
 }

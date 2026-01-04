@@ -61,6 +61,17 @@ async def create_mongo_indexes():
         await atlas_chat_sessions_collection.create_index([("chat_session_id", 1), ("agent_id", 1)], name="chat_session_id_agent_id_index")
         logger.info("Compound index created on atlas_chat_sessions.chat_session_id and agent_id")
 
+        # Create indexes for atlas_chat_mesages collection
+        atlas_chat_mesages_collection = get_collection("atlas_chat_mesages")
+        await atlas_chat_mesages_collection.create_index("agent_id", name="agent_id_index_messages")
+        logger.info("Index created on atlas_chat_mesages.agent_id")
+        await atlas_chat_mesages_collection.create_index("chat_session_id", name="chat_session_id_index_messages")
+        logger.info("Index created on atlas_chat_mesages.chat_session_id")
+        await atlas_chat_mesages_collection.create_index("created_at", name="created_at_index_messages")
+        logger.info("Index created on atlas_chat_mesages.created_at")
+        await atlas_chat_mesages_collection.create_index([("agent_id", 1), ("chat_session_id", 1)], name="agent_id_chat_session_id_index_messages")
+        logger.info("Compound index created on atlas_chat_mesages.agent_id and chat_session_id")
+
         logger.info("MongoDB indexes created / verified successfully.")
 
     except Exception as e:

@@ -1,10 +1,14 @@
 from logging_config import get_logger
-import asyncio
 from services.elysium_atlas_services.atlas_query_qdrant_services import search_and_merge_agent_knowledge
 from services.elysium_atlas_services.agent_db_operations import get_agent_by_id
 from services.socket_emit_services import emit_atlas_response_chunk
+from services.elysium_atlas_services.atlas_chat_session_services import create_and_store_chat_messages
 
 from config.llm_models_config import resolve_model_handler, DEFAULT_MODEL
+
+import asyncio
+import uuid
+import datetime
 
 logger = get_logger()
 
@@ -129,8 +133,12 @@ def build_messages_list(agent_data: dict, message: str, knowledge_base_string: s
 
     return messages
 
-async def chat_with_agent_v1(agent_id, message, sid=None, agent_name=None,additional_params: dict = {}):
+async def chat_with_agent_v1(agent_id, message, sid=None, agent_name=None, chat_session_id=None, additional_params: dict = {}):
     try:
+        user_message_id = str(uuid.uuid4())
+        agent_message_id = str(uuid.uuid4())
+        user_message_created_at = additional_params.get("created_at") or datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+
         # Run agent data retrieval and knowledge search in parallel
         agent_data, final_results = await asyncio.gather(
             get_agent_by_id(agent_id),
@@ -177,6 +185,7 @@ async def chat_with_agent_v1(agent_id, message, sid=None, agent_name=None,additi
 
         # If streaming, iterate over async generator and emit chunks
         response_text = ""
+        agent_message_created_at = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
         if stream and hasattr(response_obj, "__aiter__"):
             async for chunk in response_obj:
                 response_text += chunk
@@ -185,15 +194,32 @@ async def chat_with_agent_v1(agent_id, message, sid=None, agent_name=None,additi
             
             # Send final "done" signal
             if sid:
-                import uuid
-                import datetime
-                message_id = str(uuid.uuid4())
-                created_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
-                await emit_atlas_response_chunk("", done=True, sid=sid, full_response=response_text, message_id=message_id, created_at=created_at, role="agent")
+                await emit_atlas_response_chunk("", done=True, sid=sid, full_response=response_text, message_id=agent_message_id, created_at=agent_message_created_at, role="agent")
             
             logger.info(f"Streaming completed for model '{model}'")
         else:
             response_text = response_obj
+
+        # Store user and agent messages if chat_session_id is provided
+        if chat_session_id:
+            user_payload = {
+                "message_id": user_message_id,
+                "role": "user",
+                "content": message,
+                "created_at": user_message_created_at
+            }
+            agent_payload = {
+                "message_id": agent_message_id,
+                "role": "agent",
+                "content": response_text,
+                "created_at": agent_message_created_at
+            }
+            asyncio.create_task(create_and_store_chat_messages(
+                chat_session_id=chat_session_id,
+                agent_id=agent_id,
+                user_message_payload=user_payload,
+                agent_message_payload=agent_payload
+            ))
 
         return {
             "success": True,  

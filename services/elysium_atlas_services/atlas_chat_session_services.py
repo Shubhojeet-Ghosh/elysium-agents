@@ -2,9 +2,10 @@ from typing import Dict, Any
 from logging_config import get_logger
 from services.mongo_services import get_collection
 from config.atlas_agent_config_data import ELYSIUM_ATLAS_AGENT_CONFIG_DATA
-from datetime import datetime, timezone
+import datetime
 from bson import ObjectId
 import random
+import asyncio
 
 logger = get_logger()
 
@@ -40,6 +41,22 @@ async def get_chat_session_data(requestData: Dict[str, Any]) -> Dict[str, Any] |
             if "last_message_at" in document and document["last_message_at"]:
                 document["last_message_at"] = document["last_message_at"].isoformat()
             
+            # Update visitor_at if provided
+            visitor_at = requestData.get("visitor_at")
+            if visitor_at is not None:
+                document["visitor_at"] = visitor_at
+                # Update in DB asynchronously
+                async def update_visitor():
+                    await collection.update_one(
+                        {"_id": ObjectId(document["_id"])},
+                        {"$set": {"visitor_at": visitor_at}}
+                    )
+                asyncio.create_task(update_visitor())
+            
+            # Retrieve messages for the session
+            messages = await get_chat_messages_for_session(agent_id, chat_session_id,50)
+            document["messages"] = messages
+            
             logger.info(f"Retrieved existing chat session document for chat_session_id: {chat_session_id} and agent_id: {agent_id}")
             return document
         else:
@@ -57,9 +74,12 @@ async def get_chat_session_data(requestData: Dict[str, Any]) -> Dict[str, Any] |
             update_dict = {
                 "agent_name": agent_display_name,
                 "channel": channel,
-                "created_at": datetime.now(timezone.utc),
-                "last_message_at": datetime.now(timezone.utc),
+                "created_at": datetime.datetime.now(datetime.timezone.utc),
+                "last_message_at": datetime.datetime.now(datetime.timezone.utc),
             }
+            visitor_at = requestData.get("visitor_at")
+            if visitor_at:
+                update_dict["visitor_at"] = visitor_at
             source = requestData.get("source")
             if source:
                 update_dict["source"] = source
@@ -70,12 +90,59 @@ async def get_chat_session_data(requestData: Dict[str, Any]) -> Dict[str, Any] |
             document["created_at"] = document["created_at"].isoformat()
             document["last_message_at"] = document["last_message_at"].isoformat()
             
+            # For new session, messages will be empty
+            document["messages"] = []
+            
             logger.info(f"Created new chat session document with chat_session_id: {chat_session_id} and agent_id: {agent_id}")
             return document
 
     except Exception as e:
         logger.error(f"Error in get_chat_session_data: {str(e)}")
         return None
+
+async def get_chat_messages_for_session(
+    agent_id: str,
+    chat_session_id: str,
+    limit: int = 50,
+) -> list[Dict[str, Any]]:
+    """
+    Retrieve chat messages for a specific session, sorted by created_at ascending.
+
+    Args:
+        agent_id: The agent identifier.
+        chat_session_id: The chat session identifier.
+        limit: Maximum number of messages to retrieve.
+
+    Returns:
+        List of message documents with message_id, role, content, created_at.
+    """
+    try:
+        if not agent_id or not chat_session_id:
+            logger.warning("agent_id and chat_session_id are required")
+            return []
+
+        collection = get_collection("atlas_chat_mesages")
+
+        # Find messages, sort by created_at ascending, limit
+        cursor = collection.find(
+            {"agent_id": agent_id, "chat_session_id": chat_session_id},
+            {"message_id": 1, "role": 1, "content": 1, "created_at": 1, "_id": 0}
+        ).sort("created_at", 1).limit(limit)
+
+        messages = await cursor.to_list(length=None)
+
+        logger.info(
+            "Retrieved %d messages for chat_session_id=%s and agent_id=%s",
+            len(messages),
+            chat_session_id,
+            agent_id,
+        )
+
+        return messages
+
+    except Exception as e:
+        logger.error(f"Error retrieving chat messages: {str(e)}")
+        return []
 
 
 async def get_agent_alias_name(agent_id: str) -> str | None:
@@ -139,3 +206,142 @@ def get_channel_from_session_id(chat_session_id: str) -> str:
         return chat_session_id.split("-", 1)[0]
     else:
         return "un"
+
+
+def build_chat_message_documents(
+    chat_session_id: str,
+    agent_id: str,
+    user_message_payload: Dict[str, Any] | None = None,
+    agent_message_payload: Dict[str, Any] | None = None,
+) -> list[Dict[str, Any]]:
+    """
+    Build message documents for the provided payloads.
+
+    Args:
+        chat_session_id: The chat session identifier.
+        agent_id: The agent identifier.
+        user_message_payload: Optional message payload sent by the user.
+        agent_message_payload: Optional message payload sent by the agent.
+
+    Returns:
+        A list of message documents ready for persistence.
+    """
+    try:
+        if not chat_session_id or not agent_id:
+            logger.warning("chat_session_id and agent_id are required to create messages")
+            return []
+
+        messages: list[Dict[str, Any]] = []
+
+        def _build_message_document(payload: Dict[str, Any] | None) -> Dict[str, Any] | None:
+            if not payload:
+                return None
+            if not isinstance(payload, dict):
+                logger.warning("Invalid payload type for chat message; expected dict")
+                return None
+
+            message_id = payload.get("message_id")
+            role = payload.get("role")
+            content = payload.get("content")
+            created_at = payload.get("created_at") or datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+            if not role or content is None:
+                logger.warning("Missing role or content in chat message payload")
+                return None
+
+            return {
+                "chat_session_id": chat_session_id,
+                "agent_id": agent_id,
+                "message_id": message_id,
+                "role": role,
+                "content": content,
+                "created_at": created_at,
+            }
+
+        for payload in (user_message_payload, agent_message_payload):
+            message_doc = _build_message_document(payload)
+            if message_doc:
+                messages.append(message_doc)
+
+        return messages
+
+    except Exception as e:
+        logger.error(f"Error while creating chat messages: {str(e)}")
+        return []
+
+
+async def create_and_store_chat_messages(
+    chat_session_id: str,
+    agent_id: str,
+    user_message_payload: Dict[str, Any] | None = None,
+    agent_message_payload: Dict[str, Any] | None = None,
+) -> list[Dict[str, Any]]:
+    """
+    Build and persist chat messages into the atlas_chat_mesages collection.
+
+    This single service handles validation, building documents, and storing them.
+    Returns the stored documents with inserted ids stringified. Returns an empty
+    list if nothing was stored.
+    """
+    try:
+        if not chat_session_id or not agent_id:
+            logger.warning("chat_session_id and agent_id are required to create messages")
+            return []
+        
+        logger.info(f"Creating and storing chat messages for chat_session_id={chat_session_id} and agent_id={agent_id}")
+
+        messages: list[Dict[str, Any]] = []
+
+        def _build_message_document(payload: Dict[str, Any] | None) -> Dict[str, Any] | None:
+            if not payload:
+                return None
+            if not isinstance(payload, dict):
+                logger.warning("Invalid payload type for chat message; expected dict")
+                return None
+
+            message_id = payload.get("message_id")
+            role = payload.get("role")
+            content = payload.get("content")
+            created_at = payload.get("created_at") or datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+            if not role or content is None:
+                logger.warning("Missing role or content in chat message payload")
+                return None
+
+            return {
+                "chat_session_id": chat_session_id,
+                "agent_id": agent_id,
+                "message_id": message_id,
+                "role": role,
+                "content": content,
+                "created_at": created_at,
+            }
+
+        for payload in (user_message_payload, agent_message_payload):
+            message_doc = _build_message_document(payload)
+            if message_doc:
+                messages.append(message_doc)
+
+        if not messages:
+            return []
+
+        collection = get_collection("atlas_chat_mesages")
+        result = await collection.insert_many(messages)
+
+        # Attach inserted ids for downstream use.
+        inserted_ids = result.inserted_ids if hasattr(result, "inserted_ids") else []
+        for doc, inserted_id in zip(messages, inserted_ids):
+            doc["_id"] = str(inserted_id)
+
+        logger.info(
+            "Stored %d chat message(s) for chat_session_id=%s and agent_id=%s",
+            len(messages),
+            chat_session_id,
+            agent_id,
+        )
+
+        return messages
+
+    except Exception as e:
+        logger.error(f"Error while creating and storing chat messages: {str(e)}")
+        return []
