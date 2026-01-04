@@ -1,4 +1,4 @@
-from typing import Dict, Any
+from typing import Dict, Any, List
 from logging_config import get_logger
 from services.mongo_services import get_collection
 from config.atlas_agent_config_data import ELYSIUM_ATLAS_AGENT_CONFIG_DATA
@@ -6,6 +6,9 @@ import datetime
 from bson import ObjectId
 import random
 import asyncio
+
+from config.atlas_metadata_extraction_models import EnhancedSemanticMessage
+from services.open_ai_services import openai_structured_output
 
 logger = get_logger()
 
@@ -24,6 +27,7 @@ async def get_chat_session_data(requestData: Dict[str, Any]) -> Dict[str, Any] |
     try:
         chat_session_id = requestData.get("chat_session_id")
         agent_id = requestData.get("agent_id")
+        limit = requestData.get("limit", 50)
 
         if not chat_session_id:
             logger.warning("chat_session_id missing in requestData")
@@ -54,7 +58,7 @@ async def get_chat_session_data(requestData: Dict[str, Any]) -> Dict[str, Any] |
                 asyncio.create_task(update_visitor())
             
             # Retrieve messages for the session
-            messages = await get_chat_messages_for_session(agent_id, chat_session_id,50)
+            messages = await get_chat_messages_for_session(agent_id, chat_session_id,limit=limit)
             document["messages"] = messages
             
             logger.info(f"Retrieved existing chat session document for chat_session_id: {chat_session_id} and agent_id: {agent_id}")
@@ -249,7 +253,7 @@ def build_chat_message_documents(
                 logger.warning("Missing role or content in chat message payload")
                 return None
 
-            return {
+            doc = {
                 "chat_session_id": chat_session_id,
                 "agent_id": agent_id,
                 "message_id": message_id,
@@ -257,6 +261,12 @@ def build_chat_message_documents(
                 "content": content,
                 "created_at": created_at,
             }
+
+            # Add enhanced_message if present
+            if "enhanced_message" in payload:
+                doc["enhanced_message"] = payload["enhanced_message"]
+
+            return doc
 
         for payload in (user_message_payload, agent_message_payload):
             message_doc = _build_message_document(payload)
@@ -288,6 +298,12 @@ async def create_and_store_chat_messages(
             logger.warning("chat_session_id and agent_id are required to create messages")
             return []
         
+        chatData = {
+            "chat_session_id": chat_session_id,
+            "agent_id": agent_id
+        }
+        chat_session_data = await get_chat_session_data(chatData)
+
         logger.info(f"Creating and storing chat messages for chat_session_id={chat_session_id} and agent_id={agent_id}")
 
         messages: list[Dict[str, Any]] = []
@@ -308,7 +324,7 @@ async def create_and_store_chat_messages(
                 logger.warning("Missing role or content in chat message payload")
                 return None
 
-            return {
+            doc = {
                 "chat_session_id": chat_session_id,
                 "agent_id": agent_id,
                 "message_id": message_id,
@@ -316,6 +332,12 @@ async def create_and_store_chat_messages(
                 "content": content,
                 "created_at": created_at,
             }
+
+            # Add enhanced_message if present
+            if "enhanced_message" in payload:
+                doc["enhanced_message"] = payload["enhanced_message"]
+
+            return doc
 
         for payload in (user_message_payload, agent_message_payload):
             message_doc = _build_message_document(payload)
@@ -345,3 +367,67 @@ async def create_and_store_chat_messages(
     except Exception as e:
         logger.error(f"Error while creating and storing chat messages: {str(e)}")
         return []
+
+async def enhance_user_message(message: str, chat_history: List[Dict[str, Any]], model = "gpt-4.1-mini") -> str:
+    """
+    Enhance a user's message using prior chat history to produce
+    a self-contained, semantically clear query suitable for embeddings or RAG.
+    """
+    try:
+
+        # Build compact chat history text (important: avoid token bloat)
+        formatted_history = []
+        for item in chat_history:
+            role = item.get("role", "user")
+            content = item.get("content", "")
+            formatted_history.append(f"{role.upper()}: {content}")
+
+        chat_history_text = "\n".join(formatted_history)
+
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are an expert at rewriting user messages into semantically precise, "
+                    "self-contained queries by resolving context from chat history.\n\n"
+                    "CORE PRINCIPLES:\n"
+                    "1. RESOLVE REFERENCES: Transform pronouns, demonstratives, and contextual words:\n"
+                    "   - 'it' → the specific thing being referenced\n"
+                    "   - 'that' → the specific concept mentioned\n"
+                    "   - 'again' → repeat the specific question/topic\n"
+                    "   - 'more' → more about the specific subject\n\n"
+                    "2. MAINTAIN SEMANTIC PRECISION: Don't generalize - be as specific as the context allows\n"
+                    "3. PRESERVE USER INTENT: Keep the user's exact informational need\n"
+                    "4. USE CHAT HISTORY STRATEGICALLY: Only reference what's directly relevant to resolve ambiguity\n\n"
+                    "EXAMPLES:\n"
+                    "- If user asks 'who am I talking to?' then later says 'tell me again' → 'Who am I talking to?'\n"
+                    "- If discussing Python, user says 'explain it more' → 'Explain Python in more detail'\n"
+                    "- User says 'what about that other approach?' → 'What about [specific approach mentioned]?'\n\n"
+                    "OUTPUT: Only the rewritten message, nothing else."
+                )
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"CHAT HISTORY:\n{chat_history_text}\n\n"
+                    f"USER'S LATEST MESSAGE: \"{message}\"\n\n"
+                    "Transform this into a self-contained, semantically precise query by resolving any contextual references from the chat history:"
+                )
+            }
+        ]
+
+        logger.debug("Enhancing user message using LLM")
+
+        response = await openai_structured_output(
+            model=model,
+            messages=messages,
+            response_format=EnhancedSemanticMessage
+        )
+
+        enhanced_message = response.get("enhanced_message", "").strip()
+
+        return enhanced_message if enhanced_message else message
+
+    except Exception as e:
+        logger.error(f"Error in enhance_user_message: {str(e)}")
+        return message

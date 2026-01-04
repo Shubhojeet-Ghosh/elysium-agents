@@ -11,10 +11,9 @@ async def chat_with_agent_controller_v1(chatPayload,user_data, sid = None):
         logger.info(f"chat_with_agent_controller_v1 called with payload: {chatPayload} and user_data: {user_data}")
         agent_id = chatPayload.get("agent_id")
         message = chatPayload.get("message")
-        agent_name = chatPayload.get("agent_name")
         chat_session_id = chatPayload.get("chat_session_id")
         
-        chat_response = await chat_with_agent_v1(agent_id, message,sid,agent_name,chat_session_id=chat_session_id,additional_params=chatPayload)
+        chat_response = await chat_with_agent_v1(agent_id, message, sid, chat_session_id=chat_session_id,additional_params=chatPayload)
 
         # emit_status = await emit_atlas_response(sid=sid, message="Response from agent", payload=chat_response)
 

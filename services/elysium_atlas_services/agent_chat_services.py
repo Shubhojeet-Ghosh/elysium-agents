@@ -2,7 +2,7 @@ from logging_config import get_logger
 from services.elysium_atlas_services.atlas_query_qdrant_services import search_and_merge_agent_knowledge
 from services.elysium_atlas_services.agent_db_operations import get_agent_by_id
 from services.socket_emit_services import emit_atlas_response_chunk
-from services.elysium_atlas_services.atlas_chat_session_services import create_and_store_chat_messages
+from services.elysium_atlas_services.atlas_chat_session_services import create_and_store_chat_messages, get_chat_messages_for_session, enhance_user_message, get_chat_session_data
 
 from config.llm_models_config import resolve_model_handler, DEFAULT_MODEL
 
@@ -72,9 +72,9 @@ def format_knowledge_base_string(final_results: list) -> str:
     return "\n\n###\n\n".join(knowledge_sections)
 
 
-def build_messages_list(agent_data: dict, message: str, knowledge_base_string: str) -> list:
+def build_messages_list(agent_data: dict, message: str, knowledge_base_string: str, chat_history: list = None) -> list:
     """
-    Build an OpenAI-style messages list with system prompt, knowledge base, and user message.
+    Build an OpenAI-style messages list with system prompt, chat history, knowledge base, and user message.
     """
     messages = []
 
@@ -93,12 +93,22 @@ def build_messages_list(agent_data: dict, message: str, knowledge_base_string: s
             "- Understanding the user's message\n"
             "- Using the Knowledge Base as the primary source of truth\n"
             "- Combining information only when it is relevant and consistent\n\n"
-            "Rules:\n"
+            "CONTENT RULES:\n"
             "- If the Knowledge Base contains the answer, use it\n"
             "- If the Knowledge Base partially contains the answer, respond using only what is available\n"
             "- If the Knowledge Base does not contain the answer, clearly state that the information is not available\n"
-            "- Do not invent facts or make assumptions beyond the provided Knowledge Base\n"
-            "- Keep responses concise, structured, and user-friendly"
+            "- Do not invent facts or make assumptions beyond the provided Knowledge Base\n\n"
+            "FORMATTING RULES:\n"
+            "- Format all responses in clear, proper Markdown\n"
+            "- Use **bold** for important terms and emphasis\n"
+            "- Use headers (## or ###) to structure longer responses\n"
+            "- Use bullet points (-) or numbered lists (1.) for multiple items\n"
+            "- Use `code formatting` for technical terms, IDs, or specific values\n"
+            "- Use > blockquotes for important notes or warnings\n"
+            "- For code blocks: Use ```language syntax and keep lines reasonably short (max 80 chars) for better readability\n"
+            "- For tables: Keep columns concise and use | alignment for clean formatting\n"
+            "- For wide content: Break into smaller, more digestible chunks rather than creating overly wide tables or code blocks\n"
+            "- Keep responses concise, well-structured, and user-friendly"
         )
     })
 
@@ -109,6 +119,15 @@ def build_messages_list(agent_data: dict, message: str, knowledge_base_string: s
             "role": "system",
             "content": system_prompt
         })
+
+    # --- Chat History ---
+    if chat_history:
+        for hist_msg in chat_history:
+            role = "assistant" if hist_msg.get("role") == "agent" else hist_msg.get("role", "user")
+            messages.append({
+                "role": role,
+                "content": hist_msg.get("content", "")
+            })
 
     # --- Knowledge Base (RAG context) ---
     if knowledge_base_string:
@@ -133,26 +152,41 @@ def build_messages_list(agent_data: dict, message: str, knowledge_base_string: s
 
     return messages
 
-async def chat_with_agent_v1(agent_id, message, sid=None, agent_name=None, chat_session_id=None, additional_params: dict = {}):
+async def chat_with_agent_v1(agent_id, message, sid=None, chat_session_id=None, additional_params: dict = {}):
     try:
         user_message_id = str(uuid.uuid4())
         agent_message_id = str(uuid.uuid4())
         user_message_created_at = additional_params.get("created_at") or datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+        
+        chat_session_data = await get_chat_session_data({
+            "agent_id": agent_id,
+            "chat_session_id": chat_session_id,
+            "limit": 10
+        })
+        
+        chat_history = chat_session_data.get("messages", []) if chat_session_data else []
+
+        agent_name = chat_session_data.get("agent_name") if chat_session_data else None
+
+        # Enhance the user message with chat history
+        enhanced_message = await enhance_user_message(message, chat_history)
+        logger.info(f"Enhanced message: {enhanced_message}")
 
         # Run agent data retrieval and knowledge search in parallel
         agent_data, final_results = await asyncio.gather(
             get_agent_by_id(agent_id),
-            search_and_merge_agent_knowledge(agent_id, message)
+            search_and_merge_agent_knowledge(agent_id, enhanced_message)
         )
-        
-        # Format knowledge base string for LLM
-        knowledge_base_string = format_knowledge_base_string(final_results)
         
         if(agent_name):
             agent_data["agent_name"] = agent_name
 
+        # Format knowledge base string for LLM
+        knowledge_base_string = format_knowledge_base_string(final_results)
+            
+
         # Build messages list with system prompt and knowledge base
-        messages = build_messages_list(agent_data, message, knowledge_base_string)
+        messages = build_messages_list(agent_data, enhanced_message, knowledge_base_string, chat_history)
         
         model = agent_data.get("llm_model") or DEFAULT_MODEL
 
@@ -206,7 +240,8 @@ async def chat_with_agent_v1(agent_id, message, sid=None, agent_name=None, chat_
                 "message_id": user_message_id,
                 "role": "user",
                 "content": message,
-                "created_at": user_message_created_at
+                "created_at": user_message_created_at,
+                "enhanced_message": enhanced_message
             }
             agent_payload = {
                 "message_id": agent_message_id,
@@ -228,7 +263,9 @@ async def chat_with_agent_v1(agent_id, message, sid=None, agent_name=None, chat_
             "messages": messages,
             "message": "Search completed successfully.",
             "agent_data": agent_data,
-            "response_text": response_text
+            "response_text": response_text,
+            "chat_history": chat_history,
+            "enhanced_message": enhanced_message
         }
     
     except Exception as e:

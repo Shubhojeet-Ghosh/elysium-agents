@@ -65,3 +65,24 @@ class AgentWebCatalogEntry(BaseModel):
             "If no such indication is present, set to true."
         )
     )
+
+class EnhancedSemanticMessage(BaseModel):
+    """
+    Semantically enhanced version of the user's latest message.
+
+    The enhanced message should:
+    - Be self-contained
+    - Resolve pronouns and implicit references using chat history
+    - Preserve the user's original intent
+    - Avoid introducing new information not present in the conversation
+    """
+
+    enhanced_message: str = Field(
+        ...,
+        description=(
+            "A rewritten, context-aware version of the user's message that "
+            "incorporates relevant information from the prior chat history. "
+            "It should remove ambiguity (e.g., 'it', 'that', 'this') and be "
+            "clear enough to be used directly for semantic search or RAG."
+        )
+    )
