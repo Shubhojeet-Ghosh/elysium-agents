@@ -529,13 +529,14 @@ async def fetch_agent_fields_by_id(agent_id: str, fields: list[str]) -> Dict[str
     """
     return await get_agent_fields_by_id(agent_id, fields)
 
-async def generate_agent_widget_script(agent_id: str) -> bool:
+async def generate_agent_widget_script(agent_id: str) -> str | None:
     try:
 
         ELYSIUM_CDN_BASE_URL = settings.ELYSIUM_CDN_BASE_URL
         ATLAS_WIDGET_VERSION = settings.ATLAS_WIDGET_VERSION
 
-        widget_script = f"{ELYSIUM_CDN_BASE_URL}/widget/{ATLAS_WIDGET_VERSION}/widget.js?agent_id={agent_id}"
+        widget_script_url = f"{ELYSIUM_CDN_BASE_URL}/widget/{ATLAS_WIDGET_VERSION}/widget.js?agent_id={agent_id}"
+        widget_script = f'<script src="{widget_script_url}"></script>'
         update_result = await update_agent_fields(agent_id, {"widget_script": widget_script})
         logger.info(f"Generated widget script for agent_id {agent_id}: {widget_script}, update success: {update_result}")
         
