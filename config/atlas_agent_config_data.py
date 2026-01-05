@@ -9,7 +9,7 @@ ELYSIUM_ATLAS_AGENT_CONFIG_DATA = {
         "llm_model":"gpt-4o-mini",
         "welcome_message":"Hello, I am your AI assistant. How can I help you today?",
         "placeholder_text":"Enter your message here...",
-        "primary_color":"#000000",
+        "primary_color":"#ffffff",
         "secondary_color":"#ffffff",
         "text_color":"#000000",
         "quick_prompts":[],
