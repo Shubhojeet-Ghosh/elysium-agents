@@ -99,16 +99,16 @@ def build_messages_list(agent_data: dict, message: str, knowledge_base_string: s
             "- If the Knowledge Base does not contain the answer, clearly state that the information is not available\n"
             "- Do not invent facts or make assumptions beyond the provided Knowledge Base\n\n"
             "FORMATTING RULES:\n"
-            "- Format all responses in clear, proper Markdown\n"
+            "- Format the responses in clear, proper Markdown\n"
             "- Use **bold** for important terms and emphasis\n"
-            "- Use headers (## or ###) to structure longer responses\n"
+            "- Use **descriptive Markdown headings** (`##` for main sections, `###` for subsections) **wherever they improve readability and scannability**\n"
             "- Use bullet points (-) or numbered lists (1.) for multiple items\n"
             "- Use `code formatting` for technical terms, IDs, or specific values\n"
             "- Use > blockquotes for important notes or warnings\n"
             "- For code blocks: Use ```language syntax and keep lines reasonably short (max 80 chars) for better readability\n"
             "- For tables: Keep columns concise and use | alignment for clean formatting\n"
             "- For wide content: Break into smaller, more digestible chunks rather than creating overly wide tables or code blocks\n"
-            "- Keep responses concise, well-structured, and user-friendly"
+            "- Keep responses concise, well-structured, user-friendly and most important *natural*.\n"
         )
     })
 
