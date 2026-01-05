@@ -18,6 +18,7 @@ ELYSIUM_ATLAS_AGENT_CONFIG_DATA = {
         "agent_current_task": "initializing",
         "system_prompt":"You are a helpful assistant.",
         "temperature":0.5,
+        "widget_script": None,
     },
     "agent_task_progress": {
         "initializing": 0,

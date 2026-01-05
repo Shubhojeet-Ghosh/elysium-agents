@@ -12,6 +12,7 @@ from services.web_services.url_services import normalize_url
 from services.elysium_atlas_services.atlas_files_index_services import index_agent_files
 from services.elysium_atlas_services.atlas_custom_knowledge_services import index_custom_knowledge_for_agent
 import asyncio
+from config.settings import settings
 
 logger = get_logger()
 
@@ -111,8 +112,12 @@ async def initialize_agent_build_update(requestData: Dict[str, Any]) -> bool:
         ### End of extracting custom texts for the agent
 
         await update_agent_current_task(agent_id, "running")
+
         # Set agent status to 'active' just before returning True
         await update_agent_status(agent_id, "active")
+
+        await generate_agent_widget_script(agent_id)
+
         return True
         
     except Exception as e:
@@ -523,3 +528,19 @@ async def fetch_agent_fields_by_id(agent_id: str, fields: list[str]) -> Dict[str
     Fetch specific fields of an agent by ID.
     """
     return await get_agent_fields_by_id(agent_id, fields)
+
+async def generate_agent_widget_script(agent_id: str) -> bool:
+    try:
+
+        ELYSIUM_CDN_BASE_URL = settings.ELYSIUM_CDN_BASE_URL
+        ATLAS_WIDGET_VERSION = settings.ATLAS_WIDGET_VERSION
+
+        widget_script = f"{ELYSIUM_CDN_BASE_URL}/widget/{ATLAS_WIDGET_VERSION}/widget.js?agent_id={agent_id}"
+        update_result = await update_agent_fields(agent_id, {"widget_script": widget_script})
+        logger.info(f"Generated widget script for agent_id {agent_id}: {widget_script}, update success: {update_result}")
+        
+        return widget_script
+    
+    except Exception as e:
+        logger.error(f"Error generating widget script for agent_id {agent_id}: {e}")
+        return None

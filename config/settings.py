@@ -34,6 +34,8 @@ class Settings(BaseSettings):
     GROQ_API_KEY:str
     ANTHROPIC_API_KEY:str = Field(default="")
     CREATE_INDEXES: bool = Field(default=True)
+    ATLAS_WIDGET_VERSION: str
+    ELYSIUM_CDN_BASE_URL: str
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
