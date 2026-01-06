@@ -669,7 +669,7 @@ async def fetch_agent_details_by_id(
     files_cursor: Optional[str] = None,
     custom_limit: int = 50,
     custom_cursor: Optional[str] = None,
-    include_counts: bool = True
+    include_counts: bool = False
 ) -> Optional[Dict[str, Any]]:
     """
     Fetch complete agent details including paginated related data.
