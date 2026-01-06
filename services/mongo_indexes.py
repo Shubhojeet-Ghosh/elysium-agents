@@ -25,6 +25,8 @@ async def create_mongo_indexes():
         logger.info("Index created on atlas_agent_urls.agent_id")
         await atlas_agent_urls_collection.create_index("url", name="url_index")
         logger.info("Index created on atlas_agent_urls.url")
+        await atlas_agent_urls_collection.create_index([("agent_id", 1), ("updated_at", -1), ("_id", -1)], name="agent_id_updated_at_id_index")
+        logger.info("Compound index created on atlas_agent_urls.agent_id, updated_at, _id for pagination")
 
         # Create indexes for atlas_agent_files collection
         atlas_agent_files_collection = get_collection("atlas_agent_files")
@@ -32,6 +34,8 @@ async def create_mongo_indexes():
         logger.info("Index created on atlas_agent_files.agent_id")
         await atlas_agent_files_collection.create_index("file_key", name="file_key_index")
         logger.info("Index created on atlas_agent_files.file_key")
+        await atlas_agent_files_collection.create_index([("agent_id", 1), ("updated_at", -1), ("_id", -1)], name="agent_id_updated_at_id_index_files")
+        logger.info("Compound index created on atlas_agent_files.agent_id, updated_at, _id for pagination")
 
         # Create indexes for atlas_custom_texts collection
         atlas_custom_texts_collection = get_collection("atlas_custom_texts")
@@ -39,6 +43,8 @@ async def create_mongo_indexes():
         logger.info("Index created on atlas_custom_texts.agent_id")
         await atlas_custom_texts_collection.create_index("custom_text_alias", name="custom_text_alias_index")
         logger.info("Index created on atlas_custom_texts.custom_text_alias")
+        await atlas_custom_texts_collection.create_index([("agent_id", 1), ("updated_at", -1), ("_id", -1)], name="agent_id_updated_at_id_index_texts")
+        logger.info("Compound index created on atlas_custom_texts.agent_id, updated_at, _id for pagination")
 
         # Create indexes for atlas_qa_pairs collection
         atlas_qa_pairs_collection = get_collection("atlas_qa_pairs")
@@ -46,6 +52,8 @@ async def create_mongo_indexes():
         logger.info("Index created on atlas_qa_pairs.agent_id")
         await atlas_qa_pairs_collection.create_index("qna_alias", name="qna_alias_index")
         logger.info("Index created on atlas_qa_pairs.qna_alias")
+        await atlas_qa_pairs_collection.create_index([("agent_id", 1), ("updated_at", -1), ("_id", -1)], name="agent_id_updated_at_id_index_qa")
+        logger.info("Compound index created on atlas_qa_pairs.agent_id, updated_at, _id for pagination")
 
         # Create indexes for elysium_atlas_users collection
         elysium_atlas_users_collection = get_collection("elysium_atlas_users")

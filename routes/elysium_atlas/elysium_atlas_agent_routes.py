@@ -5,7 +5,7 @@ from middlewares.jwt_middleware import authorize_user
 from fastapi import BackgroundTasks
 from fastapi.responses import JSONResponse
 
-from controllers.elysium_atlas_controller_files.atlas_controllers import build_update_agent_controller_v1, pre_build_agent_operations_controller,generate_presigned_url_controller, list_agents_controller, delete_agent_controller,get_agent_details_controller,update_agent_controller_v1, get_agent_fields_controller
+from controllers.elysium_atlas_controller_files.atlas_controllers import build_update_agent_controller_v1, pre_build_agent_operations_controller,generate_presigned_url_controller, list_agents_controller, delete_agent_controller,get_agent_details_controller,update_agent_controller_v1, get_agent_fields_controller, get_agent_urls_controller, get_agent_files_controller, get_agent_custom_texts_controller, get_agent_qa_pairs_controller
 from controllers.elysium_atlas_controller_files.atlas_chat_controllers import chat_with_agent_controller_v1
 
 elysium_atlas_agent_router = APIRouter(prefix = "/elysium-atlas/agent",tags=["Elysium Atlas - Agent Routes"])
@@ -54,3 +54,23 @@ async def update_agent_route_v1(requestData: Dict[str, Any],user: dict = Depends
 @elysium_atlas_agent_router.post("/v1/query-agent")
 async def query_agent_route_v1(requestData: Dict[str, Any],user: dict = Depends(authorize_user)):
     return await chat_with_agent_controller_v1(requestData,user)
+
+# Async POST method to get paginated agent URLs
+@elysium_atlas_agent_router.post("/v1/get-agent-urls")
+async def get_agent_urls_route_v1(requestData: Dict[str, Any], user: dict = Depends(authorize_user)):
+    return await get_agent_urls_controller(requestData, user)
+
+# Async POST method to get paginated agent files
+@elysium_atlas_agent_router.post("/v1/get-agent-files")
+async def get_agent_files_route_v1(requestData: Dict[str, Any], user: dict = Depends(authorize_user)):
+    return await get_agent_files_controller(requestData, user)
+
+# Async POST method to get paginated agent custom texts
+@elysium_atlas_agent_router.post("/v1/get-agent-custom-texts")
+async def get_agent_custom_texts_route_v1(requestData: Dict[str, Any], user: dict = Depends(authorize_user)):
+    return await get_agent_custom_texts_controller(requestData, user)
+
+# Async POST method to get paginated agent QA pairs
+@elysium_atlas_agent_router.post("/v1/get-agent-qa-pairs")
+async def get_agent_qa_pairs_route_v1(requestData: Dict[str, Any], user: dict = Depends(authorize_user)):
+    return await get_agent_qa_pairs_controller(requestData, user)

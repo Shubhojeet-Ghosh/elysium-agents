@@ -327,75 +327,366 @@ async def fetch_agent_document(agent_id: str) -> Optional[Dict[str, Any]]:
         logger.error(f"Error fetching agent document for agent_id {agent_id}: {e}")
         return None
 
-async def fetch_agent_urls(agent_id: str) -> list[Dict[str, Any]]:
+async def fetch_agent_urls(
+    agent_id: str,
+    limit: int = 50,
+    cursor: Optional[str] = None,
+    include_count: bool = False
+) -> Dict[str, Any]:
+    """
+    Fetch URLs for an agent with cursor-based pagination.
+    
+    Args:
+        agent_id: The agent ID to fetch URLs for
+        limit: Number of items per page (default 50, max 100)
+        cursor: Pagination cursor (the _id of the last item from previous page)
+        include_count: Whether to include total count (expensive, only use on first request)
+    
+    Returns:
+        Dict with keys: data, next_cursor, has_more, total_count (if include_count=True)
+    """
     try:
         urls_collection = get_collection("atlas_agent_urls")
-        urls_cursor = urls_collection.find({"agent_id": agent_id})
+        
+        # Enforce max limit
+        limit = min(limit, 100)
+        
+        # Build query
+        query: Dict[str, Any] = {"agent_id": agent_id}
+        
+        # Parse cursor for pagination
+        if cursor:
+            try:
+                # Fetch the cursor document to get its updated_at value
+                cursor_doc = await urls_collection.find_one({"_id": ObjectId(cursor)})
+                if cursor_doc:
+                    cursor_updated_at = cursor_doc.get("updated_at")
+                    
+                    # Compound condition: items with earlier updated_at OR same updated_at but earlier _id
+                    query["$or"] = [
+                        {"updated_at": {"$lt": cursor_updated_at}},
+                        {
+                            "updated_at": cursor_updated_at,
+                            "_id": {"$lt": ObjectId(cursor)}
+                        }
+                    ]
+            except Exception as e:
+                logger.warning(f"Invalid cursor format: {cursor}, error: {e}")
+        
+        # Fetch limit + 1 to determine if there are more items
+        urls_cursor = urls_collection.find(query).sort([("updated_at", -1), ("_id", -1)]).limit(limit + 1)
+        
         urls = []
+        last_id = None
         async for url_doc in urls_cursor:
+            # Store _id before converting
+            doc_id = str(url_doc["_id"])
+            last_id = doc_id
             url_doc.pop("_id", None)
+            
             if "created_at" in url_doc and url_doc["created_at"] and isinstance(url_doc["created_at"], datetime):
                 url_doc["created_at"] = url_doc["created_at"].isoformat()
             if "updated_at" in url_doc and url_doc["updated_at"] and isinstance(url_doc["updated_at"], datetime):
                 url_doc["updated_at"] = url_doc["updated_at"].isoformat()
+            
             urls.append(url_doc)
-        logger.info(f"Fetched {len(urls)} URLs for agent_id {agent_id}")
-        return urls
+        
+        # Check if there are more items
+        has_more = len(urls) > limit
+        if has_more:
+            urls = urls[:limit]  # Remove the extra item
+            # Update last_id to be the last item in the trimmed list
+            if urls:
+                # Re-fetch the _id from the collection since we already popped it
+                last_item_updated_at = urls[-1].get("updated_at")
+                last_item_doc = await urls_collection.find_one(
+                    {"agent_id": agent_id, "updated_at": datetime.fromisoformat(last_item_updated_at.replace('Z', '+00:00'))},
+                    sort=[("updated_at", -1), ("_id", -1)]
+                )
+                if last_item_doc:
+                    last_id = str(last_item_doc["_id"])
+        
+        # Generate next cursor from last item (just the _id)
+        next_cursor = last_id if (urls and has_more) else None
+        
+        # Get total count only if requested (expensive operation)
+        result: Dict[str, Any] = {
+            "data": urls,
+            "next_cursor": next_cursor,
+            "has_more": has_more
+        }
+        
+        if include_count:
+            total_count = await urls_collection.count_documents({"agent_id": agent_id})
+            result["total_count"] = total_count
+        
+        logger.info(f"Fetched {len(urls)} URLs for agent_id {agent_id}, has_more: {has_more}")
+        return result
+        
     except Exception as e:
         logger.error(f"Error fetching URLs for agent_id {agent_id}: {e}")
-        return []
+        return {"data": [], "next_cursor": None, "has_more": False}
 
-async def fetch_agent_files(agent_id: str) -> list[Dict[str, Any]]:
+async def fetch_agent_files(
+    agent_id: str,
+    limit: int = 50,
+    cursor: Optional[str] = None,
+    include_count: bool = False
+) -> Dict[str, Any]:
+    """
+    Fetch files for an agent with cursor-based pagination.
+    
+    Args:
+        agent_id: The agent ID to fetch files for
+        limit: Number of items per page (default 50, max 100)
+        cursor: Pagination cursor (the _id of the last item from previous page)
+        include_count: Whether to include total count (expensive, only use on first request)
+    
+    Returns:
+        Dict with keys: data, next_cursor, has_more, total_count (if include_count=True)
+    """
     try:
         files_collection = get_collection("atlas_agent_files")
-        files_cursor = files_collection.find({"agent_id": agent_id})
+        
+        # Enforce max limit
+        limit = min(limit, 100)
+        
+        # Build query
+        query: Dict[str, Any] = {"agent_id": agent_id}
+        
+        # Parse cursor for pagination
+        if cursor:
+            try:
+                # Fetch the cursor document to get its updated_at value
+                cursor_doc = await files_collection.find_one({"_id": ObjectId(cursor)})
+                if cursor_doc:
+                    cursor_updated_at = cursor_doc.get("updated_at")
+                    
+                    query["$or"] = [
+                        {"updated_at": {"$lt": cursor_updated_at}},
+                        {
+                            "updated_at": cursor_updated_at,
+                            "_id": {"$lt": ObjectId(cursor)}
+                        }
+                    ]
+            except Exception as e:
+                logger.warning(f"Invalid cursor format: {cursor}, error: {e}")
+        
+        files_cursor = files_collection.find(query).sort([("updated_at", -1), ("_id", -1)]).limit(limit + 1)
+        
         files = []
+        last_id = None
         async for file_doc in files_cursor:
+            doc_id = str(file_doc["_id"])
+            last_id = doc_id
             file_doc.pop("_id", None)
+            
             if "created_at" in file_doc and file_doc["created_at"] and isinstance(file_doc["created_at"], datetime):
                 file_doc["created_at"] = file_doc["created_at"].isoformat()
             if "updated_at" in file_doc and file_doc["updated_at"] and isinstance(file_doc["updated_at"], datetime):
                 file_doc["updated_at"] = file_doc["updated_at"].isoformat()
+            
             files.append(file_doc)
-        logger.info(f"Fetched {len(files)} files for agent_id {agent_id}")
-        return files
+        
+        has_more = len(files) > limit
+        if has_more:
+            files = files[:limit]
+            if files:
+                last_item_updated_at = files[-1].get("updated_at")
+                last_item_doc = await files_collection.find_one(
+                    {"agent_id": agent_id, "updated_at": datetime.fromisoformat(last_item_updated_at.replace('Z', '+00:00'))},
+                    sort=[("updated_at", -1), ("_id", -1)]
+                )
+                if last_item_doc:
+                    last_id = str(last_item_doc["_id"])
+        
+        next_cursor = last_id if (files and has_more) else None
+        
+        result: Dict[str, Any] = {
+            "data": files,
+            "next_cursor": next_cursor,
+            "has_more": has_more
+        }
+        
+        if include_count:
+            total_count = await files_collection.count_documents({"agent_id": agent_id})
+            result["total_count"] = total_count
+        
+        logger.info(f"Fetched {len(files)} files for agent_id {agent_id}, has_more: {has_more}")
+        return result
+        
     except Exception as e:
         logger.error(f"Error fetching files for agent_id {agent_id}: {e}")
-        return []
+        return {"data": [], "next_cursor": None, "has_more": False}
 
-async def fetch_agent_custom_knowledge(agent_id: str) -> tuple[list[Dict[str, Any]], list[Dict[str, Any]]]:
+async def fetch_agent_custom_knowledge(
+    agent_id: str,
+    limit: int = 50,
+    cursor: Optional[str] = None,
+    include_count: bool = False
+) -> Dict[str, Any]:
+    """
+    Fetch custom knowledge (texts and QA pairs) for an agent with cursor-based pagination.
+    
+    Args:
+        agent_id: The agent ID to fetch custom knowledge for
+        limit: Number of items per page (default 50, max 100)
+        cursor: Pagination cursor (the _id of the last item from previous page)
+        include_count: Whether to include total counts (expensive, only use on first request)
+    
+    Returns:
+        Dict with keys: custom_texts, qa_pairs, each containing {data, next_cursor, has_more, total_count}
+    """
     try:
-        # Fetch all custom texts for the agent
+        limit = min(limit, 100)
+        
+        # Fetch custom texts
         custom_texts_collection = get_collection("atlas_custom_texts")
-        custom_texts_cursor = custom_texts_collection.find({"agent_id": agent_id})
+        ct_query: Dict[str, Any] = {"agent_id": agent_id}
+        
+        if cursor:
+            try:
+                cursor_doc = await custom_texts_collection.find_one({"_id": ObjectId(cursor)})
+                if cursor_doc:
+                    cursor_updated_at = cursor_doc.get("updated_at")
+                    
+                    ct_query["$or"] = [
+                        {"updated_at": {"$lt": cursor_updated_at}},
+                        {"updated_at": cursor_updated_at, "_id": {"$lt": ObjectId(cursor)}}
+                    ]
+            except Exception as e:
+                logger.warning(f"Invalid cursor format: {cursor}, error: {e}")
+        
+        ct_cursor = custom_texts_collection.find(ct_query).sort([("updated_at", -1), ("_id", -1)]).limit(limit + 1)
         custom_texts = []
-        async for ct_doc in custom_texts_cursor:
+        ct_last_id = None
+        async for ct_doc in ct_cursor:
+            doc_id = str(ct_doc["_id"])
+            ct_last_id = doc_id
             ct_doc.pop("_id", None)
+            
             if "created_at" in ct_doc and ct_doc["created_at"] and isinstance(ct_doc["created_at"], datetime):
                 ct_doc["created_at"] = ct_doc["created_at"].isoformat()
             if "updated_at" in ct_doc and ct_doc["updated_at"] and isinstance(ct_doc["updated_at"], datetime):
                 ct_doc["updated_at"] = ct_doc["updated_at"].isoformat()
+            
             custom_texts.append(ct_doc)
         
-        # Fetch all QA pairs for the agent
+        ct_has_more = len(custom_texts) > limit
+        if ct_has_more:
+            custom_texts = custom_texts[:limit]
+            if custom_texts:
+                last_item_updated_at = custom_texts[-1].get("updated_at")
+                last_item_doc = await custom_texts_collection.find_one(
+                    {"agent_id": agent_id, "updated_at": datetime.fromisoformat(last_item_updated_at.replace('Z', '+00:00'))},
+                    sort=[("updated_at", -1), ("_id", -1)]
+                )
+                if last_item_doc:
+                    ct_last_id = str(last_item_doc["_id"])
+        
+        ct_next_cursor = ct_last_id if (custom_texts and ct_has_more) else None
+        
+        # Fetch QA pairs
         qa_pairs_collection = get_collection("atlas_qa_pairs")
-        qa_pairs_cursor = qa_pairs_collection.find({"agent_id": agent_id})
+        qa_query: Dict[str, Any] = {"agent_id": agent_id}
+        
+        if cursor:
+            try:
+                cursor_doc = await qa_pairs_collection.find_one({"_id": ObjectId(cursor)})
+                if cursor_doc:
+                    cursor_updated_at = cursor_doc.get("updated_at")
+                    
+                    qa_query["$or"] = [
+                        {"updated_at": {"$lt": cursor_updated_at}},
+                        {"updated_at": cursor_updated_at, "_id": {"$lt": ObjectId(cursor)}}
+                    ]
+            except Exception as e:
+                logger.warning(f"Invalid cursor format: {cursor}, error: {e}")
+        
+        qa_cursor = qa_pairs_collection.find(qa_query).sort([("updated_at", -1), ("_id", -1)]).limit(limit + 1)
         qa_pairs = []
-        async for qa_doc in qa_pairs_cursor:
+        qa_last_id = None
+        async for qa_doc in qa_cursor:
+            doc_id = str(qa_doc["_id"])
+            qa_last_id = doc_id
             qa_doc.pop("_id", None)
+            
             if "created_at" in qa_doc and qa_doc["created_at"] and isinstance(qa_doc["created_at"], datetime):
                 qa_doc["created_at"] = qa_doc["created_at"].isoformat()
             if "updated_at" in qa_doc and qa_doc["updated_at"] and isinstance(qa_doc["updated_at"], datetime):
                 qa_doc["updated_at"] = qa_doc["updated_at"].isoformat()
+            
             qa_pairs.append(qa_doc)
         
+        qa_has_more = len(qa_pairs) > limit
+        if qa_has_more:
+            qa_pairs = qa_pairs[:limit]
+            if qa_pairs:
+                last_item_updated_at = qa_pairs[-1].get("updated_at")
+                last_item_doc = await qa_pairs_collection.find_one(
+                    {"agent_id": agent_id, "updated_at": datetime.fromisoformat(last_item_updated_at.replace('Z', '+00:00'))},
+                    sort=[("updated_at", -1), ("_id", -1)]
+                )
+                if last_item_doc:
+                    qa_last_id = str(last_item_doc["_id"])
+        
+        qa_next_cursor = qa_last_id if (qa_pairs and qa_has_more) else None
+        
+        result: Dict[str, Any] = {
+            "custom_texts": {
+                "data": custom_texts,
+                "next_cursor": ct_next_cursor,
+                "has_more": ct_has_more
+            },
+            "qa_pairs": {
+                "data": qa_pairs,
+                "next_cursor": qa_next_cursor,
+                "has_more": qa_has_more
+            }
+        }
+        
+        if include_count:
+            ct_count = await custom_texts_collection.count_documents({"agent_id": agent_id})
+            qa_count = await qa_pairs_collection.count_documents({"agent_id": agent_id})
+            result["custom_texts"]["total_count"] = ct_count
+            result["qa_pairs"]["total_count"] = qa_count
+        
         logger.info(f"Fetched {len(custom_texts)} custom texts and {len(qa_pairs)} QA pairs for agent_id {agent_id}")
-        return custom_texts, qa_pairs
+        return result
+        
     except Exception as e:
         logger.error(f"Error fetching custom knowledge for agent_id {agent_id}: {e}")
-        return [], []
+        return {
+            "custom_texts": {"data": [], "next_cursor": None, "has_more": False},
+            "qa_pairs": {"data": [], "next_cursor": None, "has_more": False}
+        }
 
-async def fetch_agent_details_by_id(agent_id: str) -> Optional[Dict[str, Any]]:
+async def fetch_agent_details_by_id(
+    agent_id: str,
+    urls_limit: int = 50,
+    urls_cursor: Optional[str] = None,
+    files_limit: int = 50,
+    files_cursor: Optional[str] = None,
+    custom_limit: int = 50,
+    custom_cursor: Optional[str] = None,
+    include_counts: bool = True
+) -> Optional[Dict[str, Any]]:
+    """
+    Fetch complete agent details including paginated related data.
+    
+    Args:
+        agent_id: The agent ID
+        urls_limit: Limit for URLs pagination
+        urls_cursor: Cursor for URLs pagination
+        files_limit: Limit for files pagination
+        files_cursor: Cursor for files pagination
+        custom_limit: Limit for custom knowledge pagination
+        custom_cursor: Cursor for custom knowledge pagination
+        include_counts: Whether to include total counts (use True on first request)
+    
+    Returns:
+        Agent document with paginated links, files, custom_texts, and qa_pairs
+    """
     try:
         agent_task_progress = ELYSIUM_ATLAS_AGENT_CONFIG_DATA.get("agent_task_progress", {})
 
@@ -404,21 +695,20 @@ async def fetch_agent_details_by_id(agent_id: str) -> Optional[Dict[str, Any]]:
             return None
         
         agent_current_task = document.get("agent_current_task", "initializing")
-        task_progress = agent_task_progress.get(agent_current_task,0)
+        task_progress = agent_task_progress.get(agent_current_task, 0)
 
-        urls, files, custom_knowledge = await asyncio.gather(
-            fetch_agent_urls(agent_id),
-            fetch_agent_files(agent_id),
-            fetch_agent_custom_knowledge(agent_id)
+        # Fetch paginated data in parallel
+        urls_result, files_result, custom_knowledge_result = await asyncio.gather(
+            fetch_agent_urls(agent_id, limit=urls_limit, cursor=urls_cursor, include_count=include_counts),
+            fetch_agent_files(agent_id, limit=files_limit, cursor=files_cursor, include_count=include_counts),
+            fetch_agent_custom_knowledge(agent_id, limit=custom_limit, cursor=custom_cursor, include_count=include_counts)
         )
         
-        custom_texts, qa_pairs = custom_knowledge
-        
         document["progress"] = task_progress
-        document["links"] = urls
-        document["files"] = files
-        document["custom_texts"] = custom_texts
-        document["qa_pairs"] = qa_pairs
+        document["links"] = urls_result
+        document["files"] = files_result
+        document["custom_texts"] = custom_knowledge_result["custom_texts"]
+        document["qa_pairs"] = custom_knowledge_result["qa_pairs"]
         
         return document
     except Exception as e:
