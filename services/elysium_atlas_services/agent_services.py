@@ -13,6 +13,11 @@ from services.elysium_atlas_services.atlas_files_index_services import index_age
 from services.elysium_atlas_services.atlas_custom_knowledge_services import index_custom_knowledge_for_agent
 import asyncio
 from config.settings import settings
+from services.qdrant_api_services import delete_qdrant_points_by_filter
+from services.elysium_atlas_services.qdrant_collection_helpers import (
+    AGENT_KNOWLEDGE_BASE_COLLECTION_NAME,
+    AGENT_WEB_CATALOG_COLLECTION_NAME
+)
 
 logger = get_logger()
 
@@ -835,3 +840,102 @@ async def generate_agent_widget_script(agent_id: str) -> str | None:
     except Exception as e:
         logger.error(f"Error generating widget script for agent_id {agent_id}: {e}")
         return None
+
+async def remove_agent_links(agent_id: str, links: list[str]) -> dict:
+    """
+    Remove specific links from an agent's knowledge base (MongoDB and Qdrant).
+    
+    Args:
+        agent_id: The ID of the agent
+        links: List of URLs to remove (knowledge_source values)
+    
+    Returns:
+        dict: Result with success status, counts, and errors
+    """
+    try:
+        mongodb_deleted = 0
+        qdrant_result = {
+            "knowledge_base_deleted": 0,
+            "web_catalog_deleted": 0
+        }
+        errors = []
+        
+        # Remove from MongoDB atlas_agent_urls collection
+        try:
+            urls_collection = get_collection("atlas_agent_urls")
+            mongo_result = await urls_collection.delete_many({
+                "agent_id": agent_id,
+                "url": {"$in": links}
+            })
+            mongodb_deleted = mongo_result.deleted_count
+            logger.info(f"Deleted {mongodb_deleted} URLs from MongoDB for agent_id {agent_id}")
+        except Exception as e:
+            error_msg = f"MongoDB deletion error: {str(e)}"
+            errors.append(error_msg)
+            logger.error(error_msg)
+        
+        # Remove from Qdrant collections
+        # Build filter for Qdrant - matching agent_id AND knowledge_source in the links list
+        qdrant_filters = {
+            "must": [
+                {"key": "agent_id", "match": {"value": agent_id}},
+                {"key": "knowledge_source", "match": {"any": links}}
+            ]
+        }
+        
+        # Delete from agent_knowledge_base collection
+        try:
+            kb_result = await delete_qdrant_points_by_filter(
+                collection_name=AGENT_KNOWLEDGE_BASE_COLLECTION_NAME,
+                filters=qdrant_filters
+            )
+            if kb_result.get("success"):
+                # Extract deletion count if available in result
+                kb_count = kb_result.get("result", {}).get("deleted", 0) if isinstance(kb_result.get("result"), dict) else 0
+                qdrant_result["knowledge_base_deleted"] = kb_count
+                logger.info(f"Deleted {kb_count} points from {AGENT_KNOWLEDGE_BASE_COLLECTION_NAME} for agent_id {agent_id}")
+            else:
+                errors.append(f"Knowledge base deletion: {kb_result.get('message')}")
+        except Exception as e:
+            error_msg = f"Knowledge base Qdrant deletion error: {str(e)}"
+            errors.append(error_msg)
+            logger.error(error_msg)
+        
+        # Delete from agent_web_catalog collection
+        try:
+            wc_result = await delete_qdrant_points_by_filter(
+                collection_name=AGENT_WEB_CATALOG_COLLECTION_NAME,
+                filters=qdrant_filters
+            )
+            if wc_result.get("success"):
+                # Extract deletion count if available in result
+                wc_count = wc_result.get("result", {}).get("deleted", 0) if isinstance(wc_result.get("result"), dict) else 0
+                qdrant_result["web_catalog_deleted"] = wc_count
+                logger.info(f"Deleted {wc_count} points from {AGENT_WEB_CATALOG_COLLECTION_NAME} for agent_id {agent_id}")
+            else:
+                errors.append(f"Web catalog deletion: {wc_result.get('message')}")
+        except Exception as e:
+            error_msg = f"Web catalog Qdrant deletion error: {str(e)}"
+            errors.append(error_msg)
+            logger.error(error_msg)
+        
+        success = mongodb_deleted > 0 or len(errors) == 0
+        
+        logger.info(f"Removed {len(links)} links for agent_id {agent_id}: MongoDB={mongodb_deleted}, Errors={len(errors)}")
+        
+        return {
+            "success": success,
+            "errors": errors
+        }
+
+    except Exception as e:
+        logger.error(f"Error removing agent links: {e}")
+        return {
+            "success": False,
+            "mongodb_deleted": 0,
+            "qdrant_result": {
+                "knowledge_base_deleted": 0,
+                "web_catalog_deleted": 0
+            },
+            "errors": [str(e)]
+        }
