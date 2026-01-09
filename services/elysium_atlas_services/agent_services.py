@@ -202,7 +202,7 @@ async def remove_agent_by_id(agent_id: str) -> bool:
 
         # Call the remove functions for related data
         urls_deleted_count = await remove_agent_urls(agent_id)
-        files_deleted_count = await remove_agent_files(agent_id)
+        files_deleted_count = await remove_all_agent_files(agent_id)
         custom_texts_deleted_count = await remove_agent_custom_texts(agent_id)
         qa_pairs_deleted_count = await remove_agent_qa_pairs(agent_id)
 
@@ -238,7 +238,7 @@ async def remove_agent_urls(agent_id: str) -> int:
         logger.error(f"Error removing URLs for agent ID {agent_id}: {e}")
         return 0
 
-async def remove_agent_files(agent_id: str) -> int:
+async def remove_all_agent_files(agent_id: str) -> int:
     """
     Remove all file documents related to the given agent_id from the 'atlas_agent_files' collection.
 
