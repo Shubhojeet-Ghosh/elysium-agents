@@ -9,6 +9,7 @@ from services.open_ai_services import (
     openai_chat_completion_reasoning,
 )
 from services.groq_services import groq_chat_completions
+from services.claude_services import claude_chat_completion_non_reasoning
 
 # Default model if none provided or lookup fails
 DEFAULT_MODEL = "gpt-4o-mini"
@@ -45,6 +46,26 @@ MODEL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "family": "groq",
         "mode": "reasoning",
         "handler": groq_chat_completions,
+    },
+     "claude-3-7-sonnet-latest": {
+        "family": "claude",
+        "mode": "non-reasoning",
+        "handler": claude_chat_completion_non_reasoning,
+    },
+     "claude-sonnet-4-0": {
+        "family": "claude",
+        "mode": "non-reasoning",
+        "handler": claude_chat_completion_non_reasoning,
+    },
+    "claude-sonnet-4-5": {
+        "family": "claude",
+        "mode": "non-reasoning",
+        "handler": claude_chat_completion_non_reasoning,
+    },
+     "claude-haiku-4-5": {
+        "family": "claude",
+        "mode": "non-reasoning",
+        "handler": claude_chat_completion_non_reasoning,
     },
 }
 

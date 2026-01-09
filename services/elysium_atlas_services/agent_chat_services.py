@@ -86,18 +86,7 @@ def build_messages_list(agent_data: dict, message: str, knowledge_base_string: s
         "role": "system",
         "content": (
             f"{agent_identity}"
-            "You will receive:\n"
-            "1. A user message (the question or request)\n"
-            "2. A Knowledge Base containing relevant information\n\n"
-            "Your task is to generate a clear, accurate, and helpful response by:\n"
-            "- Understanding the user's message\n"
-            "- Using the Knowledge Base as the primary source of truth\n"
-            "- Combining information only when it is relevant and consistent\n\n"
-            "CONTENT RULES:\n"
-            "- If the Knowledge Base contains the answer, use it\n"
-            "- If the Knowledge Base partially contains the answer, respond using only what is available\n"
-            "- If the Knowledge Base does not contain the answer, clearly state that the information is not available\n"
-            "- Do not invent facts or make assumptions beyond the provided Knowledge Base\n\n"
+            "Your task is to generate a clear, accurate, and helpful response that sounds natural and conversational.\n\n"
             "FORMATTING RULES:\n"
             "- Format the responses in clear, proper Markdown\n"
             "- Use **bold** for important terms and emphasis\n"
@@ -134,11 +123,12 @@ def build_messages_list(agent_data: dict, message: str, knowledge_base_string: s
         messages.append({
             "role": "user",
             "content": (
-                "The following is the Knowledge Base provided to you.\n\n"
+                "The following information is provided as a Knowledge Base that may "
+                "help you answer the user's question.\n\n"
                 "Guidelines:\n"
-                "- Treat this Knowledge Base as the authoritative source\n"
-                "- Do not use external knowledge\n"
-                "- Do not invent or assume missing details\n\n"
+                "- Use this Knowledge Base when it is relevant or helpful\n"
+                "- If the Knowledge Base contains useful information, incorporate it "
+                "naturally into your response\n\n"
                 "Knowledge Base:\n\n"
                 f"{knowledge_base_string}"
             )

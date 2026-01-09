@@ -48,8 +48,14 @@ async def create_agent_document(initial_data: Optional[Dict[str, Any]] = None) -
         document["created_at"] = current_time
         document["updated_at"] = current_time
 
+        document["agent_status"] = "active"
+        document["agent_current_task"] = "running"
+
         result = await collection.insert_one(document)
         agent_id = str(result.inserted_id)
+
+        await generate_agent_widget_script(agent_id)
+        
         logger.info(f"Created agent document with _id: {agent_id}")
         return agent_id
         

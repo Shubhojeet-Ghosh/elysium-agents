@@ -1,8 +1,8 @@
-from typing import List, Dict, Any, Optional, Type, Literal
+from typing import List, Dict, Any, Optional, Type, Literal, Union, AsyncGenerator
 import json
 from enum import Enum
 from pydantic import create_model, BaseModel, Field
-from anthropic import Anthropic
+from anthropic import Anthropic, AsyncAnthropic
 from logging_config import get_logger
 from config.settings import settings
 
@@ -10,6 +10,7 @@ logger = get_logger()
 
 # Initialize Anthropic client
 _claude_client: Optional[Anthropic] = None
+_claude_async_client: Optional[AsyncAnthropic] = None
 
 
 def get_claude_client() -> Anthropic:
@@ -27,6 +28,23 @@ def get_claude_client() -> Anthropic:
             raise ValueError("ANTHROPIC_API_KEY is not set in settings. Please add it to your .env file.")
         _claude_client = Anthropic(api_key=api_key)
     return _claude_client
+
+
+def get_claude_async_client() -> AsyncAnthropic:
+    """
+    Get or create the async Anthropic Claude client instance.
+    Uses singleton pattern to reuse the client.
+    
+    Returns:
+        AsyncAnthropic: The async Anthropic client instance
+    """
+    global _claude_async_client
+    if _claude_async_client is None:
+        api_key = getattr(settings, 'ANTHROPIC_API_KEY', None)
+        if not api_key:
+            raise ValueError("ANTHROPIC_API_KEY is not set in settings. Please add it to your .env file.")
+        _claude_async_client = AsyncAnthropic(api_key=api_key)
+    return _claude_async_client
 
 
 def _create_dynamic_pydantic_model(fields: List[Dict[str, Any]]) -> Type[BaseModel]:
@@ -204,5 +222,86 @@ def get_structured_output(
             logger.error(f"Failed to parse/validate response: {e}")
             raise ValueError(f"Invalid response from Claude: {e}")
         logger.error(f"Error calling Claude structured outputs API: {e}")
+        raise
+
+
+async def claude_chat_completion_non_reasoning(params: Dict[str, Any]) -> Union[str, AsyncGenerator[str, None]]:
+    """
+    General chat completion (non-reasoning) with configurable temperature.
+
+    Args:
+        params: Dictionary of parameters. Supported keys:
+            - messages (list, required): Claude chat messages format
+            - model (str): Defaults to "claude-sonnet-4-5"
+            - temperature (float): Defaults to 0.7
+            - max_completion_tokens (int): Defaults to 500 (mapped to max_tokens for Claude)
+            - stream (bool): Whether to stream the response (defaults to False)
+
+    Returns:
+        str (non-stream) or async generator of str (stream)
+    """
+    model = params.get("model", "claude-sonnet-4-5")
+    messages = params.get("messages") or []
+    temperature = params.get("temperature", 0.7)
+    max_completion_tokens = params.get("max_completion_tokens", 500)
+    stream = bool(params.get("stream", False))
+
+    if not isinstance(messages, list) or len(messages) == 0:
+        logger.warning("claude_chat_completion_non_reasoning called without messages; returning empty string")
+        return ""
+
+    try:
+        client = get_claude_async_client()
+        
+        # Extract system messages and convert to Claude's format
+        system_content = ""
+        filtered_messages = []
+        
+        for message in messages:
+            if message.get("role") == "system":
+                if system_content:
+                    system_content += "\n\n"
+                system_content += message.get("content", "")
+            else:
+                filtered_messages.append(message)
+        
+        # Prepare API call parameters
+        api_params = {
+            "model": model,
+            "messages": filtered_messages,  # Only user/assistant messages
+            "max_tokens": max_completion_tokens,  # Claude uses max_tokens instead of max_completion_tokens
+            "temperature": temperature,
+            "stream": stream,
+        }
+        
+        # Add system parameter if we have system content
+        if system_content.strip():
+            api_params["system"] = system_content.strip()
+        
+        response = await client.messages.create(**api_params)
+
+        if stream:
+            async def stream_generator() -> AsyncGenerator[str, None]:
+                async for chunk in response:
+                    if hasattr(chunk, 'delta') and hasattr(chunk.delta, 'text'):
+                        yield chunk.delta.text
+                    elif hasattr(chunk, 'content_block') and hasattr(chunk.content_block, 'text'):
+                        yield chunk.content_block.text
+
+            logger.debug(f"Claude chat completion using model={model}, temperature={temperature}, stream=True")
+            return stream_generator()
+
+        # Non-streaming response
+        content = ""
+        if hasattr(response, 'content') and response.content:
+            for block in response.content:
+                if hasattr(block, 'text'):
+                    content += block.text
+        
+        logger.debug(f"Claude chat completion using model={model}, temperature={temperature}, stream=False")
+        return content or ""
+        
+    except Exception as e:
+        logger.error(f"Error calling Claude chat completion: {e}")
         raise
 
