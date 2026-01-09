@@ -2,7 +2,7 @@ import asyncio
 from typing import Dict, Any
 from fastapi.responses import JSONResponse
 from logging_config import get_logger
-from services.elysium_atlas_services.agent_services import initialize_agent_build_update, create_agent_document, list_agents_for_user, remove_agent_by_id,fetch_agent_details_by_id,initialize_agent_update, fetch_agent_fields_by_id, fetch_agent_urls, fetch_agent_files, fetch_agent_custom_knowledge, remove_agent_links
+from services.elysium_atlas_services.agent_services import initialize_agent_build_update, create_agent_document, list_agents_for_user, remove_agent_by_id,fetch_agent_details_by_id,initialize_agent_update, fetch_agent_fields_by_id, fetch_agent_urls, fetch_agent_files, fetch_agent_custom_knowledge, remove_agent_links, remove_agent_files
 from services.elysium_atlas_services.agent_auth_services import is_user_owner_of_agent
 from services.elysium_atlas_services.atlas_chat_session_services import get_chat_session_data
 from config.atlas_agent_config_data import ELYSIUM_ATLAS_AGENT_CONFIG_DATA
@@ -405,4 +405,40 @@ async def remove_agent_links_controller(requestData: dict, userData: dict):
     
     except Exception as e:
         logger.error(f"Error in remove_agent_links_controller: {e}")
-        return JSONResponse(status_code=500, content={"success": False, "message": "An error occurred while removing links.", "error": str(e)})    
+        return JSONResponse(status_code=500, content={"success": False, "message": "An error occurred while removing links.", "error": str(e)})
+
+async def delete_agent_files_controller(requestData: dict, userData: dict):
+    """
+    Controller to delete specific files from an agent.
+    """
+    try:
+        if userData is None or userData.get("success") == False:
+            return JSONResponse(status_code=401, content={"success": False, "message": userData.get("message")})
+        
+        user_id = userData.get("user_id")
+        agent_id = requestData.get("agent_id")
+        files = requestData.get("files")
+
+        if not agent_id:
+            return JSONResponse(status_code=400, content={"success": False, "message": "agent_id is required."})
+        
+        if not files or not isinstance(files, list) or len(files) == 0:
+            return JSONResponse(status_code=400, content={"success": False, "message": "files must be a non-empty list."})
+        
+        # Check if the user is the owner of the agent
+        is_owner = await is_user_owner_of_agent(user_id, agent_id)
+        if not is_owner:
+            return JSONResponse(status_code=403, content={"success": False, "message": "You are not authorized to modify this agent."})
+        
+        logger.info(f"Deleting {len(files)} files for agent_id: {agent_id} by user_id: {user_id}")
+        
+        result = await remove_agent_files(agent_id, files)
+        
+        if result.get("success"):
+            return JSONResponse(status_code=200, content={"success": True, "message": "Files deleted successfully."})
+        else:
+            return JSONResponse(status_code=500, content={"success": False, "message": "Failed to delete files.", "errors": result.get("errors", [])})
+    
+    except Exception as e:
+        logger.error(f"Error in delete_agent_files_controller: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": "An error occurred while deleting files.", "error": str(e)})    

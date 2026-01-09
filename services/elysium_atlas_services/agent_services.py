@@ -939,3 +939,74 @@ async def remove_agent_links(agent_id: str, links: list[str]) -> dict:
             },
             "errors": [str(e)]
         }
+
+async def remove_agent_files(agent_id: str, files: list[str]) -> dict:
+    """
+    Remove specific files from an agent's knowledge base (MongoDB and Qdrant).
+    
+    Args:
+        agent_id: The ID of the agent
+        files: List of file names to remove
+    
+    Returns:
+        dict: Result with success status, counts, and errors
+    """
+    try:
+        mongodb_deleted = 0
+        qdrant_deleted = 0
+        errors = []
+        
+        # Remove from MongoDB atlas_agent_files collection
+        try:
+            files_collection = get_collection("atlas_agent_files")
+            mongo_result = await files_collection.delete_many({
+                "agent_id": agent_id,
+                "file_name": {"$in": files}
+            })
+            mongodb_deleted = mongo_result.deleted_count
+            logger.info(f"Deleted {mongodb_deleted} files from MongoDB for agent_id {agent_id}")
+        except Exception as e:
+            error_msg = f"MongoDB deletion error: {str(e)}"
+            errors.append(error_msg)
+            logger.error(error_msg)
+        
+        # Remove from Qdrant agent_knowledge_base collection
+        qdrant_filters = {
+            "must": [
+                {"key": "agent_id", "match": {"value": agent_id}},
+                {"key": "knowledge_source", "match": {"any": files}}
+            ]
+        }
+        
+        try:
+            qdrant_result = await delete_qdrant_points_by_filter(
+                collection_name=AGENT_KNOWLEDGE_BASE_COLLECTION_NAME,
+                filters=qdrant_filters
+            )
+            if qdrant_result.get("success"):
+                # Extract deletion count if available in result
+                qdrant_count = qdrant_result.get("result", {}).get("deleted", 0) if isinstance(qdrant_result.get("result"), dict) else 0
+                qdrant_deleted = qdrant_count
+                logger.info(f"Deleted {qdrant_count} points from {AGENT_KNOWLEDGE_BASE_COLLECTION_NAME} for agent_id {agent_id}")
+            else:
+                errors.append(f"Qdrant deletion: {qdrant_result.get('message')}")
+        except Exception as e:
+            error_msg = f"Qdrant deletion error: {str(e)}"
+            errors.append(error_msg)
+            logger.error(error_msg)
+        
+        success = (mongodb_deleted > 0 or qdrant_deleted > 0) and len(errors) == 0
+        
+        logger.info(f"Removed {len(files)} files for agent_id {agent_id}: MongoDB={mongodb_deleted}, Qdrant={qdrant_deleted}, Errors={len(errors)}")
+        
+        return {
+            "success": success,
+            "errors": errors
+        }
+
+    except Exception as e:
+        logger.error(f"Error removing agent files: {e}")
+        return {
+            "success": False,
+            "errors": [str(e)]
+        }
