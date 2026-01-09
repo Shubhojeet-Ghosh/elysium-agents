@@ -206,13 +206,7 @@ async def remove_agent_by_id(agent_id: str) -> bool:
         custom_texts_deleted_count = await remove_agent_custom_texts(agent_id)
         qa_pairs_deleted_count = await remove_agent_qa_pairs(agent_id)
 
-        if agent_result.deleted_count == 1:
-            logger.info(f"Successfully removed agent with ID: {agent_id}")
-            logger.info(f"Successfully removed {urls_deleted_count} related links, {files_deleted_count} files, {custom_texts_deleted_count} custom texts, and {qa_pairs_deleted_count} QA pairs for agent ID: {agent_id}")
-            return True
-        else:
-            logger.warning(f"No agent found with ID: {agent_id} to remove.")
-            return False
+        return True
 
     except Exception as e:
         logger.error(f"Error removing agent with ID {agent_id}: {e}")
