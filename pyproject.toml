@@ -22,4 +22,5 @@ dependencies = [
     "boto3>=1.42.10",
     "anthropic>=0.34.0",
     "docx2txt>=0.9",
+    "xai-sdk>=1.5.0",
 ]

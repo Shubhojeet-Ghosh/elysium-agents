@@ -9,6 +9,7 @@ from services.open_ai_services import (
     openai_chat_completion_reasoning,
 )
 from services.groq_services import groq_chat_completions
+from services.grok_services import grok_chat_completion
 from services.claude_services import claude_chat_completion_non_reasoning
 
 # Default model if none provided or lookup fails
@@ -66,6 +67,22 @@ MODEL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "family": "claude",
         "mode": "non-reasoning",
         "handler": claude_chat_completion_non_reasoning,
+    },
+    # Grok chat
+    "grok-4-1-fast-non-reasoning": {
+        "family": "grok",
+        "mode": "non-reasoning",
+        "handler": grok_chat_completion,
+    },
+    "grok-4-1-fast-reasoning": {
+        "family": "grok",
+        "mode": "reasoning",
+        "handler": grok_chat_completion,
+    },
+    "grok-code-fast-1": {
+        "family": "grok",
+        "mode": "non-reasoning",
+        "handler": grok_chat_completion,
     },
 }
 

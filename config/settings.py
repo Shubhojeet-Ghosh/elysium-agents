@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     CREATE_INDEXES: bool = Field(default=True)
     ATLAS_WIDGET_VERSION: str
     ELYSIUM_CDN_BASE_URL: str
+    XAI_API_KEY: str = Field(default="")
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
