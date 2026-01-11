@@ -194,6 +194,21 @@ async def ensure_agent_knowledge_base_collection_exists():
                 # logger.debug(f"Payload index for 'knowledge_source' may already exist: {e}")
                 pass
         
+        try:
+            # Create index for knowledge_type (keyword type for exact matching)
+            await client.create_payload_index(
+                collection_name=AGENT_KNOWLEDGE_BASE_COLLECTION_NAME,
+                field_name="knowledge_type",
+                field_schema="keyword"
+            )
+            # logger.info(f"Created payload index for 'knowledge_type' in collection {AGENT_KNOWLEDGE_BASE_COLLECTION_NAME}")
+        except Exception as e:
+            # Index might already exist, which is fine
+            error_msg = str(e).lower()
+            if "already exists" not in error_msg and "index already" not in error_msg:
+                # logger.debug(f"Payload index for 'knowledge_type' may already exist: {e}")
+                pass
+        
         # Mark as ensured after successful completion
         _collection_ensured = True
             

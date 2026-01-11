@@ -3,6 +3,7 @@ from typing import Dict, Any
 from fastapi.responses import JSONResponse
 from logging_config import get_logger
 from services.elysium_atlas_services.agent_services import initialize_agent_build_update, create_agent_document, list_agents_for_user, remove_agent_by_id,fetch_agent_details_by_id,initialize_agent_update, fetch_agent_fields_by_id, fetch_agent_urls, fetch_agent_files, fetch_agent_custom_knowledge, remove_agent_links, remove_agent_files
+from services.elysium_atlas_services.atlas_custom_knowledge_services import remove_custom_data
 from services.elysium_atlas_services.agent_auth_services import is_user_owner_of_agent
 from services.elysium_atlas_services.atlas_chat_session_services import get_chat_session_data
 from config.atlas_agent_config_data import ELYSIUM_ATLAS_AGENT_CONFIG_DATA
@@ -446,7 +447,6 @@ async def delete_agent_files_controller(requestData: dict, userData: dict):
 async def delete_agent_custom_data_controller(requestData: dict, userData: dict):
     """
     Controller to delete custom data (custom_texts and qa_pairs) from an agent.
-    For now, this only validates and logs the data without actually deleting.
     """
     try:
         if userData is None or userData.get("success") == False:
@@ -479,20 +479,24 @@ async def delete_agent_custom_data_controller(requestData: dict, userData: dict)
         if not is_owner:
             return JSONResponse(status_code=403, content={"success": False, "message": "You are not authorized to modify this agent."})
         
-        # Log the data for now (not deleting anything yet)
-        if custom_texts:
-            logger.info(f"Custom texts to delete for agent_id: {agent_id} - Count: {len(custom_texts)}")
-            logger.info(f"Custom texts list: {custom_texts}")
+        logger.info(f"Deleting custom data for agent_id: {agent_id} by user_id: {user_id} - "
+                   f"custom_texts: {len(custom_texts) if custom_texts else 0}, "
+                   f"qa_pairs: {len(qa_pairs) if qa_pairs else 0}")
         
-        if qa_pairs:
-            logger.info(f"QA pairs to delete for agent_id: {agent_id} - Count: {len(qa_pairs)}")
-            logger.info(f"QA pairs list: {qa_pairs}")
+        result = await remove_custom_data(agent_id, custom_texts=custom_texts, qa_pairs=qa_pairs)
         
-        return JSONResponse(status_code=200, content={
-            "success": True, 
-            "message": "We are updating the agent.",
-        })
+        if result.get("success"):
+            return JSONResponse(status_code=200, content={
+                "success": True, 
+                "message": "We are updating the agent.",
+            })
+        else:
+            return JSONResponse(status_code=500, content={
+                "success": False, 
+                "message": "Failed to delete custom data.", 
+                "errors": result.get("errors", [])
+            })
     
     except Exception as e:
         logger.error(f"Error in delete_agent_custom_data_controller: {e}")
-        return JSONResponse(status_code=500, content={"success": False, "message": "An error occurred while processing custom data deletion.", "error": str(e)})    
+        return JSONResponse(status_code=500, content={"success": False, "message": "An error occurred while processing custom data deletion.", "error": str(e)})   
