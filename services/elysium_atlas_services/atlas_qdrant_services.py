@@ -489,11 +489,12 @@ async def index_files_in_knowledge_base(agent_id, files_data):
                 logger.debug(f"Generated {len(chunks)} chunks for file: {file_name}")
                 total_chunks += len(chunks)
 
-                # Create delete filter for this file_name
+                # Create delete filter for this file_name (including knowledge_type to avoid cross-type deletions)
                 delete_filter = Filter(
                     must=[
                         FieldCondition(key="agent_id", match=MatchValue(value=agent_id)),
-                        FieldCondition(key="knowledge_source", match=MatchValue(value=file_name))
+                        FieldCondition(key="knowledge_source", match=MatchValue(value=file_name)),
+                        FieldCondition(key="knowledge_type", match=MatchValue(value="file"))
                     ]
                 )
                 delete_filters.append((file_name, delete_filter))
@@ -655,11 +656,12 @@ async def index_custom_texts_in_knowledge_base(agent_id: str, custom_texts: List
                 logger.debug(f"Generated {len(chunks)} chunks for custom_text_alias: {custom_text_alias}")
                 total_chunks += len(chunks)
 
-                # Create delete filter for this custom_text_alias
+                # Create delete filter for this custom_text_alias (including knowledge_type to avoid cross-type deletions)
                 delete_filter = Filter(
                     must=[
                         FieldCondition(key="agent_id", match=MatchValue(value=agent_id)),
-                        FieldCondition(key="knowledge_source", match=MatchValue(value=custom_text_alias))
+                        FieldCondition(key="knowledge_source", match=MatchValue(value=custom_text_alias)),
+                        FieldCondition(key="knowledge_type", match=MatchValue(value="custom_text"))
                     ]
                 )
                 delete_filters.append((custom_text_alias, delete_filter))
@@ -815,11 +817,12 @@ async def index_qa_pairs_in_knowledge_base(agent_id: str, qa_pairs: List[Dict[st
                 # Join question and answer into single text_content (NO CHUNKING)
                 text_content = f"Question: {question} Answer: {answer}"
 
-                # Create delete filter for this qna_alias
+                # Create delete filter for this qna_alias (including knowledge_type to avoid cross-type deletions)
                 delete_filter = Filter(
                     must=[
                         FieldCondition(key="agent_id", match=MatchValue(value=agent_id)),
-                        FieldCondition(key="knowledge_source", match=MatchValue(value=qna_alias))
+                        FieldCondition(key="knowledge_source", match=MatchValue(value=qna_alias)),
+                        FieldCondition(key="knowledge_type", match=MatchValue(value="custom_qa"))
                     ]
                 )
                 delete_filters.append((qna_alias, delete_filter))
