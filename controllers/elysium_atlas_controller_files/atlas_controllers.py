@@ -3,7 +3,7 @@ from typing import Dict, Any
 from fastapi.responses import JSONResponse
 from logging_config import get_logger
 from services.elysium_atlas_services.agent_services import initialize_agent_build_update, create_agent_document, list_agents_for_user, remove_agent_by_id,fetch_agent_details_by_id,initialize_agent_update, fetch_agent_fields_by_id, fetch_agent_urls, fetch_agent_files, fetch_agent_custom_knowledge, remove_agent_links, remove_agent_files
-from services.elysium_atlas_services.atlas_custom_knowledge_services import remove_custom_data
+from services.elysium_atlas_services.atlas_custom_knowledge_services import remove_custom_data, get_custom_text_from_qdrant, get_qa_pair_from_qdrant
 from services.elysium_atlas_services.agent_auth_services import is_user_owner_of_agent
 from services.elysium_atlas_services.atlas_chat_session_services import get_chat_session_data
 from config.atlas_agent_config_data import ELYSIUM_ATLAS_AGENT_CONFIG_DATA
@@ -499,4 +499,95 @@ async def delete_agent_custom_data_controller(requestData: dict, userData: dict)
     
     except Exception as e:
         logger.error(f"Error in delete_agent_custom_data_controller: {e}")
-        return JSONResponse(status_code=500, content={"success": False, "message": "An error occurred while processing custom data deletion.", "error": str(e)})   
+        return JSONResponse(status_code=500, content={"success": False, "message": "An error occurred while processing custom data deletion.", "error": str(e)})
+
+async def get_custom_text_content_controller(requestData: dict, userData: dict):
+    """
+    Controller to retrieve and reconstruct custom text content from Qdrant chunks.
+    """
+    try:
+        if userData is None or userData.get("success") == False:
+            return JSONResponse(status_code=401, content={"success": False, "message": userData.get("message")})
+        
+        user_id = userData.get("user_id")
+        agent_id = requestData.get("agent_id")
+        custom_text_alias = requestData.get("custom_text_alias")
+
+        if not agent_id:
+            return JSONResponse(status_code=400, content={"success": False, "message": "agent_id is required."})
+        
+        if not custom_text_alias:
+            return JSONResponse(status_code=400, content={"success": False, "message": "custom_text_alias is required."})
+        
+        # Check if the user is the owner of the agent
+        is_owner = await is_user_owner_of_agent(user_id, agent_id)
+        if not is_owner:
+            return JSONResponse(status_code=403, content={"success": False, "message": "You are not authorized to access this agent."})
+        
+        logger.info(f"Retrieving custom text for agent_id: {agent_id}, custom_text_alias: {custom_text_alias} by user_id: {user_id}")
+        
+        result = await get_custom_text_from_qdrant(agent_id, custom_text_alias)
+        
+        if result.get("success"):
+            return JSONResponse(status_code=200, content={
+                "success": True,
+                "text_content": result.get("text_content"),
+                "chunks_count": result.get("chunks_count"),
+                "message": result.get("message", "Custom text retrieved successfully.")
+            })
+        else:
+            return JSONResponse(status_code=500, content={
+                "success": False,
+                "message": "Failed to retrieve custom text.",
+                "errors": result.get("errors", [])
+            })
+    
+    except Exception as e:
+        logger.error(f"Error in get_custom_text_content_controller: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": "An error occurred while retrieving custom text.", "error": str(e)})
+
+async def get_qa_pair_content_controller(requestData: dict, userData: dict):
+    """
+    Controller to retrieve QA pair content from Qdrant.
+    """
+    try:
+        if userData is None or userData.get("success") == False:
+            return JSONResponse(status_code=401, content={"success": False, "message": userData.get("message")})
+        
+        user_id = userData.get("user_id")
+        agent_id = requestData.get("agent_id")
+        qna_alias = requestData.get("qna_alias")
+
+        if not agent_id:
+            return JSONResponse(status_code=400, content={"success": False, "message": "agent_id is required."})
+        
+        if not qna_alias:
+            return JSONResponse(status_code=400, content={"success": False, "message": "qna_alias is required."})
+        
+        # Check if the user is the owner of the agent
+        is_owner = await is_user_owner_of_agent(user_id, agent_id)
+        if not is_owner:
+            return JSONResponse(status_code=403, content={"success": False, "message": "You are not authorized to access this agent."})
+        
+        logger.info(f"Retrieving QA pair for agent_id: {agent_id}, qna_alias: {qna_alias} by user_id: {user_id}")
+        
+        result = await get_qa_pair_from_qdrant(agent_id, qna_alias)
+        
+        if result.get("success"):
+            return JSONResponse(status_code=200, content={
+                "success": True,
+                "question": result.get("question"),
+                "answer": result.get("answer"),
+                "text_content": result.get("text_content"),
+                "message": result.get("message", "QA pair retrieved successfully.")
+            })
+        else:
+            return JSONResponse(status_code=500, content={
+                "success": False,
+                "message": "Failed to retrieve QA pair.",
+                "errors": result.get("errors", [])
+            })
+    
+    except Exception as e:
+        logger.error(f"Error in get_qa_pair_content_controller: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": "An error occurred while retrieving QA pair.", "error": str(e)})   

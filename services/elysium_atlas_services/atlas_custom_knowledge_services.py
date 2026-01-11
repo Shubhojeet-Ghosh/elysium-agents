@@ -200,3 +200,197 @@ async def remove_custom_data(agent_id: str, custom_texts: list[str] = None, qa_p
             "success": False,
             "errors": [str(e)]
         }
+
+async def get_custom_text_from_qdrant(agent_id: str, custom_text_alias: str) -> dict:
+    """
+    Retrieve and reconstruct custom text from Qdrant chunks.
+    
+    Args:
+        agent_id: The ID of the agent
+        custom_text_alias: The alias of the custom text to retrieve
+    
+    Returns:
+        dict: Result with success status, reconstructed text, and errors
+    """
+    try:
+        from services.qdrant_services import get_qdrant_client_instance
+        from qdrant_client.models import Filter, FieldCondition, MatchValue
+        
+        # Get Qdrant client
+        client = get_qdrant_client_instance()
+        
+        # Create filter to retrieve all chunks for this custom text
+        qdrant_filter = Filter(
+            must=[
+                FieldCondition(key="agent_id", match=MatchValue(value=agent_id)),
+                FieldCondition(key="knowledge_source", match=MatchValue(value=custom_text_alias)),
+                FieldCondition(key="knowledge_type", match=MatchValue(value="custom_text"))
+            ]
+        )
+        
+        # Query Qdrant to get all matching points
+        # Using scroll to retrieve all points (not using vector search, just filtering)
+        try:
+            scroll_result = await client.scroll(
+                collection_name=AGENT_KNOWLEDGE_BASE_COLLECTION_NAME,
+                scroll_filter=qdrant_filter,
+                limit=1000,  # Large limit to get all chunks at once
+                with_payload=True,
+                with_vectors=False  # Don't need vectors, just payload
+            )
+            
+            points = scroll_result[0] if scroll_result else []
+            
+            if not points:
+                logger.info(f"No chunks found for agent_id: {agent_id}, custom_text_alias: {custom_text_alias}")
+                return {
+                    "success": True,
+                    "text_content": "",
+                    "chunks_count": 0,
+                    "message": "No content found for this custom text alias"
+                }
+            
+            # Extract chunks with their text_index
+            chunks_data = []
+            for point in points:
+                payload = point.payload
+                chunks_data.append({
+                    "text_index": payload.get("text_index", 0),
+                    "text_content": payload.get("text_content", "")
+                })
+            
+            # Sort chunks by text_index
+            chunks_data.sort(key=lambda x: x["text_index"])
+            
+            # Reconstruct text by joining chunks
+            # Simple concatenation - overlap will create some duplication but preserves full content
+            reconstructed_text = " ".join([chunk["text_content"] for chunk in chunks_data])
+            
+            logger.info(f"Reconstructed custom text for agent_id: {agent_id}, "
+                       f"custom_text_alias: {custom_text_alias}, "
+                       f"chunks: {len(chunks_data)}, "
+                       f"length: {len(reconstructed_text)} chars")
+            
+            return {
+                "success": True,
+                "text_content": reconstructed_text,
+                "chunks_count": len(chunks_data)
+            }
+            
+        except Exception as e:
+            error_msg = f"Qdrant query error: {str(e)}"
+            logger.error(error_msg)
+            return {
+                "success": False,
+                "text_content": "",
+                "chunks_count": 0,
+                "errors": [error_msg]
+            }
+    
+    except Exception as e:
+        logger.error(f"Error retrieving custom text from Qdrant: {e}")
+        return {
+            "success": False,
+            "text_content": "",
+            "chunks_count": 0,
+            "errors": [str(e)]
+        }
+
+async def get_qa_pair_from_qdrant(agent_id: str, qna_alias: str) -> dict:
+    """
+    Retrieve QA pair from Qdrant.
+    Since QA pairs are not chunked, this retrieves a single point.
+    
+    Args:
+        agent_id: The ID of the agent
+        qna_alias: The alias of the QA pair to retrieve
+    
+    Returns:
+        dict: Result with success status, question, answer, and errors
+    """
+    try:
+        from services.qdrant_services import get_qdrant_client_instance
+        from qdrant_client.models import Filter, FieldCondition, MatchValue
+        
+        # Get Qdrant client
+        client = get_qdrant_client_instance()
+        
+        # Create filter to retrieve the QA pair
+        qdrant_filter = Filter(
+            must=[
+                FieldCondition(key="agent_id", match=MatchValue(value=agent_id)),
+                FieldCondition(key="knowledge_source", match=MatchValue(value=qna_alias)),
+                FieldCondition(key="knowledge_type", match=MatchValue(value="custom_qa"))
+            ]
+        )
+        
+        # Query Qdrant to get the QA pair point
+        try:
+            scroll_result = await client.scroll(
+                collection_name=AGENT_KNOWLEDGE_BASE_COLLECTION_NAME,
+                scroll_filter=qdrant_filter,
+                limit=1,  # Only one point expected for QA pairs
+                with_payload=True,
+                with_vectors=False
+            )
+            
+            points = scroll_result[0] if scroll_result else []
+            
+            if not points:
+                logger.info(f"No QA pair found for agent_id: {agent_id}, qna_alias: {qna_alias}")
+                return {
+                    "success": True,
+                    "text_content": "",
+                    "question": "",
+                    "answer": "",
+                    "message": "No QA pair found for this alias"
+                }
+            
+            # Extract the QA pair content
+            point = points[0]
+            payload = point.payload
+            text_content = payload.get("text_content", "")
+            
+            # Parse question and answer from text_content
+            # Format is "Question: {question} Answer: {answer}"
+            question = ""
+            answer = ""
+            
+            if text_content.startswith("Question: "):
+                parts = text_content.split(" Answer: ", 1)
+                if len(parts) == 2:
+                    question = parts[0].replace("Question: ", "").strip()
+                    answer = parts[1].strip()
+                else:
+                    # Fallback: just return the text_content
+                    question = text_content
+            
+            logger.info(f"Retrieved QA pair for agent_id: {agent_id}, qna_alias: {qna_alias}")
+            
+            return {
+                "success": True,
+                "text_content": text_content,
+                "question": question,
+                "answer": answer
+            }
+            
+        except Exception as e:
+            error_msg = f"Qdrant query error: {str(e)}"
+            logger.error(error_msg)
+            return {
+                "success": False,
+                "text_content": "",
+                "question": "",
+                "answer": "",
+                "errors": [error_msg]
+            }
+    
+    except Exception as e:
+        logger.error(f"Error retrieving QA pair from Qdrant: {e}")
+        return {
+            "success": False,
+            "text_content": "",
+            "question": "",
+            "answer": "",
+            "errors": [str(e)]
+        }
