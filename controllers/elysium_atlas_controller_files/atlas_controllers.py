@@ -441,4 +441,58 @@ async def delete_agent_files_controller(requestData: dict, userData: dict):
     
     except Exception as e:
         logger.error(f"Error in delete_agent_files_controller: {e}")
-        return JSONResponse(status_code=500, content={"success": False, "message": "An error occurred while deleting files.", "error": str(e)})    
+        return JSONResponse(status_code=500, content={"success": False, "message": "An error occurred while deleting files.", "error": str(e)})
+
+async def delete_agent_custom_data_controller(requestData: dict, userData: dict):
+    """
+    Controller to delete custom data (custom_texts and qa_pairs) from an agent.
+    For now, this only validates and logs the data without actually deleting.
+    """
+    try:
+        if userData is None or userData.get("success") == False:
+            return JSONResponse(status_code=401, content={"success": False, "message": userData.get("message")})
+        
+        user_id = userData.get("user_id")
+        agent_id = requestData.get("agent_id")
+        custom_texts = requestData.get("custom_texts")
+        qa_pairs = requestData.get("qa_pairs")
+
+        if not agent_id:
+            return JSONResponse(status_code=400, content={"success": False, "message": "agent_id is required."})
+        
+        # Validate that at least one of custom_texts or qa_pairs is present
+        if not custom_texts and not qa_pairs:
+            return JSONResponse(status_code=400, content={"success": False, "message": "At least one of custom_texts or qa_pairs must be provided."})
+        
+        # Validate custom_texts if present
+        if custom_texts is not None:
+            if not isinstance(custom_texts, list):
+                return JSONResponse(status_code=400, content={"success": False, "message": "custom_texts must be a list."})
+        
+        # Validate qa_pairs if present
+        if qa_pairs is not None:
+            if not isinstance(qa_pairs, list):
+                return JSONResponse(status_code=400, content={"success": False, "message": "qa_pairs must be a list."})
+        
+        # Check if the user is the owner of the agent
+        is_owner = await is_user_owner_of_agent(user_id, agent_id)
+        if not is_owner:
+            return JSONResponse(status_code=403, content={"success": False, "message": "You are not authorized to modify this agent."})
+        
+        # Log the data for now (not deleting anything yet)
+        if custom_texts:
+            logger.info(f"Custom texts to delete for agent_id: {agent_id} - Count: {len(custom_texts)}")
+            logger.info(f"Custom texts list: {custom_texts}")
+        
+        if qa_pairs:
+            logger.info(f"QA pairs to delete for agent_id: {agent_id} - Count: {len(qa_pairs)}")
+            logger.info(f"QA pairs list: {qa_pairs}")
+        
+        return JSONResponse(status_code=200, content={
+            "success": True, 
+            "message": "We are updating the agent.",
+        })
+    
+    except Exception as e:
+        logger.error(f"Error in delete_agent_custom_data_controller: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": "An error occurred while processing custom data deletion.", "error": str(e)})    

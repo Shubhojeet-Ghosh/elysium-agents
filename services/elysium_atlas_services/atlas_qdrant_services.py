@@ -528,8 +528,8 @@ async def index_files_in_knowledge_base(agent_id, files_data):
 
                 # Create points with embeddings
                 for chunk_data, embedding in zip(all_chunks, embeddings):
-                    # Generate deterministic UUID5 based on agent_id + file_name + text_index
-                    composite_key = f"{agent_id}:{chunk_data['knowledge_source']}:{chunk_data['text_index']}"
+                    # Generate deterministic UUID5 based on agent_id + knowledge_type + knowledge_source + text_index
+                    composite_key = f"{agent_id}:file:{chunk_data['knowledge_source']}:{chunk_data['text_index']}"
                     point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, composite_key))
 
                     point = PointStruct(
@@ -694,8 +694,8 @@ async def index_custom_texts_in_knowledge_base(agent_id: str, custom_texts: List
 
                 # Create points with embeddings
                 for chunk_data, embedding in zip(all_chunks, embeddings):
-                    # Generate deterministic UUID5 based on agent_id + custom_text_alias + text_index
-                    composite_key = f"{agent_id}:{chunk_data['knowledge_source']}:{chunk_data['text_index']}"
+                    # Generate deterministic UUID5 based on agent_id + knowledge_type + knowledge_source + text_index
+                    composite_key = f"{agent_id}:custom_text:{chunk_data['knowledge_source']}:{chunk_data['text_index']}"
                     point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, composite_key))
 
                     point = PointStruct(
@@ -852,8 +852,8 @@ async def index_qa_pairs_in_knowledge_base(agent_id: str, qa_pairs: List[Dict[st
 
                 # Create points with embeddings (one point per Q&A pair)
                 for text_data, embedding in zip(all_texts, embeddings):
-                    # Generate deterministic UUID5 based on agent_id + qna_alias + text_index (always 0)
-                    composite_key = f"{agent_id}:{text_data['knowledge_source']}:0"
+                    # Generate deterministic UUID5 based on agent_id + knowledge_type + knowledge_source + text_index (always 0)
+                    composite_key = f"{agent_id}:custom_qa:{text_data['knowledge_source']}:0"
                     point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, composite_key))
 
                     point = PointStruct(
