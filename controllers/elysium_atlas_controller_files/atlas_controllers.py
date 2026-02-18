@@ -11,6 +11,7 @@ from config.elysium_atlas_s3_config import ELYSIUM_ATLAS_BUCKET_NAME, ELYSIUM_CD
 from services.aws_services.s3_service import generate_presigned_upload_url
 from services.elysium_atlas_services.agent_db_operations import check_agent_name_exists
 from services.elysium_atlas_services.agent_db_operations import update_agent_status
+from services.elysium_atlas_services.agent_db_operations import set_data_materials_status
 
 logger = get_logger()
 
@@ -245,6 +246,8 @@ async def update_agent_controller_v1(requestData,userData,background_tasks):
             logger.error("agent_id is required for update operation")
             return JSONResponse(status_code=400, content={"success": False, "message": "You can't perform update without agent."})
         
+        await set_data_materials_status(requestData)
+    
         # Set agent status to 'indexing' after creation/update
         await update_agent_status(agent_id, "updating")
 

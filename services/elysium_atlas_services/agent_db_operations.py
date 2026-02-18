@@ -234,3 +234,64 @@ async def update_agent_fields(agent_id: str, fields: Dict[str, Any]) -> bool:
     except Exception as e:
         logger.error(f"Error updating fields for agent_id {agent_id}: {e}")
         return False
+
+
+async def set_url_statuses_to_indexing(agent_id: str, links: list[str], status: str = "indexing") -> bool:
+    """
+    Update the status of URL documents for the given agent_id and list of URLs.
+
+    Args:
+        agent_id: The ID of the agent.
+        links: List of URLs to update.
+        status: The status to set (default: "indexing").
+
+    Returns:
+        bool: True if the update was successful, False otherwise.
+    """
+    try:
+        collection = get_collection("atlas_agent_urls")
+        current_time = datetime.now(timezone.utc)
+
+        # Update documents where agent_id matches and url is in links
+        result = await collection.update_many(
+            {"agent_id": str(agent_id), "url": {"$in": links}},
+            {"$set": {"status": status, "updated_at": current_time}}
+        )
+
+        if result.modified_count > 0:
+            logger.info(f"Updated {result.modified_count} URL documents to '{status}' for agent_id: {agent_id}")
+            return True
+        else:
+            logger.warning(f"No URL documents found to update for agent_id: {agent_id}")
+            return True  # Not an error if no documents found
+
+    except Exception as e:
+        logger.error(f"Error updating URL statuses for agent_id {agent_id}: {e}")
+        return False
+
+
+async def set_data_materials_status(requestData):
+    """
+    Function to set the status of all data materials (URLs, files, custom texts, QA pairs) to indexing/training based on requestData.
+    """
+    logger.info(f"Request data: {requestData}")
+
+    agent_id = requestData.get("agent_id")
+    if not agent_id:
+        logger.error("agent_id is required in requestData")
+        return False
+    
+    links = requestData.get("links", [])
+    files = requestData.get("files", [])
+    custom_texts = requestData.get("custom_texts", [])
+    qa_pairs = requestData.get("qa_pairs", [])
+
+    # Handle links
+    if links:
+        success = await set_url_statuses_to_indexing(agent_id, links)
+        if not success:
+            return False
+
+    # TODO: Handle files, custom_texts, qa_pairs similarly
+
+    return True
