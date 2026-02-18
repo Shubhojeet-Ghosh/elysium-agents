@@ -239,10 +239,11 @@ async def update_agent_fields(agent_id: str, fields: Dict[str, Any]) -> bool:
 async def set_url_statuses_to_indexing(agent_id: str, links: list[str], status: str = "indexing") -> bool:
     """
     Update the status of URL documents for the given agent_id and list of URLs.
+    Creates new documents for URLs that don't exist with page_type as empty string.
 
     Args:
         agent_id: The ID of the agent.
-        links: List of URLs to update.
+        links: List of URLs to update or create.
         status: The status to set (default: "indexing").
 
     Returns:
@@ -252,18 +253,26 @@ async def set_url_statuses_to_indexing(agent_id: str, links: list[str], status: 
         collection = get_collection("atlas_agent_urls")
         current_time = datetime.now(timezone.utc)
 
-        # Update documents where agent_id matches and url is in links
-        result = await collection.update_many(
-            {"agent_id": str(agent_id), "url": {"$in": links}},
-            {"$set": {"status": status, "updated_at": current_time}}
-        )
+        updated_count = 0
+        for link in links:
+            # Upsert: update if exists, insert if not
+            result = await collection.update_one(
+                {"agent_id": str(agent_id), "url": link},
+                {
+                    "$set": {"status": status, "updated_at": current_time},
+                    "$setOnInsert": {"created_at": current_time, "page_type": ""}
+                },
+                upsert=True
+            )
+            if result.modified_count > 0 or result.upserted_id:
+                updated_count += 1
 
-        if result.modified_count > 0:
-            logger.info(f"Updated {result.modified_count} URL documents to '{status}' for agent_id: {agent_id}")
+        if updated_count > 0:
+            logger.info(f"Updated/created {updated_count} URL documents to '{status}' for agent_id: {agent_id}")
             return True
         else:
-            logger.warning(f"No URL documents found to update for agent_id: {agent_id}")
-            return True  # Not an error if no documents found
+            logger.warning(f"No URL documents were updated or created for agent_id: {agent_id}")
+            return True  # Not an error
 
     except Exception as e:
         logger.error(f"Error updating URL statuses for agent_id {agent_id}: {e}")
