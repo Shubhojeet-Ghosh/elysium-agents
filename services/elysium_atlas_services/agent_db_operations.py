@@ -279,6 +279,69 @@ async def set_url_statuses_to_indexing(agent_id: str, links: list[str], status: 
         return False
 
 
+async def set_file_statuses_to_indexing(agent_id: str, files: list[dict], status: str = "indexing") -> bool:
+    """
+    Update the status of file documents for the given agent_id and list of files.
+    Creates new documents for files that don't exist.
+
+    Args:
+        agent_id: The ID of the agent.
+        files: List of file dictionaries containing file details.
+        status: The status to set (default: "indexing").
+
+    Returns:
+        bool: True if the update was successful, False otherwise.
+    """
+    try:
+        collection = get_collection("atlas_agent_files")
+        current_time = datetime.now(timezone.utc)
+
+        updated_count = 0
+        for file in files:
+            file_key = file.get("file_key")
+            if not file_key:
+                logger.warning(f"File key missing for file: {file}")
+                continue
+
+            # Prepare the document data
+            doc_data = {
+                "agent_id": str(agent_id),
+                "file_name": file.get("file_name", ""),
+                "file_key": file_key,
+                "status": status,
+                "updated_at": current_time
+            }
+
+            # Add optional fields if available
+            if "cdn_url" in file:
+                doc_data["cdn_url"] = file["cdn_url"]
+            if "file_source" in file:
+                doc_data["file_source"] = file["file_source"]
+
+            # Upsert: update if exists, insert if not
+            result = await collection.update_one(
+                {"agent_id": str(agent_id), "file_key": file_key},
+                {
+                    "$set": doc_data,
+                    "$setOnInsert": {"created_at": current_time}
+                },
+                upsert=True
+            )
+            if result.modified_count > 0 or result.upserted_id:
+                updated_count += 1
+
+        if updated_count > 0:
+            logger.info(f"Updated/created {updated_count} file documents to '{status}' for agent_id: {agent_id}")
+            return True
+        else:
+            logger.warning(f"No file documents were updated or created for agent_id: {agent_id}")
+            return True  # Not an error
+
+    except Exception as e:
+        logger.error(f"Error updating file statuses for agent_id {agent_id}: {e}")
+        return False
+
+
 async def set_data_materials_status(requestData):
     """
     Function to set the status of all data materials (URLs, files, custom texts, QA pairs) to indexing/training based on requestData.
@@ -301,6 +364,12 @@ async def set_data_materials_status(requestData):
         if not success:
             return False
 
-    # TODO: Handle files, custom_texts, qa_pairs similarly
+    # Handle files
+    if files:
+        success = await set_file_statuses_to_indexing(agent_id, files)
+        if not success:
+            return False
+
+    # TODO: Handle custom_texts, qa_pairs similarly
 
     return True
