@@ -342,6 +342,106 @@ async def set_file_statuses_to_indexing(agent_id: str, files: list[dict], status
         return False
 
 
+async def set_custom_texts_status_to_indexing(agent_id: str, custom_texts: list[dict], status: str = "indexing") -> bool:
+    """
+    Update the status of custom text documents for the given agent_id and list of custom texts.
+    Creates new documents for custom texts that don't exist.
+
+    Args:
+        agent_id: The ID of the agent.
+        custom_texts: List of custom text dictionaries containing custom_text_alias and custom_text.
+        status: The status to set (default: "indexing").
+
+    Returns:
+        bool: True if the update was successful, False otherwise.
+    """
+    try:
+        collection = get_collection("atlas_custom_texts")
+        current_time = datetime.now(timezone.utc)
+
+        updated_count = 0
+        for item in custom_texts:
+            custom_text_alias = item.get("custom_text_alias")
+            if not custom_text_alias:
+                logger.warning(f"custom_text_alias missing for item: {item}")
+                continue
+
+            result = await collection.update_one(
+                {"agent_id": str(agent_id), "custom_text_alias": custom_text_alias},
+                {
+                    "$set": {"status": status, "updated_at": current_time},
+                    "$setOnInsert": {
+                        "agent_id": str(agent_id),
+                        "custom_text_alias": custom_text_alias,
+                        "created_at": current_time
+                    }
+                },
+                upsert=True
+            )
+            if result.modified_count > 0 or result.upserted_id:
+                updated_count += 1
+
+        if updated_count > 0:
+            logger.info(f"Updated/created {updated_count} custom text documents to '{status}' for agent_id: {agent_id}")
+        else:
+            logger.warning(f"No custom text documents were updated or created for agent_id: {agent_id}")
+        return True
+
+    except Exception as e:
+        logger.error(f"Error updating custom text statuses for agent_id {agent_id}: {e}")
+        return False
+
+
+async def set_qa_pairs_status_to_indexing(agent_id: str, qa_pairs: list[dict], status: str = "indexing") -> bool:
+    """
+    Update the status of QA pair documents for the given agent_id and list of QA pairs.
+    Creates new documents for QA pairs that don't exist.
+
+    Args:
+        agent_id: The ID of the agent.
+        qa_pairs: List of QA pair dictionaries containing qna_alias, question, and answer.
+        status: The status to set (default: "indexing").
+
+    Returns:
+        bool: True if the update was successful, False otherwise.
+    """
+    try:
+        collection = get_collection("atlas_qa_pairs")
+        current_time = datetime.now(timezone.utc)
+
+        updated_count = 0
+        for item in qa_pairs:
+            qna_alias = item.get("qna_alias")
+            if not qna_alias:
+                logger.warning(f"qna_alias missing for item: {item}")
+                continue
+
+            result = await collection.update_one(
+                {"agent_id": str(agent_id), "qna_alias": qna_alias},
+                {
+                    "$set": {"status": status, "updated_at": current_time},
+                    "$setOnInsert": {
+                        "agent_id": str(agent_id),
+                        "qna_alias": qna_alias,
+                        "created_at": current_time
+                    }
+                },
+                upsert=True
+            )
+            if result.modified_count > 0 or result.upserted_id:
+                updated_count += 1
+
+        if updated_count > 0:
+            logger.info(f"Updated/created {updated_count} QA pair documents to '{status}' for agent_id: {agent_id}")
+        else:
+            logger.warning(f"No QA pair documents were updated or created for agent_id: {agent_id}")
+        return True
+
+    except Exception as e:
+        logger.error(f"Error updating QA pair statuses for agent_id {agent_id}: {e}")
+        return False
+
+
 async def set_data_materials_status(requestData):
     """
     Function to set the status of all data materials (URLs, files, custom texts, QA pairs) to indexing/training based on requestData.
@@ -370,6 +470,16 @@ async def set_data_materials_status(requestData):
         if not success:
             return False
 
-    # TODO: Handle custom_texts, qa_pairs similarly
+    # Handle custom_texts
+    if custom_texts:
+        success = await set_custom_texts_status_to_indexing(agent_id, custom_texts)
+        if not success:
+            return False
+
+    # Handle qa_pairs
+    if qa_pairs:
+        success = await set_qa_pairs_status_to_indexing(agent_id, qa_pairs)
+        if not success:
+            return False
 
     return True
