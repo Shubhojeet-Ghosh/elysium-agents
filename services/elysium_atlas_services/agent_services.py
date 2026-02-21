@@ -740,8 +740,8 @@ async def initialize_agent_update(requestData: Dict[str, Any]) -> bool:
         
         await update_agent_current_task(agent_id, "updating agent metadata")
         
-        agent_icon = requestData.get("agent_icon")
-        if agent_icon is not None:
+        if "agent_icon" in requestData:
+            agent_icon = requestData["agent_icon"]
             await update_agent_fields(agent_id, {"agent_icon": agent_icon})
             
         updates = {}
