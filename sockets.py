@@ -24,10 +24,20 @@ logger = get_logger()
 REDIS_URL = f'redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/{settings.REDIS_DB}'
 
 # Create a Redis manager (edit the URL if your Redis is elsewhere)
-mgr = AsyncRedisManager(REDIS_URL)
+mgr = AsyncRedisManager(
+    REDIS_URL,
+    write_only=False,
+    channel="socketio",
+)
 
 # Create Socket.IO instance
-sio = socketio.AsyncServer(cors_allowed_origins="*", async_mode="asgi", manager=mgr)
+sio = socketio.AsyncServer(
+    cors_allowed_origins="*",
+    async_mode="asgi",
+    manager=mgr,
+    ping_interval=25,
+    ping_timeout=60,
+)
 
 # Create ASGI app for Socket.IO
 socketio_app = socketio.ASGIApp(sio)
