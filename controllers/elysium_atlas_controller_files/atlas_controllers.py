@@ -2,7 +2,7 @@ import asyncio
 from typing import Dict, Any
 from fastapi.responses import JSONResponse
 from logging_config import get_logger
-from services.elysium_atlas_services.agent_services import initialize_agent_build_update, create_agent_document, list_agents_for_user, remove_agent_by_id,fetch_agent_details_by_id,initialize_agent_update, fetch_agent_fields_by_id, fetch_agent_urls, fetch_agent_files, fetch_agent_custom_knowledge, remove_agent_links, remove_agent_files
+from services.elysium_atlas_services.agent_services import initialize_agent_build_update, create_agent_document, list_agents_for_user, remove_agent_by_id,fetch_agent_details_by_id,initialize_agent_update, fetch_agent_fields_by_id, fetch_agent_urls, fetch_agent_files, fetch_agent_custom_knowledge, remove_agent_links, remove_agent_files, update_agent_basic_attributes
 from services.elysium_atlas_services.atlas_custom_knowledge_services import remove_custom_data, get_custom_text_from_qdrant, get_qa_pair_from_qdrant
 from services.elysium_atlas_services.agent_auth_services import is_user_owner_of_agent
 from services.elysium_atlas_services.atlas_chat_session_services import get_chat_session_data
@@ -246,9 +246,7 @@ async def update_agent_controller_v1(requestData,userData,background_tasks):
             logger.error("agent_id is required for update operation")
             return JSONResponse(status_code=400, content={"success": False, "message": "You can't perform update without agent."})
         
-        if "agent_icon" in requestData:
-            agent_icon = requestData["agent_icon"]
-            await update_agent_fields(agent_id, {"agent_icon": agent_icon})
+        await update_agent_basic_attributes(agent_id, requestData)
 
         await set_data_materials_status(requestData)
     

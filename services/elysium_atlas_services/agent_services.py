@@ -841,6 +841,34 @@ async def generate_agent_widget_script(agent_id: str) -> str | None:
         logger.error(f"Error generating widget script for agent_id {agent_id}: {e}")
         return None
 
+async def update_agent_basic_attributes(agent_id: str, requestData: Dict[str, Any]) -> bool:
+    """
+    Update basic agent attributes like icon, color, text color, etc., if present in requestData.
+    
+    Args:
+        agent_id: The ID of the agent
+        requestData: The request data containing potential attributes
+    
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        # List of basic attributes to update
+        basic_attributes = ["agent_icon", "primary_color", "text_color","secondary_color"]
+        
+        updates = {}
+        for attr in basic_attributes:
+            if attr in requestData:
+                updates[attr] = requestData[attr]
+        
+        if updates:
+            await update_agent_fields(agent_id, updates)
+        
+        return True
+    except Exception as e:
+        logger.error(f"Error updating agent attributes for agent_id {agent_id}: {e}")
+        return False
+
 async def remove_agent_links(agent_id: str, links: list[str]) -> dict:
     """
     Remove specific links from an agent's knowledge base (MongoDB and Qdrant).
