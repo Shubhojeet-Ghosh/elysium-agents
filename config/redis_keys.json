@@ -2,6 +2,7 @@
   "redis_keys_prefixes_in_use": [
     "socket:global_connections",
     "socket:elysium-atlas:user_id:",
-    "atlas_{{agent_id}}_visitors"
+    "atlas_{{agent_id}}_visitors",
+    "atlas:agent_owner:{{agent_id}}"
   ]
 }

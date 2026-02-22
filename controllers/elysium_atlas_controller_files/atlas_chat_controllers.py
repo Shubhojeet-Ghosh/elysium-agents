@@ -4,6 +4,7 @@ from logging_config import get_logger
 from services.socket_emit_services import emit_atlas_response, emit_atlas_response_chunk
 from services.elysium_atlas_services.agent_chat_services import chat_with_agent_v1
 from services.elysium_atlas_services.elysium_atlas_user_plan_services import can_user_send_chat, decrement_user_ai_queries
+from services.elysium_atlas_services.agent_db_operations import get_agent_owner_user_id
 
 logger = get_logger()
 
@@ -12,7 +13,11 @@ async def chat_with_agent_controller_v1(chatPayload,user_data, sid = None):
         
         logger.info(f"chat_with_agent_controller_v1 called with payload: {chatPayload} and user_data: {user_data}")
 
-        user_id = user_data.get("user_id") if user_data else None
+        agent_id = chatPayload.get("agent_id")
+        message = chatPayload.get("message")
+        chat_session_id = chatPayload.get("chat_session_id")
+
+        user_id = await get_agent_owner_user_id(agent_id) if agent_id else None
         if user_id:
             chat_permission = await can_user_send_chat(user_id, chatPayload)
             if not chat_permission.get("success"):
@@ -28,10 +33,6 @@ async def chat_with_agent_controller_v1(chatPayload,user_data, sid = None):
                     )
                 return {"success": False, "message": internal_message}
 
-        agent_id = chatPayload.get("agent_id")
-        message = chatPayload.get("message")
-        chat_session_id = chatPayload.get("chat_session_id")
-        
         chat_response = await chat_with_agent_v1(agent_id, message, sid, chat_session_id=chat_session_id,additional_params=chatPayload)
 
         if user_id and chat_response.get("success"):

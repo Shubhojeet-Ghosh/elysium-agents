@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict
 from logging_config import get_logger
 from services.mongo_services import get_collection
+from services.redis_services import cache_get, cache_set
 from bson import ObjectId
 
 logger = get_logger()
@@ -46,6 +47,51 @@ async def get_agent_by_id(agent_id: str) -> Dict[str, Any] | None:
 
     except Exception as e:
         logger.error(f"Error retrieving agent for agent_id {agent_id}: {e}")
+        return None
+
+
+async def get_agent_owner_user_id(agent_id: str) -> str | None:
+    """
+    Retrieve only the owner_user_id for a given agent_id from atlas_agents.
+    Result is cached in Redis with a 30-day TTL to avoid repeated DB lookups.
+
+    Args:
+        agent_id: The string ID of the agent (_id in the collection).
+
+    Returns:
+        The owner_user_id string, or None if not found.
+    """
+    CACHE_KEY = f"atlas:agent_owner:{agent_id}"
+    CACHE_TTL = 60 * 60 * 24 * 30  # 30 days
+
+    try:
+        # 1. Check Redis cache first
+        cached = cache_get(CACHE_KEY)
+        if cached is not None:
+            logger.info(f"Cache hit - owner_user_id for agent_id {agent_id}: {cached}")
+            return cached
+
+        # 2. Cache miss — query MongoDB
+        logger.info(f"Cache miss - fetching owner_user_id from DB for agent_id: {agent_id}")
+        collection = get_collection("atlas_agents")
+        agent_object_id = ObjectId(agent_id) if isinstance(agent_id, str) else agent_id
+        doc = await collection.find_one(
+            {"_id": agent_object_id},
+            {"owner_user_id": 1, "_id": 0}
+        )
+
+        if doc:
+            owner_user_id = doc.get("owner_user_id")
+            logger.info(f"owner_user_id for agent_id {agent_id}: {owner_user_id}")
+            # 3. Store in Redis for future calls
+            cache_set({CACHE_KEY: owner_user_id}, ex=CACHE_TTL)
+            return owner_user_id
+        else:
+            logger.warning(f"No agent found for agent_id: {agent_id} when fetching owner_user_id")
+            return None
+
+    except Exception as e:
+        logger.error(f"Error fetching owner_user_id for agent_id {agent_id}: {e}")
         return None
 
 
