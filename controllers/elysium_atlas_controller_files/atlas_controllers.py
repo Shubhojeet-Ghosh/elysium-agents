@@ -12,6 +12,7 @@ from services.aws_services.s3_service import generate_presigned_upload_url
 from services.elysium_atlas_services.agent_db_operations import check_agent_name_exists, update_agent_fields
 from services.elysium_atlas_services.agent_db_operations import update_agent_status
 from services.elysium_atlas_services.agent_db_operations import set_data_materials_status
+from services.elysium_atlas_services.elysium_atlas_user_plan_services import can_user_build_agent
 
 logger = get_logger()
 
@@ -23,6 +24,10 @@ async def pre_build_agent_operations_controller(requestData: Dict[str, Any],user
         # logger.info(f"User data: {userData}")
 
         user_id = userData.get("user_id")
+
+        plan_check = await can_user_build_agent(user_id, requestData)
+        if not plan_check.get("success"):
+            return JSONResponse(status_code=403, content={"success": False, "message": plan_check.get("message")})
 
         initial_data = ELYSIUM_ATLAS_AGENT_CONFIG_DATA.get("agent_init_config")
         
@@ -50,6 +55,12 @@ async def build_update_agent_controller_v1(requestData,userData,background_tasks
             return JSONResponse(status_code=401, content={"success": False, "message": userData.get("message")})
         
         logger.info(f"User data: {userData}")
+
+        user_id = userData.get("user_id")
+
+        plan_check = await can_user_build_agent(user_id, requestData)
+        if not plan_check.get("success"):
+            return JSONResponse(status_code=403, content={"success": False, "message": plan_check.get("message")})
         
         agent_id = requestData.get("agent_id")
         if not agent_id:
