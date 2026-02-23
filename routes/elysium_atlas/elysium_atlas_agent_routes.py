@@ -6,7 +6,7 @@ from fastapi import BackgroundTasks
 from fastapi.responses import JSONResponse
 
 from controllers.elysium_atlas_controller_files.atlas_controllers import build_update_agent_controller_v1, pre_build_agent_operations_controller,generate_presigned_url_controller, list_agents_controller, delete_agent_controller,get_agent_details_controller,update_agent_controller_v1, get_agent_fields_controller, get_agent_urls_controller, get_agent_files_controller, get_agent_custom_texts_controller, get_agent_qa_pairs_controller, remove_agent_links_controller, delete_agent_files_controller, delete_agent_custom_data_controller, get_custom_text_content_controller, get_qa_pair_content_controller
-from controllers.elysium_atlas_controller_files.atlas_chat_controllers import chat_with_agent_controller_v1
+from controllers.elysium_atlas_controller_files.atlas_chat_controllers import chat_with_agent_controller_v1, rotate_conversation_id_controller
 
 elysium_atlas_agent_router = APIRouter(prefix = "/elysium-atlas/agent",tags=["Elysium Atlas - Agent Routes"])
 
@@ -99,3 +99,8 @@ async def get_custom_text_content_route_v1(requestData: Dict[str, Any], user: di
 @elysium_atlas_agent_router.post("/v1/get-qa-pair-content")
 async def get_qa_pair_content_route_v1(requestData: Dict[str, Any], user: dict = Depends(authorize_user)):
     return await get_qa_pair_content_controller(requestData, user)
+
+# Async POST method to rotate (start a new) conversation under an existing chat session
+@elysium_atlas_agent_router.post("/v1/rotate-conversation-id")
+async def rotate_conversation_id_route_v1(requestData: Dict[str, Any]):
+    return await rotate_conversation_id_controller(requestData)

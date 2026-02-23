@@ -6,6 +6,7 @@ import datetime
 from bson import ObjectId
 import random
 import asyncio
+import uuid
 
 from config.atlas_metadata_extraction_models import EnhancedSemanticMessage
 from services.open_ai_services import openai_structured_output
@@ -44,6 +45,17 @@ async def get_chat_session_data(requestData: Dict[str, Any]) -> Dict[str, Any] |
                 document["created_at"] = document["created_at"].isoformat()
             if "last_message_at" in document and document["last_message_at"]:
                 document["last_message_at"] = document["last_message_at"].isoformat()
+
+            # Ensure conversation_id exists; backfill if missing from older documents
+            if not document.get("conversation_id"):
+                new_conversation_id = str(uuid.uuid4())
+                document["conversation_id"] = new_conversation_id
+                async def _backfill_conversation_id(cid=new_conversation_id, doc_id=document["_id"]):
+                    await collection.update_one(
+                        {"_id": ObjectId(doc_id)},
+                        {"$set": {"conversation_id": cid}}
+                    )
+                asyncio.create_task(_backfill_conversation_id())
             
             # Update visitor_at if provided
             visitor_at = requestData.get("visitor_at")
@@ -57,8 +69,13 @@ async def get_chat_session_data(requestData: Dict[str, Any]) -> Dict[str, Any] |
                     )
                 asyncio.create_task(update_visitor())
             
-            # Retrieve messages for the session
-            messages = await get_chat_messages_for_session(agent_id, chat_session_id,limit=limit)
+            # Retrieve messages for the session, scoped to the current conversation
+            messages = await get_chat_messages_for_session(
+                agent_id,
+                chat_session_id,
+                limit=limit,
+                conversation_id=document.get("conversation_id"),
+            )
             document["messages"] = messages
             
             logger.info(f"Retrieved existing chat session document for chat_session_id: {chat_session_id} and agent_id: {agent_id}")
@@ -78,6 +95,7 @@ async def get_chat_session_data(requestData: Dict[str, Any]) -> Dict[str, Any] |
             update_dict = {
                 "agent_name": agent_display_name,
                 "channel": channel,
+                "conversation_id": str(uuid.uuid4()),
                 "created_at": datetime.datetime.now(datetime.timezone.utc),
                 "last_message_at": datetime.datetime.now(datetime.timezone.utc),
             }
@@ -108,14 +126,18 @@ async def get_chat_messages_for_session(
     agent_id: str,
     chat_session_id: str,
     limit: int = 50,
+    conversation_id: str | None = None,
 ) -> list[Dict[str, Any]]:
     """
     Retrieve chat messages for a specific session, sorted by created_at ascending.
+    When conversation_id is provided, only messages belonging to that conversation
+    thread are returned.
 
     Args:
         agent_id: The agent identifier.
         chat_session_id: The chat session identifier.
         limit: Maximum number of messages to retrieve.
+        conversation_id: Optional conversation thread identifier to filter by.
 
     Returns:
         List of message documents with message_id, role, content, created_at.
@@ -127,19 +149,24 @@ async def get_chat_messages_for_session(
 
         collection = get_collection("atlas_chat_mesages")
 
+        query: Dict[str, Any] = {"agent_id": agent_id, "chat_session_id": chat_session_id}
+        if conversation_id:
+            query["conversation_id"] = conversation_id
+
         # Find messages, sort by created_at ascending, limit
         cursor = collection.find(
-            {"agent_id": agent_id, "chat_session_id": chat_session_id},
-            {"message_id": 1, "role": 1, "content": 1, "created_at": 1, "_id": 0}
+            query,
+            {"message_id": 1, "role": 1, "content": 1, "created_at": 1, "conversation_id": 1, "_id": 0}
         ).sort("created_at", 1).limit(limit)
 
         messages = await cursor.to_list(length=None)
 
         logger.info(
-            "Retrieved %d messages for chat_session_id=%s and agent_id=%s",
+            "Retrieved %d messages for chat_session_id=%s agent_id=%s conversation_id=%s",
             len(messages),
             chat_session_id,
             agent_id,
+            conversation_id,
         )
 
         return messages
@@ -304,7 +331,10 @@ async def create_and_store_chat_messages(
         }
         chat_session_data = await get_chat_session_data(chatData)
 
-        logger.info(f"Creating and storing chat messages for chat_session_id={chat_session_id} and agent_id={agent_id}")
+        # Extract conversation_id from the session document
+        conversation_id = chat_session_data.get("conversation_id") if chat_session_data else None
+
+        logger.info(f"Creating and storing chat messages for chat_session_id={chat_session_id} and agent_id={agent_id} conversation_id={conversation_id}")
 
         messages: list[Dict[str, Any]] = []
 
@@ -327,6 +357,7 @@ async def create_and_store_chat_messages(
             doc = {
                 "chat_session_id": chat_session_id,
                 "agent_id": agent_id,
+                "conversation_id": conversation_id,
                 "message_id": message_id,
                 "role": role,
                 "content": content,
@@ -367,6 +398,54 @@ async def create_and_store_chat_messages(
     except Exception as e:
         logger.error(f"Error while creating and storing chat messages: {str(e)}")
         return []
+
+async def rotate_conversation_id(agent_id: str, chat_session_id: str) -> Dict[str, Any] | None:
+    """
+    Generate a fresh conversation_id UUID and persist it on the atlas_chat_sessions
+    document identified by agent_id + chat_session_id.
+
+    Returns the updated document fields (chat_session_id, agent_id, conversation_id)
+    or None if the document was not found or an error occurred.
+    """
+    try:
+        if not agent_id or not chat_session_id:
+            logger.warning("agent_id and chat_session_id are required to rotate conversation_id")
+            return None
+
+        collection = get_collection("atlas_chat_sessions")
+
+        document = await collection.find_one(
+            {"chat_session_id": chat_session_id, "agent_id": agent_id},
+            {"_id": 1}
+        )
+        if not document:
+            logger.warning(
+                f"No chat session found for chat_session_id={chat_session_id} agent_id={agent_id}"
+            )
+            return None
+
+        new_conversation_id = str(uuid.uuid4())
+
+        await collection.update_one(
+            {"_id": document["_id"]},
+            {"$set": {"conversation_id": new_conversation_id}}
+        )
+
+        logger.info(
+            f"Rotated conversation_id to {new_conversation_id} for "
+            f"chat_session_id={chat_session_id} agent_id={agent_id}"
+        )
+
+        return {
+            "chat_session_id": chat_session_id,
+            "agent_id": agent_id,
+            "conversation_id": new_conversation_id,
+        }
+
+    except Exception as e:
+        logger.error(f"Error in rotate_conversation_id: {str(e)}")
+        return None
+
 
 async def enhance_user_message(message: str, chat_history: List[Dict[str, Any]], model = "gpt-4.1-mini") -> str:
     """

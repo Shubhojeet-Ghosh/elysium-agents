@@ -5,6 +5,7 @@ from services.socket_emit_services import emit_atlas_response, emit_atlas_respon
 from services.elysium_atlas_services.agent_chat_services import chat_with_agent_v1
 from services.elysium_atlas_services.elysium_atlas_user_plan_services import can_user_send_chat, decrement_user_ai_queries
 from services.elysium_atlas_services.agent_db_operations import get_agent_owner_user_id
+from services.elysium_atlas_services.atlas_chat_session_services import rotate_conversation_id
 
 logger = get_logger()
 
@@ -45,3 +46,22 @@ async def chat_with_agent_controller_v1(chatPayload,user_data, sid = None):
     except Exception as e:
         logger.error(f"Error in chat_with_agent_v1: {e}")
         return {"success":False,"message": "An error occurred while processing the chat."}
+
+
+async def rotate_conversation_id_controller(requestData: dict):
+    try:
+        agent_id = requestData.get("agent_id")
+        chat_session_id = requestData.get("chat_session_id")
+
+        if not agent_id or not chat_session_id:
+            return {"success": False, "message": "agent_id and chat_session_id are required"}
+
+        result = await rotate_conversation_id(agent_id, chat_session_id)
+        if not result:
+            return {"success": False, "message": "Chat session not found or could not be updated"}
+
+        return {"success": True, "message": "Conversation ID rotated successfully", "data": result}
+
+    except Exception as e:
+        logger.error(f"Error in rotate_conversation_id_controller: {e}")
+        return {"success": False, "message": "An error occurred while rotating conversation ID"}
