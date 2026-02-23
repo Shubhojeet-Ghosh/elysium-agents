@@ -1,6 +1,6 @@
 [project]
 name = "elysium-agents"
-version = "0.2.51"
+version = "0.2.52"
 description = "A repository to demonstrate the working of AI Agents for Elysium."
 readme = "README.md"
 requires-python = ">=3.11"

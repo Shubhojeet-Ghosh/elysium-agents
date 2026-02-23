@@ -854,7 +854,7 @@ async def update_agent_basic_attributes(agent_id: str, requestData: Dict[str, An
     """
     try:
         # List of basic attributes to update
-        basic_attributes = ["agent_icon", "primary_color", "text_color","secondary_color"]
+        basic_attributes = ["agent_icon", "primary_color", "text_color","secondary_color","welcome_message","placeholder_text"]
         
         updates = {}
         for attr in basic_attributes:
