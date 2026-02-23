@@ -28,7 +28,7 @@ async def get_user_plan(user_id: str) -> Optional[Dict[str, Any]]:
     try:
         logger.info(f"Fetching plan for user_id: {user_id}")
         collection = get_collection("atlas_user_plans")
-        plan = await collection.find_one({"user_id": user_id})
+        plan = await collection.find_one({"user_id": user_id, "is_active": True})
         if plan:
             logger.info(f"Plan found for user_id: {user_id} - plan_id: {plan.get('plan_id')}, status: {plan.get('status')}")
         else:
@@ -49,7 +49,7 @@ async def mark_user_plan_expired(user_id: str) -> None:
     try:
         collection = get_collection("atlas_user_plans")
         await collection.update_one(
-            {"user_id": user_id},
+            {"user_id": user_id, "is_active": True},
             {"$set": {"status": "expired", "updatedAt": datetime.now(timezone.utc)}}
         )
         logger.info(f"Marked plan as expired for user_id: {user_id}")
