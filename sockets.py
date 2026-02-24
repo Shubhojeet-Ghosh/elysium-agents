@@ -87,10 +87,14 @@ async def disconnect(sid):
         
         # Check if it's a visitor and remove from agent Redis
         agent_id = session.get("agent_id") if session else None
+        chat_session_id = session.get("chat_session_id") if session else None
         if agent_id:
             logger.info(f"Removing visitor socket {sid} from agent {agent_id} visitors")
             from services.elysium_atlas_services.atlas_redis_services import remove_visitor_from_agent
+            from services.elysium_atlas_services.atlas_chat_session_services import set_visitor_online_status
             remove_visitor_from_agent(agent_id, sid)
+            if chat_session_id:
+                await set_visitor_online_status(agent_id, chat_session_id, False)
         
         remove_socket_connection(sid)
         logger.info(f"Client disconnected: {sid}.")
@@ -112,10 +116,11 @@ async def handle_atlas_visitor_message(sid,socketData):
 @sio.on("atlas-visitor-connected")
 async def handle_atlas_visitor_connected(sid, socketData):
     
-    # Save agent_id to session for disconnect handling
+    # Save agent_id and chat_session_id to session for disconnect handling
     agent_id = socketData.get("agent_id")
+    chat_session_id = socketData.get("chat_session_id")
     if agent_id:
-        logger.info(f"Saving agent_id {agent_id} to session for socket {sid}")
-        await sio.save_session(sid, {"agent_id": agent_id})
+        logger.info(f"Saving agent_id {agent_id} and chat_session_id {chat_session_id} to session for socket {sid}")
+        await sio.save_session(sid, {"agent_id": agent_id, "chat_session_id": chat_session_id})
 
     await handle_atlas_visitor_connected_service(socketData, sid)

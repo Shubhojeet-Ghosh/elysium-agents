@@ -1,5 +1,6 @@
 from logging_config import get_logger
 from services.elysium_atlas_services.atlas_redis_services import add_visitor_to_agent, get_visitors_for_agent, get_visitor_count_for_agent, remove_visitor_from_agent
+from services.elysium_atlas_services.atlas_chat_session_services import set_visitor_online_status
 
 logger = get_logger()
 
@@ -14,6 +15,9 @@ async def handle_visitor_connection(agent_id, chat_session_id, sid):
     
     # Add visitor to Redis
     add_visitor_to_agent(agent_id, chat_session_id, sid)
+
+    # Mark visitor as online in the chat session document
+    await set_visitor_online_status(agent_id, chat_session_id, True)
     
     # # Get and log all visitors for testing
     # visitors = get_visitors_for_agent(agent_id)

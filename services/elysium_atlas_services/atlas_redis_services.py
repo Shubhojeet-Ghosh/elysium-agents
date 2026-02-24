@@ -38,6 +38,7 @@ def add_visitor_to_agent(agent_id, chat_session_id, sid=None):
             "chat_session_id": chat_session_id,
             "created_at": now.isoformat(),
             "last_message_at": None,
+            "last_connected_at": now.isoformat(timespec="milliseconds"),
             "sid": sid,
             "alias_name": None
         }

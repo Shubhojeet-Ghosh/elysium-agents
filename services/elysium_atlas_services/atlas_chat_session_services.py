@@ -68,6 +68,18 @@ async def get_chat_session_data(requestData: Dict[str, Any]) -> Dict[str, Any] |
                         {"$set": {"visitor_at": visitor_at}}
                     )
                 asyncio.create_task(update_visitor())
+
+            # Update source if provided and truthy
+            source = requestData.get("source")
+            if source:
+                document["source"] = source
+                # Update in DB asynchronously
+                async def update_source(src=source, doc_id=document["_id"]):
+                    await collection.update_one(
+                        {"_id": ObjectId(doc_id)},
+                        {"$set": {"source": src}}
+                    )
+                asyncio.create_task(update_source())
             
             # Retrieve messages for the session, scoped to the current conversation
             messages = await get_chat_messages_for_session(
@@ -98,6 +110,7 @@ async def get_chat_session_data(requestData: Dict[str, Any]) -> Dict[str, Any] |
                 "conversation_id": str(uuid.uuid4()),
                 "created_at": datetime.datetime.now(datetime.timezone.utc),
                 "last_message_at": datetime.datetime.now(datetime.timezone.utc),
+                "last_connected_at": None,
             }
             visitor_at = requestData.get("visitor_at")
             if visitor_at:
@@ -510,3 +523,49 @@ async def enhance_user_message(message: str, chat_history: List[Dict[str, Any]],
     except Exception as e:
         logger.error(f"Error in enhance_user_message: {str(e)}")
         return message
+
+
+async def set_visitor_online_status(agent_id: str, chat_session_id: str, visitor_online: bool) -> bool:
+    """
+    Set the visitor_online field on an atlas_chat_sessions document.
+
+    Args:
+        agent_id: The agent identifier.
+        chat_session_id: The chat session identifier.
+        visitor_online: True to mark the visitor as online, False for offline.
+
+    Returns:
+        True if the document was found and updated, False otherwise.
+    """
+    try:
+        if not agent_id or not chat_session_id:
+            logger.warning("agent_id and chat_session_id are required to set visitor_online status")
+            return False
+
+        collection = get_collection("atlas_chat_sessions")
+
+        update_fields: Dict[str, Any] = {"visitor_online": visitor_online}
+        if visitor_online:
+            update_fields["last_connected_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="milliseconds")
+
+        result = await collection.update_one(
+            {"chat_session_id": chat_session_id, "agent_id": agent_id},
+            {"$set": update_fields}
+        )
+
+        if result.matched_count == 0:
+            logger.warning(
+                f"No chat session found to update visitor_online for "
+                f"chat_session_id={chat_session_id} agent_id={agent_id}"
+            )
+            return False
+
+        logger.info(
+            f"Set visitor_online={visitor_online} for "
+            f"chat_session_id={chat_session_id} agent_id={agent_id}"
+        )
+        return True
+
+    except Exception as e:
+        logger.error(f"Error in set_visitor_online_status: {str(e)}")
+        return False
