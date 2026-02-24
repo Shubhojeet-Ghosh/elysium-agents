@@ -1,28 +1,39 @@
 from typing import Dict, Any, List
+from fastapi.responses import JSONResponse
+
 from logging_config import get_logger
 from services.elysium_atlas_services.atlas_redis_services import get_visitor_count_for_agent
+from services.elysium_atlas_services.agent_db_operations import get_agent_ids_by_owner_user_id
 
 logger = get_logger()
 
 
-async def get_agents_visitor_counts_controller(requestData: Dict[str, Any]) -> Dict[str, Any]:
+async def get_agents_visitor_counts_controller(userData: Dict[str, Any]) -> Dict[str, Any]:
     """
     Controller to get online visitor counts for a list of agent_ids.
 
     Args:
-        requestData: Must contain 'agent_ids' (list of agent ID strings).
+        userData: Must contain 'user_id' (string).
 
     Returns:
         Dict with visitor counts per agent.
     """
     try:
-        agent_ids: List[str] = requestData.get("agent_ids", [])
+
+        if userData is None or userData.get("success") == False:
+            return JSONResponse(status_code=401, content={"success": False, "message": userData.get("message")})
+        
+        logger.info(f"User data: {userData}")
+
+        user_id = userData.get("user_id")
+
+        agent_ids: List[str] = await get_agent_ids_by_owner_user_id(user_id)
 
         if not agent_ids:
-            return {"success": False, "message": "agent_ids list is required"}
+            return {"success": True, "visitor_counts": {}}
 
-        print(f"agent_ids received: {agent_ids}")
-
+        logger.info(f"agent_ids for user_id {user_id}: {agent_ids}")
+    
         visitor_counts = {}
         for agent_id in agent_ids:
             count = get_visitor_count_for_agent(agent_id)

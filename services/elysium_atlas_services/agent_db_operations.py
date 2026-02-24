@@ -50,6 +50,27 @@ async def get_agent_by_id(agent_id: str) -> Dict[str, Any] | None:
         return None
 
 
+async def get_agent_ids_by_owner_user_id(user_id: str) -> list[str]:
+    """
+    Retrieve all agent _ids (as strings) from atlas_agents where owner_user_id matches user_id.
+
+    Args:
+        user_id: The user ID to look up as owner_user_id.
+
+    Returns:
+        List of agent ID strings.
+    """
+    try:
+        collection = get_collection("atlas_agents")
+        cursor = collection.find({"owner_user_id": user_id}, {"_id": 1})
+        agent_ids = [str(doc["_id"]) async for doc in cursor]
+        logger.info(f"Found {len(agent_ids)} agents for user_id: {user_id}")
+        return agent_ids
+    except Exception as e:
+        logger.error(f"Error fetching agent_ids for user_id {user_id}: {e}")
+        return []
+
+
 async def get_agent_owner_user_id(agent_id: str) -> str | None:
     """
     Retrieve only the owner_user_id for a given agent_id from atlas_agents.
