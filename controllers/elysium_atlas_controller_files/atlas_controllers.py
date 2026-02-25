@@ -24,6 +24,7 @@ async def pre_build_agent_operations_controller(requestData: Dict[str, Any],user
         # logger.info(f"User data: {userData}")
 
         user_id = userData.get("user_id")
+        team_id = userData.get("team_id")
 
         plan_check = await can_user_build_agent(user_id, requestData)
         if not plan_check.get("success"):
@@ -32,6 +33,7 @@ async def pre_build_agent_operations_controller(requestData: Dict[str, Any],user
         initial_data = ELYSIUM_ATLAS_AGENT_CONFIG_DATA.get("agent_init_config")
         
         initial_data["owner_user_id"] = user_id
+        initial_data["team_id"] = team_id
 
         if requestData.get("agent_name") is not None:
             agent_exists = await check_agent_name_exists(user_id, requestData.get("agent_name"))

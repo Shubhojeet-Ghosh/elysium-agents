@@ -21,7 +21,7 @@ async def generate_presigned_urls_route_v1(requestData: Dict[str, Any],user: dic
     return await generate_presigned_url_controller(requestData,user)
 
 # Async POST method to build the agent
-@elysium_atlas_agent_router.post("/v1/build-agent")
+@elysium_atlas_agent_router.post("/v2/build-agent")
 async def build_update_agent_route_v1(requestData: Dict[str, Any],user: dict = Depends(authorize_user),background_tasks: BackgroundTasks = BackgroundTasks()):
     return await build_update_agent_controller_v1(requestData,user,background_tasks)
 

@@ -141,6 +141,138 @@ def get_visitor_count_for_agent(agent_id):
         logger.error(f"Error getting visitor count for agent {agent_id}: {e}")
         return None
 
+def add_team_member(team_id, user_id, agent_id, sid):
+    """
+    Add or update a team member in the team's members hash in Redis.
+
+    The data is stored in a Redis hash with key: atlas_team_{team_id}_members
+    Each field is a sid (socket ID), and the value is a JSON string of team member data.
+
+    Example structure in Redis:
+    Key: atlas_team_456_members
+    Fields:
+        "socket123": '{"team_id": "456", "user_id": "user1", "agent_id": "123", "connected_at": "2026-01-01T00:00:00+00:00", "sid": "socket123"}'
+
+    Args:
+        team_id (str): The team ID
+        user_id (str): The user ID
+        agent_id (str): The agent ID
+        sid (str): Socket ID (cannot be None)
+
+    Returns:
+        bool: True if successful, None if error
+    """
+    try:
+        if sid is None:
+            logger.error("sid cannot be None")
+            return None
+        client = get_redis_client()
+        key = f"atlas_team_{team_id}_members"
+        now = datetime.datetime.now(datetime.timezone.utc)
+        team_member_data = {
+            "team_id": team_id,
+            "user_id": user_id,
+            "agent_id": agent_id,
+            "connected_at": now.isoformat(timespec="milliseconds"),
+            "sid": sid
+        }
+        client.hset(key, sid, json.dumps(team_member_data))
+        logger.info(f"Added team member {user_id} (sid: {sid}) to team {team_id} members hash")
+        return True
+    except Exception as e:
+        logger.error(f"Error adding team member to team {team_id}: {e}")
+        return None
+
+def remove_team_member(team_id, sid):
+    """
+    Remove a team member from the team's members hash in Redis.
+
+    Args:
+        team_id (str): The team ID
+        sid (str): The socket ID to remove
+
+    Returns:
+        bool: True if successful, None if error
+    """
+    try:
+        client = get_redis_client()
+        key = f"atlas_team_{team_id}_members"
+        result = client.hdel(key, sid)
+        if result:
+            logger.info(f"Removed team member with sid {sid} from team {team_id} members hash")
+        else:
+            logger.info(f"Team member with sid {sid} was not found in team {team_id} members hash")
+        return True
+    except Exception as e:
+        logger.error(f"Error removing team member from team {team_id}: {e}")
+        return None
+
+def remove_agent_member(agent_id, sid):
+    """
+    Remove a member from the agent's members hash in Redis.
+
+    Args:
+        agent_id (str): The agent ID
+        sid (str): The socket ID to remove
+
+    Returns:
+        bool: True if successful, None if error
+    """
+    try:
+        client = get_redis_client()
+        key = f"agent_{agent_id}_members"
+        result = client.hdel(key, sid)
+        if result:
+            logger.info(f"Removed member with sid {sid} from agent {agent_id} members hash")
+        else:
+            logger.info(f"Member with sid {sid} was not found in agent {agent_id} members hash")
+        return True
+    except Exception as e:
+        logger.error(f"Error removing member from agent {agent_id}: {e}")
+        return None
+
+def add_agent_member(agent_id, team_id, user_id, sid):
+    """
+    Add or update a team member in the agent's members hash in Redis.
+
+    The data is stored in a Redis hash with key: agent_{agent_id}_members
+    Each field is a sid (socket ID), and the value is a JSON string of member data.
+
+    Example structure in Redis:
+    Key: agent_999_members
+    Fields:
+        "socket123": '{"agent_id": "agent_999", "team_id": "team_abc", "user_id": "user_001", "connected_at": "2026-01-01T00:00:00.000+00:00", "sid": "socket123"}'
+
+    Args:
+        agent_id (str): The agent ID
+        team_id (str): The team ID
+        user_id (str): The user ID
+        sid (str): Socket ID (cannot be None)
+
+    Returns:
+        bool: True if successful, None if error
+    """
+    try:
+        if sid is None:
+            logger.error("sid cannot be None")
+            return None
+        client = get_redis_client()
+        key = f"agent_{agent_id}_members"
+        now = datetime.datetime.now(datetime.timezone.utc)
+        agent_member_data = {
+            "agent_id": agent_id,
+            "team_id": team_id,
+            "user_id": user_id,
+            "connected_at": now.isoformat(timespec="milliseconds"),
+            "sid": sid
+        }
+        client.hset(key, sid, json.dumps(agent_member_data))
+        logger.info(f"Added member {user_id} (sid: {sid}) to agent {agent_id} members hash")
+        return True
+    except Exception as e:
+        logger.error(f"Error adding member to agent {agent_id}: {e}")
+        return None
+
 def update_visitor_alias(agent_id, sid, alias_name):
     """
     Update the alias_name for a specific visitor.

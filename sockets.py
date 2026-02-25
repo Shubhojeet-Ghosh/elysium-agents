@@ -17,7 +17,7 @@ from services.socket_connection_helpers import (
     remove_user_socket_mapping,
     get_user_id_from_user_data
 )
-from services.elysium_atlas_services.atlas_visitor_socket_services import handle_atlas_visitor_connected_service
+from services.elysium_atlas_services.atlas_visitor_socket_services import handle_atlas_visitor_connected_service, handle_atlas_team_member_connected_service, handle_team_member_disconnected_service
 
 logger = get_logger()
 
@@ -95,6 +95,11 @@ async def disconnect(sid):
             remove_visitor_from_agent(agent_id, sid)
             if chat_session_id:
                 await set_visitor_online_status(agent_id, chat_session_id, False)
+
+        # Check if it's a team member and remove from team/agent Redis
+        team_id = session.get("team_id") if session else None
+        if team_id:
+            await handle_team_member_disconnected_service(session, sid)
         
         remove_socket_connection(sid)
         logger.info(f"Client disconnected: {sid}.")
@@ -124,3 +129,15 @@ async def handle_atlas_visitor_connected(sid, socketData):
         await sio.save_session(sid, {"agent_id": agent_id, "chat_session_id": chat_session_id})
 
     await handle_atlas_visitor_connected_service(socketData, sid)
+
+# Handle 'atlas-team-member-connected' event
+@sio.on("atlas-team-member-connected")
+async def handle_atlas_team_member_connected(sid, socketData):
+    team_id = socketData.get("team_id")
+    user_id = socketData.get("user_id")
+    agent_id = socketData.get("agent_id")
+
+    logger.info(f"Saving team_id {team_id}, user_id {user_id}, and agent_id {agent_id} to session for socket {sid}")
+    await sio.save_session(sid, {"team_id": team_id, "user_id": user_id, "agent_id": agent_id})
+
+    await handle_atlas_team_member_connected_service(socketData, sid)
