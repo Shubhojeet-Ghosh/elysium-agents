@@ -5,6 +5,89 @@ from logging_config import get_logger
 
 logger = get_logger()
 
+def get_or_cache_agent_data(agent_id):
+    """
+    Get agent data from Redis cache, or fetch from MongoDB and cache for 24 hours.
+
+    The data is stored under key: agent_{agent_id}_data
+    Value: {"agent_name": ..., "owner_user_id": ..., "team_id": ...}
+
+    Args:
+        agent_id (str): The agent ID
+
+    Returns:
+        dict | None: Agent data if found/cached, None if not found or error
+    """
+    try:
+        client = get_redis_client()
+        key = f"agent_{agent_id}_data"
+        cached = client.get(key)
+        if cached:
+            logger.info(f"Cache hit for agent data: {agent_id}")
+            return json.loads(cached)
+
+        # Not in cache — fetch from MongoDB
+        import asyncio
+        from services.elysium_atlas_services.agent_db_operations import get_agent_by_id
+        agent = asyncio.get_event_loop().run_until_complete(get_agent_by_id(agent_id))
+        if not agent:
+            logger.warning(f"Agent not found in DB for agent_id: {agent_id}")
+            return None
+
+        agent_data = {
+            "agent_name": agent.get("agent_name"),
+            "owner_user_id": agent.get("owner_user_id"),
+            "team_id": agent.get("team_id")
+        }
+        client.set(key, json.dumps(agent_data), ex=86400)  # 24 hours
+        logger.info(f"Cached agent data for agent_id: {agent_id}")
+        return agent_data
+
+    except Exception as e:
+        logger.error(f"Error getting/caching agent data for agent_id {agent_id}: {e}")
+        return None
+
+async def get_or_cache_agent_data_async(agent_id):
+    """
+    Async version: Get agent data from Redis cache, or fetch from MongoDB and cache for 24 hours.
+
+    The data is stored under key: agent_{agent_id}_data
+    Value: {"agent_name": ..., "owner_user_id": ..., "team_id": ...}
+
+    Args:
+        agent_id (str): The agent ID
+
+    Returns:
+        dict | None: Agent data if found/cached, None if not found or error
+    """
+    try:
+        client = get_redis_client()
+        key = f"agent_{agent_id}_data"
+        cached = client.get(key)
+        if cached:
+            logger.info(f"Cache hit for agent data: {agent_id}")
+            return json.loads(cached)
+
+        # Not in cache — fetch from MongoDB
+        from services.elysium_atlas_services.agent_db_operations import get_agent_by_id
+        agent = await get_agent_by_id(agent_id)
+        if not agent:
+            logger.warning(f"Agent not found in DB for agent_id: {agent_id}")
+            return None
+
+        agent_data = {
+            "agent_name": agent.get("agent_name"),
+            "owner_user_id": agent.get("owner_user_id"),
+            "team_id": agent.get("team_id")
+        }
+        client.set(key, json.dumps(agent_data), ex=86400)  # 24 hours
+        logger.info(f"Cached agent data for agent_id: {agent_id}")
+        return agent_data
+
+    except Exception as e:
+        logger.error(f"Error getting/caching agent data for agent_id {agent_id}: {e}")
+        return None
+
 def add_visitor_to_agent(agent_id, chat_session_id, sid=None):
     """
     Add or update a visitor in the agent's visitors hash in Redis.

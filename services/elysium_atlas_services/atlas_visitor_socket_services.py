@@ -1,5 +1,5 @@
 from logging_config import get_logger
-from services.elysium_atlas_services.atlas_redis_services import add_visitor_to_agent, get_visitors_for_agent, get_visitor_count_for_agent, remove_visitor_from_agent, add_team_member, add_agent_member, remove_team_member, remove_agent_member
+from services.elysium_atlas_services.atlas_redis_services import add_visitor_to_agent, get_visitors_for_agent, get_visitor_count_for_agent, remove_visitor_from_agent, add_team_member, add_agent_member, remove_team_member, remove_agent_member, get_or_cache_agent_data_async
 from services.elysium_atlas_services.atlas_chat_session_services import set_visitor_online_status
 
 logger = get_logger()
@@ -18,14 +18,20 @@ async def handle_visitor_connection(agent_id, chat_session_id, sid):
 
     # Mark visitor as online in the chat session document
     await set_visitor_online_status(agent_id, chat_session_id, True)
-    
-    # # Get and log all visitors for testing
-    # visitors = get_visitors_for_agent(agent_id)
-    # logger.info(f"All visitors for agent {agent_id}: {visitors['visitors']}")
-    
-    # # Get visitor count
-    # count = get_visitor_count_for_agent(agent_id)
-    # logger.info(f"Visitor count for agent {agent_id}: {count}")
+
+    # Emit updated visitor count to the agent's team room if agent data is cached/available
+    agent_data = await get_or_cache_agent_data_async(agent_id)
+    if agent_data:
+        team_id = agent_data.get("team_id")
+        if team_id:
+            visitor_count = get_visitor_count_for_agent(agent_id)
+            team_room = f"team_{team_id}_members"
+            await sio.emit(
+                "agent_visitor_count_updated",
+                {"agent_id": agent_id, "visitor_count": visitor_count if visitor_count is not None else 0},
+                room=team_room
+            )
+            logger.info(f"Emitted agent_visitor_count_updated to room {team_room} for agent {agent_id}: {visitor_count}")
 
 async def handle_atlas_visitor_connected_service(socketData, sid=None):
     try:

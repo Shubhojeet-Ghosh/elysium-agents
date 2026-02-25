@@ -5,6 +5,7 @@
     "atlas_{{agent_id}}_visitors",
     "atlas:agent_owner:{{agent_id}}",
     "atlas_team_{{team_id}}_members",
-    "agent_{{agent_id}}_members"
+    "agent_{{agent_id}}_members",
+    "agent_{{agent_id}}_data"
   ]
 }

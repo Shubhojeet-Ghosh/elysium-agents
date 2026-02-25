@@ -90,11 +90,25 @@ async def disconnect(sid):
         chat_session_id = session.get("chat_session_id") if session else None
         if agent_id:
             logger.info(f"Removing visitor socket {sid} from agent {agent_id} visitors")
-            from services.elysium_atlas_services.atlas_redis_services import remove_visitor_from_agent
+            from services.elysium_atlas_services.atlas_redis_services import remove_visitor_from_agent, get_visitor_count_for_agent, get_or_cache_agent_data_async
             from services.elysium_atlas_services.atlas_chat_session_services import set_visitor_online_status
             remove_visitor_from_agent(agent_id, sid)
             if chat_session_id:
                 await set_visitor_online_status(agent_id, chat_session_id, False)
+
+            # Emit updated visitor count to the agent's team room
+            agent_data = await get_or_cache_agent_data_async(agent_id)
+            if agent_data:
+                team_id = agent_data.get("team_id")
+                if team_id:
+                    visitor_count = get_visitor_count_for_agent(agent_id)
+                    team_room = f"team_{team_id}_members"
+                    await sio.emit(
+                        "agent_visitor_count_updated",
+                        {"agent_id": agent_id, "visitor_count": visitor_count if visitor_count is not None else 0},
+                        room=team_room
+                    )
+                    logger.info(f"Emitted agent_visitor_count_updated to room {team_room} for agent {agent_id}: {visitor_count}")
 
         # Check if it's a team member and remove from team/agent Redis
         team_id = session.get("team_id") if session else None
