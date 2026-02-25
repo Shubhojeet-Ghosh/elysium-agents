@@ -55,12 +55,6 @@ async def build_update_agent_controller_v1(requestData,userData,background_tasks
             return JSONResponse(status_code=401, content={"success": False, "message": userData.get("message")})
         
         logger.info(f"User data: {userData}")
-
-        user_id = userData.get("user_id")
-
-        plan_check = await can_user_build_agent(user_id, requestData)
-        if not plan_check.get("success"):
-            return JSONResponse(status_code=403, content={"success": False, "message": plan_check.get("message")})
         
         agent_id = requestData.get("agent_id")
         if not agent_id:
