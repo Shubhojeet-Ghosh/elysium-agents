@@ -17,7 +17,7 @@ from services.socket_connection_helpers import (
     remove_user_socket_mapping,
     get_user_id_from_user_data
 )
-from services.elysium_atlas_services.atlas_visitor_socket_services import handle_atlas_visitor_connected_service, handle_atlas_team_member_connected_service, handle_team_member_disconnected_service
+from services.elysium_atlas_services.atlas_visitor_socket_services import handle_atlas_visitor_connected_service, handle_atlas_team_member_connected_service, handle_team_member_disconnected_service, emit_agent_visitors_list
 
 logger = get_logger()
 
@@ -97,6 +97,7 @@ async def disconnect(sid):
                 await set_visitor_online_status(agent_id, chat_session_id, False)
 
             # Emit updated visitor count to the agent's team room
+            # and notify agent members of the specific visitor that disconnected
             agent_data = await get_or_cache_agent_data_async(agent_id)
             if agent_data:
                 team_id = agent_data.get("team_id")
@@ -109,6 +110,15 @@ async def disconnect(sid):
                         room=team_room
                     )
                     logger.info(f"Emitted agent_visitor_count_updated to room {team_room} for agent {agent_id}: {visitor_count}")
+
+            # Notify team members scoped to this agent that a specific visitor disconnected
+            agent_members_room = f"agent_{agent_id}_members"
+            await sio.emit(
+                "agent_visitor_disconnected",
+                {"agent_id": agent_id, "chat_session_id": chat_session_id, "sid": sid},
+                room=agent_members_room
+            )
+            logger.info(f"Emitted agent_visitor_disconnected to room {agent_members_room} for agent {agent_id}, chat_session_id {chat_session_id}, sid {sid}")
 
         # Check if it's a team member and remove from team/agent Redis
         team_id = session.get("team_id") if session else None
@@ -155,3 +165,20 @@ async def handle_atlas_team_member_connected(sid, socketData):
     await sio.save_session(sid, {"team_id": team_id, "user_id": user_id, "agent_id": agent_id})
 
     await handle_atlas_team_member_connected_service(socketData, sid)
+
+# Handle 'atlas-agent-visitors-list' event - fetch paginated visitors for an agent
+@sio.on("atlas-agent-visitors-list")
+async def handle_atlas_agent_visitors_list(sid, socketData):
+    try:
+        agent_id = socketData.get("agent_id")
+        page = socketData.get("page", 1)
+        limit = socketData.get("limit", 100)
+
+        if not agent_id:
+            logger.warning(f"atlas-agent-visitors-list received without agent_id from socket {sid}")
+            return
+
+        logger.info(f"Event 'atlas-agent-visitors-list' received from socket {sid} for agent {agent_id} (page {page}, limit {limit})")
+        await emit_agent_visitors_list(agent_id, sid, page=page, limit=limit)
+    except Exception as e:
+        logger.error(f"Error handling atlas-agent-visitors-list for socket {sid}: {e}")

@@ -132,21 +132,23 @@ def add_visitor_to_agent(agent_id, chat_session_id, sid=None):
         logger.error(f"Error adding visitor to agent: {e}")
         return None
 
-def get_visitors_for_agent(agent_id, page=1, size=10):
+def get_visitors_for_agent(agent_id, page=1, size=100):
     """
-    Get a paginated list of visitors connected to the agent.
+    Get a paginated list of visitors connected to the agent, sorted by last_connected_at descending (latest first).
     
     Args:
         agent_id (str): The agent ID
         page (int): Page number (1-based)
-        size (int): Number of visitors per page
+        size (int): Number of visitors per page (default: 100)
         
     Returns:
         dict: {
-            'visitors': list of visitor dictionaries,
+            'visitors': list of visitor dictionaries (sorted latest first),
             'total': total number of visitors,
             'page': current page,
-            'size': page size
+            'size': page size,
+            'has_next': bool indicating if there are more pages,
+            'has_prev': bool indicating if there are previous pages
         }
     """
     try:
@@ -157,6 +159,12 @@ def get_visitors_for_agent(agent_id, page=1, size=10):
         for sid, data in visitors.items():
             visitor_list.append(json.loads(data))
         
+        # Sort by last_connected_at descending (latest first), fall back to created_at
+        def sort_key(v):
+            ts = v.get("last_connected_at") or v.get("created_at") or ""
+            return ts
+        visitor_list.sort(key=sort_key, reverse=True)
+
         total = len(visitor_list)
         start = (page - 1) * size
         end = start + size
@@ -167,7 +175,9 @@ def get_visitors_for_agent(agent_id, page=1, size=10):
             'visitors': paginated_visitors,
             'total': total,
             'page': page,
-            'size': size
+            'size': size,
+            'has_next': end < total,
+            'has_prev': page > 1
         }
     except Exception as e:
         logger.error(f"Error getting visitors for agent {agent_id}: {e}")

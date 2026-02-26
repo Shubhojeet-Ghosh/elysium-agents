@@ -63,7 +63,38 @@ async def handle_team_member_connection(team_id, user_id, agent_id, sid):
         await sio.emit("agents_visitor_counts", visitor_counts_data, to=sid)
         logger.info(f"Emitted agents_visitor_counts to socket {sid} for user_id {user_id}")
 
-async def handle_agent_member_connection(agent_id, team_id, user_id, sid):
+async def emit_agent_visitors_list(agent_id, sid, page=1, limit=100):
+    """
+    Fetch a paginated visitors list for the given agent from Redis and emit
+    'agent_visitors_list' to the specified socket.
+
+    Args:
+        agent_id (str): The agent ID
+        sid (str): Target socket ID
+        page (int): Page number (1-based, default: 1)
+        limit (int): Number of visitors per page (default: 100)
+    """
+    from sockets import sio
+    visitors_data = get_visitors_for_agent(agent_id, page=page, size=limit)
+    if visitors_data is not None:
+        await sio.emit(
+            "agent_visitors_list",
+            {
+                "agent_id": agent_id,
+                "visitors": visitors_data["visitors"],
+                "total": visitors_data["total"],
+                "page": visitors_data["page"],
+                "size": visitors_data["size"],
+                "has_next": visitors_data["has_next"],
+                "has_prev": visitors_data["has_prev"]
+            },
+            to=sid
+        )
+        logger.info(f"Emitted agent_visitors_list to socket {sid} for agent {agent_id}: {len(visitors_data['visitors'])} visitors (page {page}, limit {limit}, total {visitors_data['total']})")
+    else:
+        logger.warning(f"Could not retrieve visitors for agent {agent_id} to emit to socket {sid}")
+
+async def handle_agent_member_connection(agent_id, team_id, user_id, sid, page=1, limit=100):
     from sockets import sio
     room_name = f"agent_{agent_id}_members"
     await sio.enter_room(sid, room_name)
@@ -72,17 +103,22 @@ async def handle_agent_member_connection(agent_id, team_id, user_id, sid):
     # Add agent member to Redis (by agent)
     add_agent_member(agent_id, team_id, user_id, sid)
 
+    # Emit the latest visitors for this agent to the newly connected team member
+    await emit_agent_visitors_list(agent_id, sid, page=page, limit=limit)
+
 async def handle_atlas_team_member_connected_service(socketData, sid=None):
     try:
         team_id = socketData.get("team_id")
         user_id = socketData.get("user_id")
         agent_id = socketData.get("agent_id")
+        page = socketData.get("page", 1)
+        limit = socketData.get("limit", 100)
 
         if team_id and sid:
             await handle_team_member_connection(team_id, user_id, agent_id, sid)
 
         if agent_id and sid:
-            await handle_agent_member_connection(agent_id, team_id, user_id, sid)
+            await handle_agent_member_connection(agent_id, team_id, user_id, sid, page=page, limit=limit)
 
     except Exception as e:
         logger.error(f"Error handling atlas team member connected: {e}")
