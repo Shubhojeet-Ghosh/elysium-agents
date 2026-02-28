@@ -127,7 +127,7 @@ def add_visitor_to_agent(agent_id, chat_session_id, sid=None):
         }
         client.hset(key, sid, json.dumps(visitor_data))
         logger.info(f"Added visitor {chat_session_id} to agent {agent_id} visitors hash")
-        return True
+        return visitor_data
     except Exception as e:
         logger.error(f"Error adding visitor to agent: {e}")
         return None

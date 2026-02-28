@@ -13,11 +13,26 @@ async def handle_visitor_connection(agent_id, chat_session_id, sid):
     # Save agent_id and chat_session_id in session
     await sio.save_session(sid, {"agent_id": agent_id, "chat_session_id": chat_session_id})
     
-    # Add visitor to Redis
-    add_visitor_to_agent(agent_id, chat_session_id, sid)
+    # Add visitor to Redis (returns the visitor data dict)
+    visitor_data = add_visitor_to_agent(agent_id, chat_session_id, sid)
 
     # Mark visitor as online in the chat session document
     await set_visitor_online_status(agent_id, chat_session_id, True)
+
+    # Broadcast new visitor to all team members connected to this agent
+    agent_members_room = f"agent_{agent_id}_members"
+    if visitor_data:
+        visitor_count = get_visitor_count_for_agent(agent_id)
+        await sio.emit(
+            "agent_new_visitor",
+            {
+                "agent_id": agent_id,
+                "visitor": visitor_data,
+                "total": visitor_count if visitor_count is not None else 0
+            },
+            room=agent_members_room
+        )
+        logger.info(f"Emitted agent_new_visitor to room {agent_members_room} for agent {agent_id}, chat_session_id {chat_session_id}")
 
     # Emit updated visitor count to the agent's team room if agent data is cached/available
     agent_data = await get_or_cache_agent_data_async(agent_id)
