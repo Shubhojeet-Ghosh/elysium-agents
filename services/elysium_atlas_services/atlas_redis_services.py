@@ -123,7 +123,8 @@ def add_visitor_to_agent(agent_id, chat_session_id, sid=None):
             "last_message_at": None,
             "last_connected_at": now.isoformat(timespec="milliseconds"),
             "sid": sid,
-            "alias_name": None
+            "alias_name": None,
+            "in_conversation_with": None
         }
         client.hset(key, sid, json.dumps(visitor_data))
         logger.info(f"Added visitor {chat_session_id} to agent {agent_id} visitors hash")
@@ -364,6 +365,60 @@ def add_agent_member(agent_id, team_id, user_id, sid):
         return True
     except Exception as e:
         logger.error(f"Error adding member to agent {agent_id}: {e}")
+        return None
+
+def update_visitor_conversation_status(agent_id, chat_session_id, user_id):
+    """
+    Update in_conversation_with for a visitor identified by chat_session_id.
+
+    Args:
+        agent_id (str): The agent ID
+        chat_session_id (str): The chat session ID
+        user_id (str | None): The team member's user ID (or None to clear)
+
+    Returns:
+        str | None: The visitor's sid if updated, None otherwise
+    """
+    try:
+        client = get_redis_client()
+        key = f"atlas_{agent_id}_visitors"
+        visitors = client.hgetall(key)
+        for sid, data in visitors.items():
+            visitor = json.loads(data)
+            if visitor.get("chat_session_id") == chat_session_id:
+                visitor["in_conversation_with"] = user_id
+                client.hset(key, sid, json.dumps(visitor))
+                logger.info(f"Updated in_conversation_with for visitor {chat_session_id} in agent {agent_id} to {user_id}")
+                return sid
+        logger.warning(f"No visitor found for agent {agent_id} with chat_session_id {chat_session_id}")
+        return None
+    except Exception as e:
+        logger.error(f"Error updating conversation status for agent {agent_id}, chat_session_id {chat_session_id}: {e}")
+        return None
+
+def get_visitor_sid_by_chat_session(agent_id, chat_session_id):
+    """
+    Get the socket ID (sid) for a visitor identified by agent_id and chat_session_id.
+
+    Args:
+        agent_id (str): The agent ID
+        chat_session_id (str): The chat session ID
+
+    Returns:
+        str | None: The socket ID if found, None otherwise
+    """
+    try:
+        client = get_redis_client()
+        key = f"atlas_{agent_id}_visitors"
+        visitors = client.hgetall(key)
+        for sid, data in visitors.items():
+            visitor = json.loads(data)
+            if visitor.get("chat_session_id") == chat_session_id:
+                return sid
+        logger.warning(f"No visitor found for agent {agent_id} with chat_session_id {chat_session_id}")
+        return None
+    except Exception as e:
+        logger.error(f"Error getting visitor sid for agent {agent_id}, chat_session_id {chat_session_id}: {e}")
         return None
 
 def update_visitor_alias(agent_id, sid, alias_name):

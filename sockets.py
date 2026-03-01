@@ -9,6 +9,7 @@ from logging_config import get_logger
 from config.settings import settings
 from middlewares.socket_auth import extract_token_from_socket_environ
 from controllers.elysium_atlas_controller_files.atlas_chat_controllers import chat_with_agent_controller_v1
+from controllers.elysium_atlas_controller_files.atlas_team_member_chat_controllers import chat_with_visitor_controller_v1, team_member_start_conversation_controller, team_member_end_conversation_controller
 
 from services.socket_connection_helpers import (
     add_socket_connection,
@@ -182,3 +183,18 @@ async def handle_atlas_agent_visitors_list(sid, socketData):
         await emit_agent_visitors_list(agent_id, sid, page=page, limit=limit)
     except Exception as e:
         logger.error(f"Error handling atlas-agent-visitors-list for socket {sid}: {e}")
+
+# Handle 'atlas-team-member-message' event - message from team member
+@sio.on("atlas-team-member-message")
+async def handle_atlas_team_member_message(sid, socketData):
+    await chat_with_visitor_controller_v1(sid, socketData)
+
+# Handle 'atlas-team-member-start-conversation' event - team member starts a conversation with a visitor
+@sio.on("atlas-team-member-start-conversation")
+async def handle_atlas_team_member_start_conversation(sid, socketData):
+    await team_member_start_conversation_controller(sid, socketData)
+
+# Handle 'atlas-team-member-end-conversation' event - team member ends a conversation with a visitor
+@sio.on("atlas-team-member-end-conversation")
+async def handle_atlas_team_member_end_conversation(sid, socketData):
+    await team_member_end_conversation_controller(sid, socketData)
