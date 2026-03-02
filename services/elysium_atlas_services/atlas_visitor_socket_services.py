@@ -4,7 +4,7 @@ from services.elysium_atlas_services.atlas_chat_session_services import set_visi
 
 logger = get_logger()
 
-async def handle_visitor_connection(agent_id, chat_session_id, sid):
+async def handle_visitor_connection(agent_id, chat_session_id, sid, geo_data=None):
     from sockets import sio
     room_name = f"agent_{agent_id}_visitors"
     await sio.enter_room(sid, room_name)
@@ -14,7 +14,7 @@ async def handle_visitor_connection(agent_id, chat_session_id, sid):
     await sio.save_session(sid, {"agent_id": agent_id, "chat_session_id": chat_session_id})
     
     # Add visitor to Redis (returns the visitor data dict)
-    visitor_data = add_visitor_to_agent(agent_id, chat_session_id, sid)
+    visitor_data = add_visitor_to_agent(agent_id, chat_session_id, sid, geo_data=geo_data)
 
     # Mark visitor as online in the chat session document
     await set_visitor_online_status(agent_id, chat_session_id, True)
@@ -52,9 +52,10 @@ async def handle_atlas_visitor_connected_service(socketData, sid=None):
     try:
         agent_id = socketData.get("agent_id")
         chat_session_id = socketData.get("chat_session_id")
+        geo_data = socketData.get("geo_data")
         
         if agent_id and sid:
-            await handle_visitor_connection(agent_id, chat_session_id, sid)
+            await handle_visitor_connection(agent_id, chat_session_id, sid, geo_data=geo_data)
 
     except Exception as e:
         logger.error(f"Error handling atlas visitor connected: {e}")

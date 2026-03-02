@@ -88,7 +88,7 @@ async def get_or_cache_agent_data_async(agent_id):
         logger.error(f"Error getting/caching agent data for agent_id {agent_id}: {e}")
         return None
 
-def add_visitor_to_agent(agent_id, chat_session_id, sid=None):
+def add_visitor_to_agent(agent_id, chat_session_id, sid=None, geo_data=None):
     """
     Add or update a visitor in the agent's visitors hash in Redis.
     
@@ -105,6 +105,7 @@ def add_visitor_to_agent(agent_id, chat_session_id, sid=None):
         agent_id (str): The agent ID
         chat_session_id (str): The chat session ID
         sid (str): Socket ID (cannot be None)
+        geo_data (dict | None): Optional geo data (country_name, country_flag, district, ip, time_zone, etc.)
     
     Returns:
         bool: True if successful, None if error
@@ -124,7 +125,8 @@ def add_visitor_to_agent(agent_id, chat_session_id, sid=None):
             "last_connected_at": now.isoformat(timespec="milliseconds"),
             "sid": sid,
             "alias_name": None,
-            "in_conversation_with": None
+            "in_conversation_with": None,
+            "geo_data": geo_data if isinstance(geo_data, dict) else None
         }
         client.hset(key, sid, json.dumps(visitor_data))
         logger.info(f"Added visitor {chat_session_id} to agent {agent_id} visitors hash")
