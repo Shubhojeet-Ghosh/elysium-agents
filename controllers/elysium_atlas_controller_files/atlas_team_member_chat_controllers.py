@@ -1,11 +1,16 @@
 from logging_config import get_logger
+import uuid
+import datetime
+import asyncio
 
 logger = get_logger()
+
 
 async def chat_with_visitor_controller_v1(sid, socketData):
     try:
         from services.elysium_atlas_services.atlas_redis_services import get_visitor_sid_by_chat_session
         from services.elysium_atlas_services.atlas_team_member_emit_services import emit_visitor_message
+        from services.elysium_atlas_services.atlas_chat_session_services import create_and_store_chat_messages
         from sockets import sio
 
         agent_id = socketData.get("agent_id")
@@ -14,16 +19,44 @@ async def chat_with_visitor_controller_v1(sid, socketData):
 
         # Get the team member's user_id from their socket session
         session = await sio.get_session(sid)
-        in_conversation_with = session.get("user_id") if session else None
+        team_member_id = session.get("user_id") if session else None
 
+        if not agent_id or not chat_session_id or message is None:
+            logger.warning("atlas team member message missing agent_id/chat_session_id/message")
+            return {"success": False, "message": "agent_id, chat_session_id and message are required"}
+        
+        message_arrived_at = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+
+        # Build payload for storage (role is 'team-member')
+        message_payload = {
+            "message_id": str(uuid.uuid4()),
+            "role": "human",
+            "content": message,
+            "created_at": message_arrived_at,
+        }
+        if team_member_id:
+            message_payload["team_member_id"] = team_member_id
+
+        # Always store the team-member message asynchronously
+        asyncio.create_task(create_and_store_chat_messages(
+            chat_session_id=chat_session_id,
+            agent_id=agent_id,
+            user_message_payload=None,
+            agent_message_payload=message_payload,
+        ))
+
+        # Attempt to emit to visitor if they're online
         visitor_sid = get_visitor_sid_by_chat_session(agent_id, chat_session_id)
         if visitor_sid:
-            await emit_visitor_message(visitor_sid, agent_id, chat_session_id, message, in_conversation_with)
+            await emit_visitor_message(visitor_sid, agent_id, chat_session_id, message, team_member_id)
         else:
-            logger.warning(f"Visitor not found for agent {agent_id}, chat_session_id {chat_session_id}")
+            logger.warning(f"Visitor not found for agent {agent_id}, chat_session_id {chat_session_id}. Message stored to DB.")
+
+        return {"success": True, "message": "Message stored and emitted if visitor present"}
 
     except Exception as e:
         logger.error(f"Error in chat_with_visitor_controller_v1: {e}")
+        return {"success": False, "message": "An error occurred while handling the team-member message."}
 
 async def team_member_start_conversation_controller(sid, socketData):
     try:
