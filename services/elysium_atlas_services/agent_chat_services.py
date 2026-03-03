@@ -110,9 +110,16 @@ def build_messages_list(agent_data: dict, message: str, knowledge_base_string: s
         })
 
     # --- Chat History ---
+    VALID_ROLES = {"system", "assistant", "user", "function", "tool", "developer"}
     if chat_history:
         for hist_msg in chat_history:
-            role = "assistant" if hist_msg.get("role") == "agent" else hist_msg.get("role", "user")
+            raw_role = hist_msg.get("role", "user")
+            if raw_role in ("agent", "human"):
+                role = "assistant"
+            elif raw_role in VALID_ROLES:
+                role = raw_role
+            else:
+                role = "system"
             messages.append({
                 "role": role,
                 "content": hist_msg.get("content", "")
