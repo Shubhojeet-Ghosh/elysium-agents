@@ -424,6 +424,40 @@ def get_visitor_sid_by_chat_session(agent_id, chat_session_id):
         logger.error(f"Error getting visitor sid for agent {agent_id}, chat_session_id {chat_session_id}: {e}")
         return None
 
+def get_agent_member_sids_by_user_id(agent_id, user_id):
+    """
+    Return all socket IDs (sids) for a team member identified by user_id
+    in the agent's members hash (key: agent_{agent_id}_members).
+
+    Args:
+        agent_id (str): The agent ID
+        user_id (str): The team member's user ID
+
+    Returns:
+        list[str]: List of matching socket IDs, or [] if none found
+    """
+    try:
+        client = get_redis_client()
+        key = f"agent_{agent_id}_members"
+        members = client.hgetall(key)
+        sids = []
+        for sid, data in members.items():
+            try:
+                member = json.loads(data)
+                if member.get("user_id") == user_id:
+                    sids.append(sid if isinstance(sid, str) else sid.decode())
+            except Exception:
+                continue
+        if sids:
+            logger.info(f"Found {len(sids)} socket(s) for user_id {user_id} on agent {agent_id}")
+        else:
+            logger.warning(f"No sockets found for user_id {user_id} on agent {agent_id}")
+        return sids
+    except Exception as e:
+        logger.error(f"Error getting agent member sids for agent {agent_id}, user_id {user_id}: {e}")
+        return []
+
+
 def update_visitor_alias(agent_id, sid, alias_name):
     """
     Update the alias_name for a specific visitor.

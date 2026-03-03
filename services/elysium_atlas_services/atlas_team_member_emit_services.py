@@ -27,6 +27,32 @@ async def emit_visitor_message(visitor_sid, agent_id, chat_session_id, message, 
     )
     logger.info(f"Emitted visitor_message to visitor {chat_session_id} (sid: {visitor_sid}) for agent {agent_id}")
 
+async def emit_team_member_message(team_member_sids, agent_id, chat_session_id, message, chat_session_id_sender):
+    """
+    Emit a visitor's message to one or more team member sockets.
+
+    Args:
+        team_member_sids (list[str]): Socket IDs of the target team member
+        agent_id (str): The agent ID
+        chat_session_id (str): The visitor's chat session ID
+        message (str): The message content
+        chat_session_id_sender (str): Same as chat_session_id, passed for clarity
+    """
+    from sockets import sio
+    payload = {
+        "agent_id": agent_id,
+        "chat_session_id": chat_session_id,
+        "message": message,
+        "sender": "visitor",
+    }
+    for sid in team_member_sids:
+        await sio.emit("message_from_visitor", payload, to=sid)
+    logger.info(
+        f"Emitted message_from_visitor to {len(team_member_sids)} socket(s) "
+        f"for chat_session_id {chat_session_id} agent {agent_id}"
+    )
+
+
 async def emit_conversation_started(visitor_sid, agent_id, chat_session_id, user_id):
     """
     Notify a visitor that a team member has started a conversation with them.

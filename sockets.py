@@ -131,17 +131,6 @@ async def disconnect(sid):
     except Exception as e:
         logger.error(f"Error removing socket connection {sid}: {e}")
 
-
-# Handle 'atlas-visitor-message' event - main chat orchestrator for atlas users
-@sio.on("atlas-visitor-message")
-async def handle_atlas_visitor_message(sid,socketData):
-    logger.info("Event 'atlas-visitor-message' received")
-    session = await sio.get_session(sid)
-    user_data = session.get("user_data") if session else None
-    logger.info(user_data)
-
-    response = await chat_with_agent_controller_v1(socketData, user_data, sid)
-
 # Handle 'atlas-visitor-connected' event
 @sio.on("atlas-visitor-connected")
 async def handle_atlas_visitor_connected(sid, socketData):
@@ -154,6 +143,16 @@ async def handle_atlas_visitor_connected(sid, socketData):
         await sio.save_session(sid, {"agent_id": agent_id, "chat_session_id": chat_session_id})
 
     await handle_atlas_visitor_connected_service(socketData, sid)
+
+# Handle 'atlas-visitor-message' event - main chat orchestrator for atlas users
+@sio.on("atlas-visitor-message")
+async def handle_atlas_visitor_message(sid,socketData):
+    logger.info("Event 'atlas-visitor-message' received")
+    session = await sio.get_session(sid)
+    user_data = session.get("user_data") if session else None
+    logger.info(user_data)
+
+    response = await chat_with_agent_controller_v1(socketData, user_data, sid)
 
 # Handle 'atlas-team-member-connected' event
 @sio.on("atlas-team-member-connected")
