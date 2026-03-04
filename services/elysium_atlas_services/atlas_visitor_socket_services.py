@@ -61,17 +61,39 @@ async def handle_set_visitor_alias_service(socketData, sid):
         logger.error(f"Error in handle_set_visitor_alias_service: {e}")
 
 
+async def _fetch_visitor_alias(agent_id, chat_session_id) -> str | None:
+    """
+    Fetch the persisted alias_name for a visitor from atlas_chat_sessions.
+
+    Returns the stored alias_name string, or None if not set / not found.
+    """
+    try:
+        from services.mongo_services import get_collection
+        collection = get_collection("atlas_chat_sessions")
+        doc = await collection.find_one(
+            {"chat_session_id": chat_session_id, "agent_id": agent_id},
+            {"alias_name": 1, "_id": 0}
+        )
+        return doc.get("alias_name") if doc else None
+    except Exception as e:
+        logger.warning(f"Could not fetch alias_name for {chat_session_id}: {e}")
+        return None
+
+
 async def handle_visitor_connection(agent_id, chat_session_id, sid, geo_data=None, visitor_at=None):
     from sockets import sio
     room_name = f"agent_{agent_id}_visitors"
     await sio.enter_room(sid, room_name)
     logger.info(f"Socket {sid} joined room {room_name} for chat_session_id {chat_session_id}")
-    
+
     # Save agent_id and chat_session_id in session
     await sio.save_session(sid, {"agent_id": agent_id, "chat_session_id": chat_session_id})
-    
+
+    # Fetch existing alias_name so reconnects don't reset it to None
+    alias_name = await _fetch_visitor_alias(agent_id, chat_session_id) if (chat_session_id and agent_id) else None
+
     # Add visitor to Redis (returns the visitor data dict)
-    visitor_data = add_visitor_to_agent(agent_id, chat_session_id, sid, geo_data=geo_data, visitor_at=visitor_at)
+    visitor_data = add_visitor_to_agent(agent_id, chat_session_id, sid, geo_data=geo_data, visitor_at=visitor_at, alias_name=alias_name)
 
     # Mark visitor as online in the chat session document
     await set_visitor_online_status(agent_id, chat_session_id, True)
