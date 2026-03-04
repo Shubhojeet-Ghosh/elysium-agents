@@ -140,6 +140,65 @@ async def handle_atlas_team_member_connected_service(socketData, sid=None):
     except Exception as e:
         logger.error(f"Error handling atlas team member connected: {e}")
 
+async def handle_team_member_explicit_disconnect_service(socketData):
+    """
+    Handle an explicit atlas-team-member-disconnected event.
+
+    - Removes the team member from the team Redis hash and leaves the team room for all their sids.
+    - Removes the team member from the agent Redis hash and leaves the agent members room for all their sids.
+    - Emits 'conversation_ended' to every visitor who was in conversation with this team member,
+      and clears their in_conversation_with field in Redis.
+
+    Args:
+        socketData (dict): Payload containing team_id, user_id, and agent_id.
+    """
+    try:
+        from sockets import sio
+        from services.elysium_atlas_services.atlas_redis_services import (
+            remove_team_members_by_user_id,
+            remove_agent_members_by_user_id,
+            get_visitors_in_conversation_with,
+            update_visitor_conversation_status,
+        )
+        from services.elysium_atlas_services.atlas_team_member_emit_services import emit_conversation_ended
+
+        team_id = socketData.get("team_id")
+        user_id = socketData.get("user_id")
+        agent_id = socketData.get("agent_id")
+
+        # Remove from team Redis and leave the team room for all sids
+        if team_id and user_id:
+            team_sids = remove_team_members_by_user_id(team_id, user_id)
+            team_room = f"team_{team_id}_members"
+            for member_sid in team_sids:
+                await sio.leave_room(member_sid, team_room)
+                logger.info(f"Socket {member_sid} left room {team_room} (explicit disconnect for user_id {user_id})")
+
+        # Remove from agent Redis and leave the agent members room for all sids
+        if agent_id and user_id:
+            agent_sids = remove_agent_members_by_user_id(agent_id, user_id)
+            agent_members_room = f"agent_{agent_id}_members"
+            for member_sid in agent_sids:
+                await sio.leave_room(member_sid, agent_members_room)
+                logger.info(f"Socket {member_sid} left room {agent_members_room} (explicit disconnect for user_id {user_id})")
+
+        # Emit conversation_ended to all visitors that were in conversation with this team member
+        if agent_id and user_id:
+            visitors = get_visitors_in_conversation_with(agent_id, user_id)
+            for visitor in visitors:
+                visitor_sid = visitor.get("sid")
+                chat_session_id = visitor.get("chat_session_id")
+                if visitor_sid and chat_session_id:
+                    # Clear conversation status in Redis
+                    update_visitor_conversation_status(agent_id, chat_session_id, None)
+                    # Notify the visitor
+                    await emit_conversation_ended(visitor_sid, agent_id, chat_session_id)
+                    logger.info(f"Emitted conversation_ended to visitor {chat_session_id} (sid: {visitor_sid}) due to team member {user_id} explicit disconnect")
+
+    except Exception as e:
+        logger.error(f"Error handling team member explicit disconnect: {e}")
+
+
 async def handle_team_member_disconnected_service(session, sid):
     """
     Common cleanup function called on socket disconnect for team members.

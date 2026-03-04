@@ -458,6 +458,100 @@ def get_agent_member_sids_by_user_id(agent_id, user_id):
         return []
 
 
+def remove_team_members_by_user_id(team_id, user_id):
+    """
+    Remove all team member entries for a given user_id from the team's members hash in Redis.
+
+    Args:
+        team_id (str): The team ID
+        user_id (str): The user ID to remove
+
+    Returns:
+        list[str]: List of removed socket IDs
+    """
+    try:
+        client = get_redis_client()
+        key = f"atlas_team_{team_id}_members"
+        members = client.hgetall(key)
+        sids_to_remove = []
+        for sid, data in members.items():
+            try:
+                member = json.loads(data)
+                if member.get("user_id") == user_id:
+                    sids_to_remove.append(sid if isinstance(sid, str) else sid.decode())
+            except Exception:
+                continue
+        for sid in sids_to_remove:
+            client.hdel(key, sid)
+        logger.info(f"Removed {len(sids_to_remove)} socket(s) for user_id {user_id} from team {team_id} members hash")
+        return sids_to_remove
+    except Exception as e:
+        logger.error(f"Error removing team members by user_id for team {team_id}, user_id {user_id}: {e}")
+        return []
+
+
+def remove_agent_members_by_user_id(agent_id, user_id):
+    """
+    Remove all agent member entries for a given user_id from the agent's members hash in Redis.
+
+    Args:
+        agent_id (str): The agent ID
+        user_id (str): The user ID to remove
+
+    Returns:
+        list[str]: List of removed socket IDs
+    """
+    try:
+        client = get_redis_client()
+        key = f"agent_{agent_id}_members"
+        members = client.hgetall(key)
+        sids_to_remove = []
+        for sid, data in members.items():
+            try:
+                member = json.loads(data)
+                if member.get("user_id") == user_id:
+                    sids_to_remove.append(sid if isinstance(sid, str) else sid.decode())
+            except Exception:
+                continue
+        for sid in sids_to_remove:
+            client.hdel(key, sid)
+        logger.info(f"Removed {len(sids_to_remove)} socket(s) for user_id {user_id} from agent {agent_id} members hash")
+        return sids_to_remove
+    except Exception as e:
+        logger.error(f"Error removing agent members by user_id for agent {agent_id}, user_id {user_id}: {e}")
+        return []
+
+
+def get_visitors_in_conversation_with(agent_id, user_id):
+    """
+    Get all visitors for an agent whose in_conversation_with field matches the given user_id.
+
+    Args:
+        agent_id (str): The agent ID
+        user_id (str): The team member's user ID
+
+    Returns:
+        list[dict]: List of visitor data dicts
+    """
+    try:
+        client = get_redis_client()
+        key = f"atlas_{agent_id}_visitors"
+        visitors = client.hgetall(key)
+        matched = []
+        for sid, data in visitors.items():
+            try:
+                visitor = json.loads(data)
+                if visitor.get("in_conversation_with") == user_id:
+                    matched.append(visitor)
+            except Exception:
+                continue
+        logger.info(f"Found {len(matched)} visitor(s) in conversation with user_id {user_id} for agent {agent_id}")
+        return matched
+    except Exception as e:
+        logger.error(f"Error getting visitors in conversation with user_id {user_id} for agent {agent_id}: {e}")
+        return []
+
+
 def update_visitor_alias(agent_id, sid, alias_name):
     """
     Update the alias_name for a specific visitor.

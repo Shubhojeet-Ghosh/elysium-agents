@@ -18,7 +18,7 @@ from services.socket_connection_helpers import (
     remove_user_socket_mapping,
     get_user_id_from_user_data
 )
-from services.elysium_atlas_services.atlas_visitor_socket_services import handle_atlas_visitor_connected_service, handle_atlas_team_member_connected_service, handle_team_member_disconnected_service, emit_agent_visitors_list
+from services.elysium_atlas_services.atlas_visitor_socket_services import handle_atlas_visitor_connected_service, handle_atlas_team_member_connected_service, handle_team_member_disconnected_service, handle_team_member_explicit_disconnect_service, emit_agent_visitors_list
 
 logger = get_logger()
 
@@ -197,3 +197,9 @@ async def handle_atlas_team_member_start_conversation(sid, socketData):
 @sio.on("atlas-team-member-end-conversation")
 async def handle_atlas_team_member_end_conversation(sid, socketData):
     await team_member_end_conversation_controller(sid, socketData)
+
+# Handle 'atlas-team-member-disconnected' event - explicit team member logout/disconnect
+@sio.on("atlas-team-member-disconnected")
+async def handle_atlas_team_member_disconnected(sid, socketData):
+    logger.info(f"Event 'atlas-team-member-disconnected' received from socket {sid}")
+    await handle_team_member_explicit_disconnect_service(socketData)
