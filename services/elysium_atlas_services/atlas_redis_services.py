@@ -458,6 +458,39 @@ def get_agent_member_sids_by_user_id(agent_id, user_id):
         return []
 
 
+def get_agent_ids_for_user_in_team(team_id, user_id):
+    """
+    Scan the team members hash (atlas_team_{team_id}_members) and return all unique
+    agent_ids associated with the given user_id. Useful when agent_id is not known
+    at disconnect time.
+
+    Args:
+        team_id (str): The team ID
+        user_id (str): The user ID
+
+    Returns:
+        list[str]: Unique agent_ids (non-null) found for this user in the team hash
+    """
+    try:
+        client = get_redis_client()
+        key = f"atlas_team_{team_id}_members"
+        members = client.hgetall(key)
+        agent_ids = set()
+        for sid, data in members.items():
+            try:
+                member = json.loads(data)
+                if member.get("user_id") == user_id and member.get("agent_id"):
+                    agent_ids.add(member["agent_id"])
+            except Exception:
+                continue
+        result = list(agent_ids)
+        logger.info(f"Found {len(result)} agent_id(s) for user_id {user_id} in team {team_id}: {result}")
+        return result
+    except Exception as e:
+        logger.error(f"Error getting agent_ids for user_id {user_id} in team {team_id}: {e}")
+        return []
+
+
 def remove_team_members_by_user_id(team_id, user_id):
     """
     Remove all team member entries for a given user_id from the team's members hash in Redis.

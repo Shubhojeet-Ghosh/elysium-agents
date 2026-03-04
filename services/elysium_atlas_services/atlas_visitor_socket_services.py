@@ -201,20 +201,58 @@ async def handle_team_member_explicit_disconnect_service(socketData):
 
 async def handle_team_member_disconnected_service(session, sid):
     """
-    Common cleanup function called on socket disconnect for team members.
-    Removes the socket from both the team members hash and the agent members hash (if agent_id present).
+    Common cleanup called on native socket disconnect for team members.
+
+    Steps:
+      1. Determine which agent_ids this user was serving — use agent_id from session
+         if present, otherwise scan the team members hash to discover them (before removal).
+      2. Remove the socket (sid) from the team Redis hash.
+      3. For every discovered agent_id:
+         a. Remove the socket from the agent members Redis hash.
+         b. Find all visitors whose in_conversation_with matches this user_id.
+         c. Clear in_conversation_with in Redis and emit 'conversation_ended' to each visitor.
     """
     try:
-        team_id = session.get("team_id") if session else None
-        agent_id = session.get("agent_id") if session else None
+        from services.elysium_atlas_services.atlas_redis_services import (
+            get_agent_ids_for_user_in_team,
+            get_visitors_in_conversation_with,
+            update_visitor_conversation_status,
+        )
+        from services.elysium_atlas_services.atlas_team_member_emit_services import emit_conversation_ended
 
+        team_id = session.get("team_id") if session else None
+        user_id = session.get("user_id") if session else None
+        session_agent_id = session.get("agent_id") if session else None
+
+        # Collect agent_ids BEFORE removing from Redis so the scan is still valid
+        agent_ids = []
+        if session_agent_id:
+            agent_ids = [session_agent_id]
+        elif team_id and user_id:
+            agent_ids = get_agent_ids_for_user_in_team(team_id, user_id)
+
+        # Remove this sid from the team hash
         if team_id:
             logger.info(f"Removing team member socket {sid} from team {team_id} members")
             remove_team_member(team_id, sid)
 
-        if agent_id:
+        # For each agent: remove from agent hash, then end any open conversations
+        for agent_id in agent_ids:
             logger.info(f"Removing team member socket {sid} from agent {agent_id} members")
             remove_agent_member(agent_id, sid)
+
+            if user_id:
+                visitors = get_visitors_in_conversation_with(agent_id, user_id)
+                for visitor in visitors:
+                    visitor_sid = visitor.get("sid")
+                    chat_session_id = visitor.get("chat_session_id")
+                    if visitor_sid and chat_session_id:
+                        update_visitor_conversation_status(agent_id, chat_session_id, None)
+                        await emit_conversation_ended(visitor_sid, agent_id, chat_session_id)
+                        logger.info(
+                            f"Emitted conversation_ended to visitor {chat_session_id} "
+                            f"(sid: {visitor_sid}) because team member {user_id} (socket {sid}) disconnected"
+                        )
 
     except Exception as e:
         logger.error(f"Error handling team member disconnection for sid {sid}: {e}")
