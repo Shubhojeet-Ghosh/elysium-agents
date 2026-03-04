@@ -18,7 +18,7 @@ from services.socket_connection_helpers import (
     remove_user_socket_mapping,
     get_user_id_from_user_data
 )
-from services.elysium_atlas_services.atlas_visitor_socket_services import handle_atlas_visitor_connected_service, handle_atlas_team_member_connected_service, handle_team_member_disconnected_service, handle_team_member_explicit_disconnect_service, emit_agent_visitors_list
+from services.elysium_atlas_services.atlas_visitor_socket_services import handle_atlas_visitor_connected_service, handle_atlas_team_member_connected_service, handle_team_member_disconnected_service, handle_team_member_explicit_disconnect_service, emit_agent_visitors_list, handle_set_visitor_alias_service
 
 logger = get_logger()
 
@@ -203,3 +203,9 @@ async def handle_atlas_team_member_end_conversation(sid, socketData):
 async def handle_atlas_team_member_disconnected(sid, socketData):
     logger.info(f"Event 'atlas-team-member-disconnected' received from socket {sid}")
     await handle_team_member_explicit_disconnect_service(socketData)
+
+# Handle 'atlas-set-visitor-alias' event - team member sets alias for a visitor
+@sio.on("atlas-set-visitor-alias")
+async def handle_atlas_set_visitor_alias(sid, socketData):
+    logger.info(f"Event 'atlas-set-visitor-alias' received from socket {sid}")
+    await handle_set_visitor_alias_service(socketData, sid)

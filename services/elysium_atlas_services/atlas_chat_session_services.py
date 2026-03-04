@@ -42,9 +42,11 @@ async def get_chat_session_data(requestData: Dict[str, Any]) -> Dict[str, Any] |
             # Convert ObjectId and datetime fields
             document["_id"] = str(document["_id"])
             if "created_at" in document and document["created_at"]:
-                document["created_at"] = document["created_at"].isoformat()
+                v = document["created_at"]
+                document["created_at"] = v.isoformat() if isinstance(v, datetime.datetime) else v
             if "last_message_at" in document and document["last_message_at"]:
-                document["last_message_at"] = document["last_message_at"].isoformat()
+                v = document["last_message_at"]
+                document["last_message_at"] = v.isoformat() if isinstance(v, datetime.datetime) else v
 
             # Ensure conversation_id exists; backfill if missing from older documents
             if not document.get("conversation_id"):
@@ -398,6 +400,14 @@ async def create_and_store_chat_messages(
         inserted_ids = result.inserted_ids if hasattr(result, "inserted_ids") else []
         for doc, inserted_id in zip(messages, inserted_ids):
             doc["_id"] = str(inserted_id)
+
+        # Update last_message_at on the chat session for sort-by-recency queries
+        now = datetime.datetime.now(datetime.timezone.utc)
+        sessions_collection = get_collection("atlas_chat_sessions")
+        await sessions_collection.update_one(
+            {"chat_session_id": chat_session_id, "agent_id": agent_id},
+            {"$set": {"last_message_at": now}}
+        )
 
         logger.info(
             "Stored %d chat message(s) for chat_session_id=%s and agent_id=%s",

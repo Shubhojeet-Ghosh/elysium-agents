@@ -1,8 +1,65 @@
 from logging_config import get_logger
-from services.elysium_atlas_services.atlas_redis_services import add_visitor_to_agent, get_visitors_for_agent, get_visitor_count_for_agent, remove_visitor_from_agent, add_team_member, add_agent_member, remove_team_member, remove_agent_member, get_or_cache_agent_data_async
+from services.elysium_atlas_services.atlas_redis_services import add_visitor_to_agent, get_visitors_for_agent, get_visitor_count_for_agent, remove_visitor_from_agent, add_team_member, add_agent_member, remove_team_member, remove_agent_member, get_or_cache_agent_data_async, update_visitor_alias_by_chat_session
 from services.elysium_atlas_services.atlas_chat_session_services import set_visitor_online_status
 
 logger = get_logger()
+
+async def handle_set_visitor_alias_service(socketData, sid):
+    """
+    Set or update the alias_name for a visitor identified by agent_id + chat_session_id.
+
+    Always writes to:
+      - atlas_chat_sessions (MongoDB) — persistent, even if visitor is offline
+
+    Only writes to Redis if the visitor is currently connected (present in the
+    atlas_{agent_id}_visitors hash). Skipped silently if they are offline.
+
+    Always emits 'agent_visitor_alias_updated' to the agent members room.
+
+    Args:
+        socketData (dict): Must contain agent_id, chat_session_id, alias_name.
+        sid (str): Socket ID of the requesting team member.
+    """
+    try:
+        from sockets import sio
+        from services.mongo_services import get_collection
+
+        agent_id = socketData.get("agent_id")
+        chat_session_id = socketData.get("chat_session_id")
+        alias_name = socketData.get("alias_name")
+
+        if not agent_id or not chat_session_id or alias_name is None:
+            logger.warning("handle_set_visitor_alias_service: agent_id, chat_session_id and alias_name are required")
+            return
+
+        # 1. Always persist to MongoDB (visitor may be offline)
+        collection = get_collection("atlas_chat_sessions")
+        await collection.update_one(
+            {"chat_session_id": chat_session_id, "agent_id": agent_id},
+            {"$set": {"alias_name": alias_name}}
+        )
+        logger.info(f"Updated alias_name in atlas_chat_sessions for chat_session_id {chat_session_id}, agent_id {agent_id}")
+
+        # 2. Update Redis only if visitor is currently online in the hash
+        updated_sid = update_visitor_alias_by_chat_session(agent_id, chat_session_id, alias_name)
+        if not updated_sid:
+            logger.info(
+                f"Visitor {chat_session_id} not currently connected in Redis for agent {agent_id} — "
+                f"skipping Redis update, alias persisted to MongoDB only"
+            )
+
+        # 3. Always notify the agent members room so the team dashboard updates live
+        agent_members_room = f"agent_{agent_id}_members"
+        await sio.emit(
+            "agent_visitor_alias_updated",
+            {"agent_id": agent_id, "chat_session_id": chat_session_id, "alias_name": alias_name},
+            room=agent_members_room
+        )
+        logger.info(f"Emitted agent_visitor_alias_updated to room {agent_members_room} for chat_session_id {chat_session_id}")
+
+    except Exception as e:
+        logger.error(f"Error in handle_set_visitor_alias_service: {e}")
+
 
 async def handle_visitor_connection(agent_id, chat_session_id, sid, geo_data=None, visitor_at=None):
     from sockets import sio

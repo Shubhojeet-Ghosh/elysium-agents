@@ -587,7 +587,7 @@ def get_visitors_in_conversation_with(agent_id, user_id):
 
 def update_visitor_alias(agent_id, sid, alias_name):
     """
-    Update the alias_name for a specific visitor.
+    Update the alias_name for a specific visitor by sid.
     
     Args:
         agent_id (str): The agent ID
@@ -607,4 +607,35 @@ def update_visitor_alias(agent_id, sid, alias_name):
             logger.warning(f"Visitor with sid {sid} not found for agent {agent_id}")
     except Exception as e:
         logger.error(f"Error updating visitor alias for agent {agent_id}, sid {sid}: {e}")
+        return None
+
+
+def update_visitor_alias_by_chat_session(agent_id, chat_session_id, alias_name):
+    """
+    Update the alias_name for a visitor identified by chat_session_id in the agent's
+    visitors hash. Scans all entries and updates the matching one.
+
+    Args:
+        agent_id (str): The agent ID
+        chat_session_id (str): The chat session ID
+        alias_name (str): The new alias name
+
+    Returns:
+        str | None: The visitor's sid if updated, None if not found or error
+    """
+    try:
+        client = get_redis_client()
+        key = f"atlas_{agent_id}_visitors"
+        visitors = client.hgetall(key)
+        for sid, data in visitors.items():
+            visitor = json.loads(data)
+            if visitor.get("chat_session_id") == chat_session_id:
+                visitor["alias_name"] = alias_name
+                client.hset(key, sid, json.dumps(visitor))
+                logger.info(f"Updated alias_name for visitor {chat_session_id} in agent {agent_id} to {alias_name}")
+                return sid if isinstance(sid, str) else sid.decode()
+        logger.warning(f"No visitor found for agent {agent_id} with chat_session_id {chat_session_id} to update alias")
+        return None
+    except Exception as e:
+        logger.error(f"Error updating visitor alias by chat_session for agent {agent_id}, chat_session_id {chat_session_id}: {e}")
         return None

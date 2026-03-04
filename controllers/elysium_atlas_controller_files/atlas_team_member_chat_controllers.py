@@ -45,6 +45,18 @@ async def chat_with_visitor_controller_v1(sid, socketData):
             agent_message_payload=message_payload,
         ))
 
+        # Track team member participation on the chat session (idempotent, async)
+        if team_member_id:
+            from services.mongo_services import get_collection
+            async def _add_team_member_id():
+                collection = get_collection("atlas_chat_sessions")
+                await collection.update_one(
+                    {"chat_session_id": chat_session_id, "agent_id": agent_id},
+                    {"$addToSet": {"team_member_ids": team_member_id}}
+                )
+                logger.info(f"Added team_member_id {team_member_id} to team_member_ids for chat_session_id {chat_session_id}")
+            asyncio.create_task(_add_team_member_id())
+
         # Attempt to emit to visitor if they're online
         visitor_sid = get_visitor_sid_by_chat_session(agent_id, chat_session_id)
         if visitor_sid:

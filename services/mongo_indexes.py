@@ -68,6 +68,10 @@ async def create_mongo_indexes():
         logger.info("Index created on atlas_chat_sessions.agent_id")
         await atlas_chat_sessions_collection.create_index([("chat_session_id", 1), ("agent_id", 1)], name="chat_session_id_agent_id_index")
         logger.info("Compound index created on atlas_chat_sessions.chat_session_id and agent_id")
+        await atlas_chat_sessions_collection.create_index("team_member_ids", name="team_member_ids_index")
+        logger.info("Index created on atlas_chat_sessions.team_member_ids")
+        await atlas_chat_sessions_collection.create_index("last_message_at", name="last_message_at_index")
+        logger.info("Index created on atlas_chat_sessions.last_message_at")
 
         # Create indexes for atlas_chat_mesages collection
         atlas_chat_mesages_collection = get_collection("atlas_chat_mesages")
