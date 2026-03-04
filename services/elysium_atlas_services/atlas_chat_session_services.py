@@ -579,3 +579,47 @@ async def set_visitor_online_status(agent_id: str, chat_session_id: str, visitor
     except Exception as e:
         logger.error(f"Error in set_visitor_online_status: {str(e)}")
         return False
+
+
+async def patch_chat_session(agent_id: str, chat_session_id: str, fields: Dict[str, Any]) -> bool:
+    """
+    Apply an arbitrary $set update to an atlas_chat_sessions document.
+
+    Useful for storing supplementary data (e.g. geo_data, custom metadata)
+    without needing a dedicated service function for each field.
+
+    Args:
+        agent_id: The agent identifier.
+        chat_session_id: The chat session identifier.
+        fields: A dict of key/value pairs to set on the document.
+
+    Returns:
+        True if the document was found and updated, False otherwise.
+    """
+    try:
+        if not agent_id or not chat_session_id or not fields:
+            logger.warning("patch_chat_session: agent_id, chat_session_id and fields are all required")
+            return False
+
+        collection = get_collection("atlas_chat_sessions")
+        result = await collection.update_one(
+            {"chat_session_id": chat_session_id, "agent_id": agent_id},
+            {"$set": fields}
+        )
+
+        if result.matched_count == 0:
+            logger.warning(
+                f"patch_chat_session: no document found for "
+                f"chat_session_id={chat_session_id} agent_id={agent_id}"
+            )
+            return False
+
+        logger.info(
+            f"patch_chat_session: updated fields {list(fields.keys())} for "
+            f"chat_session_id={chat_session_id} agent_id={agent_id}"
+        )
+        return True
+
+    except Exception as e:
+        logger.error(f"Error in patch_chat_session: {str(e)}")
+        return False

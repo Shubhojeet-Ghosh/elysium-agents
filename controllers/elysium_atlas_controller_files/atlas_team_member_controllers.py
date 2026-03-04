@@ -1,3 +1,4 @@
+import datetime
 from typing import Dict, Any
 from fastapi.responses import JSONResponse
 
@@ -71,14 +72,14 @@ async def get_team_member_chat_sessions_controller(
         documents = await cursor.to_list(length=None)
 
         # Return only the required fields; missing keys default to None
-        FIELDS = ("chat_session_id", "alias_name", "last_message_at", "visitor_online", "last_connected_at")
+        FIELDS = ("chat_session_id", "alias_name", "last_message_at", "visitor_online", "last_connected_at","geo_data")
         serialised = []
         for doc in documents:
             entry = {}
             for field in FIELDS:
                 val = doc.get(field)
                 # Serialise datetime objects to ISO string
-                if val is not None and not isinstance(val, (str, bool, int, float)):
+                if isinstance(val, datetime.datetime):
                     val = val.isoformat()
                 entry[field] = val
             serialised.append(entry)
