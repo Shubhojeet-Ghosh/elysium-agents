@@ -1,3 +1,4 @@
+import asyncio
 import datetime
 from typing import Dict, Any
 from fastapi.responses import JSONResponse
@@ -71,10 +72,37 @@ async def get_team_member_chat_sessions_controller(
         )
         documents = await cursor.to_list(length=None)
 
+        # Fetch the latest message for each session in parallel
+        messages_collection = get_collection("atlas_chat_mesages")
+
+        async def _get_last_message(chat_session_id, agent_id, conversation_id):
+            if not (chat_session_id and agent_id and conversation_id):
+                return None
+            msg = await messages_collection.find_one(
+                {
+                    "chat_session_id": chat_session_id,
+                    "agent_id": agent_id,
+                    "conversation_id": conversation_id,
+                },
+                sort=[("created_at", -1)],
+            )
+            if msg:
+                msg.pop("_id", None)
+            return msg
+
+        last_messages = await asyncio.gather(*[
+            _get_last_message(
+                doc.get("chat_session_id"),
+                doc.get("agent_id"),
+                doc.get("conversation_id"),
+            )
+            for doc in documents
+        ])
+
         # Return only the required fields; missing keys default to None
-        FIELDS = ("chat_session_id", "alias_name", "last_message_at", "visitor_online", "last_connected_at","geo_data")
+        FIELDS = ("chat_session_id", "alias_name", "last_message_at", "visitor_online", "last_connected_at", "geo_data")
         serialised = []
-        for doc in documents:
+        for doc, last_msg in zip(documents, last_messages):
             entry = {}
             for field in FIELDS:
                 val = doc.get(field)
@@ -82,6 +110,7 @@ async def get_team_member_chat_sessions_controller(
                 if isinstance(val, datetime.datetime):
                     val = val.isoformat()
                 entry[field] = val
+            entry["last_message"] = last_msg
             serialised.append(entry)
         documents = serialised
 
