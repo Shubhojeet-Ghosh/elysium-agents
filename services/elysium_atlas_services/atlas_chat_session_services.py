@@ -168,13 +168,23 @@ async def get_chat_messages_for_session(
         if conversation_id:
             query["conversation_id"] = conversation_id
 
-        # Find messages, sort by created_at ascending, limit
+        # Find the latest `limit` messages by sorting descending in Mongo,
+        # then reverse in Python so the caller still receives messages
+        # in chronological order (oldest -> newest, newest at the end).
         cursor = collection.find(
             query,
-            {"message_id": 1, "role": 1, "content": 1, "created_at": 1, "conversation_id": 1, "_id": 0}
-        ).sort("created_at", 1).limit(limit)
+            {
+                "message_id": 1,
+                "role": 1,
+                "content": 1,
+                "created_at": 1,
+                "conversation_id": 1,
+                "_id": 0,
+            },
+        ).sort("created_at", -1).limit(limit)
 
         messages = await cursor.to_list(length=None)
+        messages.reverse()
 
         logger.info(
             "Retrieved %d messages for chat_session_id=%s agent_id=%s conversation_id=%s",
