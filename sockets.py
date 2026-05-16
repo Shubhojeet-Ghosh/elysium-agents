@@ -2,6 +2,7 @@
 Socket.IO configuration and event handlers
 """
 
+import time
 import socketio
 from socketio import AsyncRedisManager
 
@@ -147,6 +148,9 @@ async def handle_atlas_visitor_connected(sid, socketData):
 # Handle 'atlas-visitor-message' event - main chat orchestrator for atlas users
 @sio.on("atlas-visitor-message")
 async def handle_atlas_visitor_message(sid,socketData):
+    request_started_at = time.perf_counter()
+    if isinstance(socketData, dict):
+        socketData["_request_started_at"] = request_started_at
     logger.info("Event 'atlas-visitor-message' received")
     session = await sio.get_session(sid)
     user_data = session.get("user_data") if session else None

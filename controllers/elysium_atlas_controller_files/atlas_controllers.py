@@ -13,6 +13,7 @@ from services.elysium_atlas_services.agent_db_operations import check_agent_name
 from services.elysium_atlas_services.agent_db_operations import update_agent_status
 from services.elysium_atlas_services.agent_db_operations import set_data_materials_status
 from services.elysium_atlas_services.elysium_atlas_user_plan_services import can_user_build_agent
+from config.retrieval_strategy_config import normalize_retrieval_strategy_in_request
 
 logger = get_logger()
 
@@ -41,6 +42,15 @@ async def pre_build_agent_operations_controller(requestData: Dict[str, Any],user
                 return JSONResponse(status_code=200, content={"success": False, "message": "An agent with this name already exists. Please choose a different name."})
             
             initial_data["agent_name"] = requestData.get("agent_name")
+
+        retrieval_strategy_error = normalize_retrieval_strategy_in_request(requestData)
+        if retrieval_strategy_error:
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "message": retrieval_strategy_error},
+            )
+        if "retrieval_strategy" in requestData:
+            initial_data["retrieval_strategy"] = requestData["retrieval_strategy"]
 
         agent_id = await create_agent_document(initial_data)
         if agent_id is None:
@@ -252,6 +262,13 @@ async def update_agent_controller_v1(requestData,userData,background_tasks):
         if not agent_id:
             logger.error("agent_id is required for update operation")
             return JSONResponse(status_code=400, content={"success": False, "message": "You can't perform update without agent."})
+
+        retrieval_strategy_error = normalize_retrieval_strategy_in_request(requestData)
+        if retrieval_strategy_error:
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "message": retrieval_strategy_error},
+            )
         
         await update_agent_basic_attributes(agent_id, requestData)
 

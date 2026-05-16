@@ -2,11 +2,13 @@ from logging_config import get_logger
 from services.elysium_atlas_services.atlas_query_qdrant_services import search_and_merge_agent_knowledge
 from services.elysium_atlas_services.agent_db_operations import get_agent_by_id
 from services.socket_emit_services import emit_atlas_response_chunk
-from services.elysium_atlas_services.atlas_chat_session_services import create_and_store_chat_messages, get_chat_messages_for_session, enhance_user_message, get_chat_session_data
+from services.elysium_atlas_services.atlas_chat_session_services import create_and_store_chat_messages, get_chat_session_data
 
 from config.llm_models_config import resolve_model_handler, DEFAULT_MODEL
+from config.retrieval_strategy_config import DEFAULT_RETRIEVAL_STRATEGY
 
 import asyncio
+import time
 import uuid
 import datetime
 
@@ -150,47 +152,57 @@ def build_messages_list(agent_data: dict, message: str, knowledge_base_string: s
     return messages
 
 async def chat_with_agent_v1(agent_id, message, sid=None, chat_session_id=None, additional_params: dict = {}):
+    chat_log = f"[chat agent_id={agent_id}]"
     try:
+        logger.info(f"{chat_log} Processing visitor message")
+
         user_message_id = str(uuid.uuid4())
         agent_message_id = str(uuid.uuid4())
         user_message_created_at = additional_params.get("created_at") or datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
         
-        chat_session_data = await get_chat_session_data({
-            "agent_id": agent_id,
-            "chat_session_id": chat_session_id,
-            "limit": 10
-        })
-        
+        logger.info(f"{chat_log} Loading chat session and agent config")
+        chat_session_data, agent_data = await asyncio.gather(
+            get_chat_session_data({
+                "agent_id": agent_id,
+                "chat_session_id": chat_session_id,
+                "limit": 10
+            }),
+            get_agent_by_id(agent_id),
+        )
         chat_history = chat_session_data.get("messages", []) if chat_session_data else []
+        # logger.info(
+        #     f"{chat_log} load_session_and_agent done in "
+        #     f"{(time.perf_counter() - step_start) * 1000:.0f}ms "
+        #     f"(history_messages={len(chat_history)})"
+        # )
 
         agent_name = chat_session_data.get("agent_name") if chat_session_data else None
 
-        # Enhance the user message with chat history
-        enhanced_message = await enhance_user_message(message, chat_history)
-        logger.info(f"Enhanced message: {enhanced_message}")
-
-        # Run agent data retrieval and knowledge search in parallel
-        agent_data, final_results = await asyncio.gather(
-            get_agent_by_id(agent_id),
-            search_and_merge_agent_knowledge(agent_id, enhanced_message)
+        retrieval_strategy = (agent_data or {}).get("retrieval_strategy") or DEFAULT_RETRIEVAL_STRATEGY
+        logger.info(f"{chat_log} Retrieving knowledge (strategy={retrieval_strategy})")
+        final_results = await search_and_merge_agent_knowledge(
+            agent_id, message, retrieval_strategy
         )
+        # logger.info(
+        #     f"{chat_log} knowledge_retrieval done in "
+        #     f"{(time.perf_counter() - step_start) * 1000:.0f}ms "
+        #     f"(strategy={retrieval_strategy}, sources={len(final_results)})"
+        # )
         
         if(agent_name):
             agent_data["agent_name"] = agent_name
 
-        # Format knowledge base string for LLM
+        logger.info(f"{chat_log} Building LLM prompt with knowledge and chat history")
         knowledge_base_string = format_knowledge_base_string(final_results)
-            
-
-        # Build messages list with system prompt and knowledge base
-        messages = build_messages_list(agent_data, enhanced_message, knowledge_base_string, chat_history)
+        messages = build_messages_list(agent_data, message, knowledge_base_string, chat_history)
+        # logger.info(
+        #     f"{chat_log} prepare_llm_messages done in "
+        #     f"{(time.perf_counter() - step_start) * 1000:.0f}ms"
+        # )
         
         model = agent_data.get("llm_model") or DEFAULT_MODEL
-
-        # Resolve handler from registry (defaults if unknown model)
         handler, config = resolve_model_handler(model)
         
-        # Build payload; allow passthrough for optional params like temperature, top_p, etc.
         chat_payload = {
             "model": model,
             "messages": messages,
@@ -208,37 +220,47 @@ async def chat_with_agent_v1(agent_id, message, sid=None, chat_session_id=None, 
         if additional_params.get("stream"):
             stream = bool(additional_params["stream"])
             chat_payload["stream"] = stream
-        
-        logger.info(f"Resolved model '{model}' with handler '{handler.__name__}'")    
 
-        # Call model-specific handler
+        logger.info(f"{chat_log} Generating agent response (model={model}, stream={stream})")
         response_obj = await handler(chat_payload)
 
-        # If streaming, iterate over async generator and emit chunks
         response_text = ""
         agent_message_created_at = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
         if stream and hasattr(response_obj, "__aiter__"):
+            first_chunk_emitted = False
+            request_started_at = additional_params.get("_request_started_at")
             async for chunk in response_obj:
                 response_text += chunk
                 if sid:
+                    if not first_chunk_emitted:
+                        first_chunk_emitted = True
+                        if request_started_at is not None:
+                            ttft_ms = (time.perf_counter() - request_started_at) * 1000
+                            logger.info(f"{chat_log} Time to first token: {ttft_ms:.0f}ms")
                     await emit_atlas_response_chunk(chunk, done=False, sid=sid)
             
-            # Send final "done" signal
             if sid:
                 await emit_atlas_response_chunk("", done=True, sid=sid, full_response=response_text, message_id=agent_message_id, created_at=agent_message_created_at, role="agent")
             
-            logger.info(f"Streaming completed for model '{model}'")
+            # logger.info(
+            #     f"{chat_log} llm_streaming done in "
+            #     f"{(time.perf_counter() - step_start) * 1000:.0f}ms "
+            #     f"(chars={len(response_text)})"
+            # )
         else:
             response_text = response_obj
+            # logger.info(
+            #     f"{chat_log} llm_call done in "
+            #     f"{(time.perf_counter() - step_start) * 1000:.0f}ms "
+            #     f"(chars={len(response_text) if response_text else 0})"
+            # )
 
-        # Store user and agent messages if chat_session_id is provided
         if chat_session_id:
             user_payload = {
                 "message_id": user_message_id,
                 "role": "user",
                 "content": message,
                 "created_at": user_message_created_at,
-                "enhanced_message": enhanced_message
             }
             agent_payload = {
                 "message_id": agent_message_id,
@@ -252,6 +274,9 @@ async def chat_with_agent_v1(agent_id, message, sid=None, chat_session_id=None, 
                 user_message_payload=user_payload,
                 agent_message_payload=agent_payload
             ))
+            logger.info(f"{chat_log} Queuing chat messages for storage")
+
+        logger.info(f"{chat_log} Visitor message processed successfully")
 
         return {
             "success": True,  
@@ -262,7 +287,6 @@ async def chat_with_agent_v1(agent_id, message, sid=None, chat_session_id=None, 
             "agent_data": agent_data,
             "response_text": response_text,
             "chat_history": chat_history,
-            "enhanced_message": enhanced_message
         }
     
     except Exception as e:

@@ -6,6 +6,7 @@ from services.elysium_atlas_services.atlas_qdrant_services import remove_all_qdr
 from services.mongo_services import get_collection
 from datetime import datetime, timezone
 from config.atlas_agent_config_data import ELYSIUM_ATLAS_AGENT_CONFIG_DATA
+from config.retrieval_strategy_config import DEFAULT_RETRIEVAL_STRATEGY
 from bson import ObjectId
 from services.elysium_atlas_services.agent_db_operations import update_agent_status, update_agent_fields,update_agent_current_task, get_agent_by_id, get_agent_fields_by_id
 from services.web_services.url_services import normalize_url
@@ -50,6 +51,9 @@ async def create_agent_document(initial_data: Optional[Dict[str, Any]] = None) -
 
         document["agent_status"] = "active"
         document["agent_current_task"] = "running"
+
+        if "retrieval_strategy" not in document:
+            document["retrieval_strategy"] = DEFAULT_RETRIEVAL_STRATEGY
 
         result = await collection.insert_one(document)
         agent_id = str(result.inserted_id)
@@ -854,7 +858,15 @@ async def update_agent_basic_attributes(agent_id: str, requestData: Dict[str, An
     """
     try:
         # List of basic attributes to update
-        basic_attributes = ["agent_icon", "primary_color", "text_color","secondary_color","welcome_message","placeholder_text"]
+        basic_attributes = [
+            "agent_icon",
+            "primary_color",
+            "text_color",
+            "secondary_color",
+            "welcome_message",
+            "placeholder_text",
+            "retrieval_strategy",
+        ]
         
         updates = {}
         for attr in basic_attributes:
