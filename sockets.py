@@ -35,7 +35,7 @@ mgr = AsyncRedisManager(
 
 # Create Socket.IO instance
 sio = socketio.AsyncServer(
-    cors_allowed_origins="*",
+    cors_allowed_origins=[],
     async_mode="asgi",
     manager=mgr,
     ping_interval=25,
