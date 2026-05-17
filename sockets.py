@@ -74,8 +74,9 @@ async def connect(sid, environ, auth):
 
 # Handle 'disconnect' event
 @sio.on("disconnect")
-async def disconnect(sid):
+async def disconnect(sid, reason=None):
     try:
+        logger.info(f"Disconnect event for sid {sid}. Reason: {reason}")
         # Get user_data from session to remove socket mapping
         session = await sio.get_session(sid)
         user_data = session.get("user_data") if session else None
