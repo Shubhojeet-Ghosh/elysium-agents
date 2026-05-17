@@ -21,7 +21,7 @@ async def route_visitor_message_to_team_member(
     message,
     in_conversation_with,
     sid=None,
-    created_at=None,
+    message_received_at=None,
 ):
     """
     Route a visitor's message directly to a specific team member.
@@ -39,7 +39,7 @@ async def route_visitor_message_to_team_member(
         from services.elysium_atlas_services.atlas_team_member_emit_services import emit_team_member_message
 
         message_id = str(uuid.uuid4())
-        message_created_at = coerce_utc_datetime(created_at)
+        message_created_at = coerce_utc_datetime(message_received_at)
 
         visitor_message_payload = {
             "message_id": message_id,
@@ -91,7 +91,7 @@ async def chat_with_agent_controller_v1(chatPayload,user_data, sid = None):
                 message,
                 in_conversation_with,
                 sid,
-                created_at=chatPayload.get("created_at") or chatPayload.get("_message_received_at"),
+                message_received_at=chatPayload.get("_message_received_at"),
             )
 
         user_id = await get_agent_owner_user_id(agent_id) if agent_id else None

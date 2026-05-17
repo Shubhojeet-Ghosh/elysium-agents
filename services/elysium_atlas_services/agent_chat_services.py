@@ -25,12 +25,9 @@ def _utc_now() -> datetime.datetime:
 
 
 def _resolve_user_message_created_at(additional_params: dict) -> datetime.datetime:
-    """Prefer client send time, then server receive time, then now."""
-    client_timestamp = additional_params.get("created_at")
-    if client_timestamp:
-        return coerce_utc_datetime(client_timestamp)
+    """Server-side receive time only; frontend created_at is ignored for storage."""
     received_timestamp = additional_params.get("_message_received_at")
-    if received_timestamp:
+    if received_timestamp is not None:
         return coerce_utc_datetime(received_timestamp)
     return _utc_now()
 

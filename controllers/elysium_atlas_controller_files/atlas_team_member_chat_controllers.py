@@ -28,9 +28,7 @@ async def chat_with_visitor_controller_v1(sid, socketData):
             logger.warning("atlas team member message missing agent_id/chat_session_id/message")
             return {"success": False, "message": "agent_id, chat_session_id and message are required"}
         
-        message_arrived_at = coerce_utc_datetime(
-            socketData.get("created_at") or socketData.get("_message_received_at")
-        )
+        message_arrived_at = coerce_utc_datetime(socketData.get("_message_received_at"))
 
         message_payload = {
             "message_id": str(uuid.uuid4()),

@@ -152,10 +152,7 @@ async def handle_atlas_visitor_message(sid,socketData):
     request_started_at = time.perf_counter()
     if isinstance(socketData, dict):
         socketData["_request_started_at"] = request_started_at
-        if not socketData.get("created_at"):
-            socketData["_message_received_at"] = (
-                datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
-            )
+        socketData["_message_received_at"] = datetime.datetime.now(datetime.timezone.utc)
     logger.info("Event 'atlas-visitor-message' received")
     session = await sio.get_session(sid)
     user_data = session.get("user_data") if session else None
@@ -195,6 +192,8 @@ async def handle_atlas_agent_visitors_list(sid, socketData):
 # Handle 'atlas-team-member-message' event - message from team member
 @sio.on("atlas-team-member-message")
 async def handle_atlas_team_member_message(sid, socketData):
+    if isinstance(socketData, dict):
+        socketData["_message_received_at"] = datetime.datetime.now(datetime.timezone.utc)
     await chat_with_visitor_controller_v1(sid, socketData)
 
 # Handle 'atlas-team-member-start-conversation' event - team member starts a conversation with a visitor
