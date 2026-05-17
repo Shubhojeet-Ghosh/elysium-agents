@@ -3,6 +3,11 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 from logging_config import get_logger
 from services.mongo_services import get_collection
+from config.atlas_chat_config import (
+    get_default_max_visitor_message_chars,
+    resolve_max_visitor_message_chars,
+    validate_visitor_message,
+)
 
 logger = get_logger()
 
@@ -233,42 +238,69 @@ async def can_user_build_agent(user_id: str, requestData: Dict[str, Any]) -> Dic
 # Permission check: send chat message
 # ---------------------------------------------------------------------------
 
-async def can_user_send_chat(user_id: str, chatPayload: Dict[str, Any]) -> Dict[str, Any]:
+async def can_user_send_chat(
+    user_id: Optional[str],
+    chatPayload: Dict[str, Any],
+) -> Dict[str, Any]:
     """
-    Checks whether the user's current plan allows them to send more chat messages.
+    Checks whether a visitor chat message may be processed.
 
     Validates:
-      1. Plan exists and has not expired (via validate_user_plan_active).
-      2. User has a plan limits document in atlas_user_available_plan_limits.
-      3. Remaining ai_queries limit is greater than 0.
+      1. Message is present, valid, and within the character limit.
+         Limit comes from atlas_user_available_plan_limits.max_visitor_message_chars
+         when set on the document; otherwise the config default (legacy documents).
+      2. When user_id is provided — plan exists and has not expired.
+      3. When user_id is provided — plan limits exist and ai_queries > 0.
 
     Note: This function does NOT decrement ai_queries — that is handled separately.
 
     Args:
-        user_id: The ID of the user sending the message.
-        chatPayload: The chat request payload (reserved for future checks).
+        user_id: Owner user ID for plan checks; may be None to skip plan limits only.
+        chatPayload: The chat request payload (must include "message").
 
     Returns:
-        dict: {"success": True/False, "message": "..."}
+        dict: {"success": True/False, "message": "...", "client_message": "..."}
     """
     try:
-        logger.info(f"Checking chat send permission for user_id: {user_id}")
-        plan_check, plan_limits = await asyncio.gather(
-            validate_user_plan_active(user_id),
-            get_user_plan_limits(user_id)
+        message = chatPayload.get("message")
+        max_message_chars = get_default_max_visitor_message_chars()
+        plan_limits = None
+
+        if user_id:
+            logger.info(f"Checking chat send permission for user_id: {user_id}")
+            plan_check, plan_limits = await asyncio.gather(
+                validate_user_plan_active(user_id),
+                get_user_plan_limits(user_id),
+            )
+
+            if not plan_check.get("success"):
+                logger.warning(f"Chat send denied for user_id {user_id}: {plan_check.get('message')}")
+                return {**plan_check, "client_message": CLIENT_FACING_DENIAL_MESSAGE}
+
+            if plan_limits is None:
+                logger.warning(f"Chat send denied for user_id {user_id}: no plan limits document found")
+                return {
+                    "success": False,
+                    "message": "Plan limits not configured for this account. Please contact support.",
+                    "client_message": CLIENT_FACING_DENIAL_MESSAGE,
+                }
+
+            max_message_chars = resolve_max_visitor_message_chars(plan_limits)
+
+        is_valid, validation_error, client_message = validate_visitor_message(
+            message,
+            max_message_chars,
         )
-
-        if not plan_check.get("success"):
-            logger.warning(f"Chat send denied for user_id {user_id}: {plan_check.get('message')}")
-            return {**plan_check, "client_message": CLIENT_FACING_DENIAL_MESSAGE}
-
-        if plan_limits is None:
-            logger.warning(f"Chat send denied for user_id {user_id}: no plan limits document found")
+        if not is_valid:
+            logger.warning(f"Chat send denied — invalid message: {validation_error}")
             return {
                 "success": False,
-                "message": "Plan limits not configured for this account. Please contact support.",
-                "client_message": CLIENT_FACING_DENIAL_MESSAGE
+                "message": validation_error,
+                "client_message": client_message,
             }
+
+        if not user_id:
+            return {"success": True, "message": "Message validation passed."}
 
         ai_queries_remaining = plan_limits.get("ai_queries", 0)
         logger.info(f"Chat query check for user_id {user_id}: ai_queries_remaining={ai_queries_remaining}")
@@ -286,7 +318,11 @@ async def can_user_send_chat(user_id: str, chatPayload: Dict[str, Any]) -> Dict[
 
     except Exception as e:
         logger.error(f"Error in can_user_send_chat for user_id {user_id}: {e}")
-        return {"success": False, "message": "An error occurred while checking chat permissions."}
+        return {
+            "success": False,
+            "message": "An error occurred while checking chat permissions.",
+            "client_message": CLIENT_FACING_DENIAL_MESSAGE,
+        }
 
 
 # ---------------------------------------------------------------------------

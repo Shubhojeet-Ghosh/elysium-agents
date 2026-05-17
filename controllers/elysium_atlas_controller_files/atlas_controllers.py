@@ -2,7 +2,7 @@ import asyncio
 from typing import Dict, Any
 from fastapi.responses import JSONResponse
 from logging_config import get_logger
-from services.elysium_atlas_services.agent_services import initialize_agent_build_update, create_agent_document, list_agents_for_user, remove_agent_by_id,fetch_agent_details_by_id,initialize_agent_update, fetch_agent_fields_by_id, fetch_agent_urls, fetch_agent_files, fetch_agent_custom_knowledge, remove_agent_links, remove_agent_files, update_agent_basic_attributes
+from services.elysium_atlas_services.agent_services import initialize_agent_build_update, create_agent_document, list_agents_for_user, remove_agent_by_id,fetch_agent_details_by_id,initialize_agent_update, fetch_agent_fields_by_id, fetch_agent_urls, fetch_agent_files, fetch_agent_custom_knowledge, remove_agent_links, remove_agent_files, update_agent_basic_attributes, normalize_lead_collection_config_for_update
 from services.elysium_atlas_services.atlas_custom_knowledge_services import remove_custom_data, get_custom_text_from_qdrant, get_qa_pair_from_qdrant
 from services.elysium_atlas_services.agent_auth_services import is_user_owner_of_agent
 from services.elysium_atlas_services.atlas_chat_session_services import get_chat_session_data
@@ -14,6 +14,7 @@ from services.elysium_atlas_services.agent_db_operations import update_agent_sta
 from services.elysium_atlas_services.agent_db_operations import set_data_materials_status
 from services.elysium_atlas_services.elysium_atlas_user_plan_services import can_user_build_agent
 from config.retrieval_strategy_config import normalize_retrieval_strategy_in_request
+from config.lead_collection_config import build_lead_collection_config_for_create
 
 logger = get_logger()
 
@@ -51,6 +52,16 @@ async def pre_build_agent_operations_controller(requestData: Dict[str, Any],user
             )
         if "retrieval_strategy" in requestData:
             initial_data["retrieval_strategy"] = requestData["retrieval_strategy"]
+
+        lead_collection_config, lead_collection_error = build_lead_collection_config_for_create(
+            requestData.get("lead_collection_config"),
+        )
+        if lead_collection_error:
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "message": lead_collection_error},
+            )
+        initial_data["lead_collection_config"] = lead_collection_config
 
         agent_id = await create_agent_document(initial_data)
         if agent_id is None:
@@ -268,6 +279,16 @@ async def update_agent_controller_v1(requestData,userData,background_tasks):
             return JSONResponse(
                 status_code=400,
                 content={"success": False, "message": retrieval_strategy_error},
+            )
+
+        lead_collection_error = await normalize_lead_collection_config_for_update(
+            agent_id,
+            requestData,
+        )
+        if lead_collection_error:
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "message": lead_collection_error},
             )
         
         await update_agent_basic_attributes(agent_id, requestData)

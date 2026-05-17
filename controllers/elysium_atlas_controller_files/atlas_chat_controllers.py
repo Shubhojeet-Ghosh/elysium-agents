@@ -83,6 +83,21 @@ async def chat_with_agent_controller_v1(chatPayload,user_data, sid = None):
         chat_session_id = chatPayload.get("chat_session_id")
         in_conversation_with = chatPayload.get("in_conversation_with")
 
+        user_id = await get_agent_owner_user_id(agent_id) if agent_id else None
+        chat_permission = await can_user_send_chat(user_id, chatPayload)
+        if not chat_permission.get("success"):
+            internal_message = chat_permission.get("message")
+            client_message = chat_permission.get("client_message", internal_message)
+            if sid:
+                await emit_atlas_response_chunk(
+                    "",
+                    done=True,
+                    sid=sid,
+                    full_response=client_message,
+                    role="agent",
+                )
+            return {"success": False, "message": internal_message}
+
         # If the visitor is in a conversation with a team member, route directly to them
         if in_conversation_with:
             return await route_visitor_message_to_team_member(
@@ -94,25 +109,15 @@ async def chat_with_agent_controller_v1(chatPayload,user_data, sid = None):
                 message_received_at=chatPayload.get("_message_received_at"),
             )
 
-        user_id = await get_agent_owner_user_id(agent_id) if agent_id else None
-        if user_id:
-            chat_permission = await can_user_send_chat(user_id, chatPayload)
-            if not chat_permission.get("success"):
-                internal_message = chat_permission.get("message")
-                client_message = chat_permission.get("client_message", internal_message)
-                if sid:
-                    await emit_atlas_response_chunk(
-                        "",
-                        done=True,
-                        sid=sid,
-                        full_response=client_message,
-                        role="agent"
-                    )
-                return {"success": False, "message": internal_message}
-
         chat_response = await chat_with_agent_v1(agent_id, message, sid, chat_session_id=chat_session_id,additional_params=chatPayload)
 
-        if user_id and chat_response.get("success"):
+        if not chat_response.get("success"):
+            return {
+                "success": False,
+                "message": chat_response.get("message", "Chat request failed."),
+            }
+
+        if user_id:
             asyncio.create_task(decrement_user_ai_queries(user_id))
 
         # emit_status = await emit_atlas_response(sid=sid, message="Response from agent", payload=chat_response)
