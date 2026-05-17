@@ -18,7 +18,8 @@ from services.socket_connection_helpers import (
     remove_socket_connection,
     add_user_socket_mapping,
     remove_user_socket_mapping,
-    get_user_id_from_user_data
+    get_user_id_from_user_data,
+    merge_socket_session,
 )
 from services.elysium_atlas_services.atlas_visitor_socket_services import handle_atlas_visitor_connected_service, handle_atlas_team_member_connected_service, handle_team_member_disconnected_service, handle_team_member_explicit_disconnect_service, emit_agent_visitors_list, handle_set_visitor_alias_service
 
@@ -57,7 +58,7 @@ async def connect(sid, environ, auth):
 
         if(user_data):
             # logger.info(f"Saving socketuser data to session: {user_data}")
-            await sio.save_session(sid, {"user_data": user_data})
+            await merge_socket_session(sio, sid, {"user_data": user_data})
             
             # Add socket ID to user's socket mapping in Redis
             add_user_socket_mapping(user_data, sid)
@@ -143,7 +144,7 @@ async def handle_atlas_visitor_connected(sid, socketData):
     chat_session_id = socketData.get("chat_session_id")
     if agent_id:
         logger.info(f"Saving agent_id {agent_id} and chat_session_id {chat_session_id} to session for socket {sid}")
-        await sio.save_session(sid, {"agent_id": agent_id, "chat_session_id": chat_session_id})
+        await merge_socket_session(sio, sid, {"agent_id": agent_id, "chat_session_id": chat_session_id})
 
     await handle_atlas_visitor_connected_service(socketData, sid)
 
@@ -169,7 +170,7 @@ async def handle_atlas_team_member_connected(sid, socketData):
     agent_id = socketData.get("agent_id")
 
     logger.info(f"Saving team_id {team_id}, user_id {user_id}, and agent_id {agent_id} to session for socket {sid}")
-    await sio.save_session(sid, {"team_id": team_id, "user_id": user_id, "agent_id": agent_id})
+    await merge_socket_session(sio, sid, {"team_id": team_id, "user_id": user_id, "agent_id": agent_id})
 
     await handle_atlas_team_member_connected_service(socketData, sid)
 
