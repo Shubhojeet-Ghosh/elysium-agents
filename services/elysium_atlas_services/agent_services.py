@@ -7,6 +7,10 @@ from services.mongo_services import get_collection
 from datetime import datetime, timezone
 from config.atlas_agent_config_data import ELYSIUM_ATLAS_AGENT_CONFIG_DATA
 from config.retrieval_strategy_config import DEFAULT_RETRIEVAL_STRATEGY
+from config.lead_collection_config import (
+    get_default_lead_collection_config,
+    merge_lead_collection_config,
+)
 from bson import ObjectId
 from services.elysium_atlas_services.agent_db_operations import update_agent_status, update_agent_fields,update_agent_current_task, get_agent_by_id, get_agent_fields_by_id
 from services.web_services.url_services import normalize_url
@@ -54,6 +58,9 @@ async def create_agent_document(initial_data: Optional[Dict[str, Any]] = None) -
 
         if "retrieval_strategy" not in document:
             document["retrieval_strategy"] = DEFAULT_RETRIEVAL_STRATEGY
+
+        if "lead_collection_config" not in document:
+            document["lead_collection_config"] = get_default_lead_collection_config()
 
         result = await collection.insert_one(document)
         agent_id = str(result.inserted_id)
@@ -845,6 +852,32 @@ async def generate_agent_widget_script(agent_id: str) -> str | None:
         logger.error(f"Error generating widget script for agent_id {agent_id}: {e}")
         return None
 
+async def normalize_lead_collection_config_for_update(
+    agent_id: str,
+    request_data: Dict[str, Any],
+) -> str | None:
+    """
+    If lead_collection_config is present, validate partial fields and merge into request_data.
+
+    Returns:
+        Error message when invalid, otherwise None.
+    """
+    if "lead_collection_config" not in request_data:
+        return None
+
+    agent = await get_agent_by_id(agent_id)
+    existing = agent.get("lead_collection_config") if agent else None
+    merged, error_message = merge_lead_collection_config(
+        existing,
+        request_data["lead_collection_config"],
+    )
+    if error_message:
+        return error_message
+
+    request_data["lead_collection_config"] = merged
+    return None
+
+
 async def update_agent_basic_attributes(agent_id: str, requestData: Dict[str, Any]) -> bool:
     """
     Update basic agent attributes like icon, color, text color, etc., if present in requestData.
@@ -866,6 +899,7 @@ async def update_agent_basic_attributes(agent_id: str, requestData: Dict[str, An
             "welcome_message",
             "placeholder_text",
             "retrieval_strategy",
+            "lead_collection_config",
         ]
         
         updates = {}

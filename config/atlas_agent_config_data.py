@@ -1,3 +1,5 @@
+from config.lead_collection_config import get_default_lead_collection_config
+
 ELYSIUM_ATLAS_AGENT_CONFIG_DATA = {
     "agent_init_config": {
         "agent_name": "my-agent",
@@ -21,6 +23,7 @@ ELYSIUM_ATLAS_AGENT_CONFIG_DATA = {
         "temperature":0.5,
         "retrieval_strategy": "simple",
         "widget_script": None,
+        "lead_collection_config": get_default_lead_collection_config(),
     },
     "agent_task_progress": {
         "initializing": 0,
@@ -32,6 +35,9 @@ ELYSIUM_ATLAS_AGENT_CONFIG_DATA = {
         "Indexing Custom Knowledge": 75,
         "Custom Knowledge Indexed": 90,
         "running": 100,
+    },
+    "agent_chat_limits": {
+        "max_visitor_message_chars": 4000,
     },
     "chat_session_init_config": {
         "chat_session_id": None,
