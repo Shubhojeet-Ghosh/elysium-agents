@@ -1,6 +1,7 @@
 from logging_config import get_logger
 from services.elysium_atlas_services.atlas_redis_services import add_visitor_to_agent, get_visitors_for_agent, get_visitor_count_for_agent, remove_visitor_from_agent, add_team_member, add_agent_member, remove_team_member, remove_agent_member, get_or_cache_agent_data_async, update_visitor_alias_by_chat_session
 from services.elysium_atlas_services.atlas_chat_session_services import set_visitor_online_status, patch_chat_session
+from services.socket_connection_helpers import merge_socket_session
 
 logger = get_logger()
 
@@ -87,7 +88,7 @@ async def handle_visitor_connection(agent_id, chat_session_id, sid, geo_data=Non
     logger.info(f"Socket {sid} joined room {room_name} for chat_session_id {chat_session_id}")
 
     # Save agent_id and chat_session_id in session
-    await sio.save_session(sid, {"agent_id": agent_id, "chat_session_id": chat_session_id})
+    await merge_socket_session(sio, sid, {"agent_id": agent_id, "chat_session_id": chat_session_id})
 
     # Fetch existing alias_name so reconnects don't reset it to None
     alias_name = await _fetch_visitor_alias(agent_id, chat_session_id) if (chat_session_id and agent_id) else None
@@ -153,7 +154,7 @@ async def handle_team_member_connection(team_id, user_id, agent_id, sid):
     logger.info(f"Socket {sid} joined room {room_name} for user_id {user_id}, agent_id {agent_id}")
 
     # Save team_id, user_id, and agent_id in session
-    await sio.save_session(sid, {"team_id": team_id, "user_id": user_id, "agent_id": agent_id})
+    await merge_socket_session(sio, sid, {"team_id": team_id, "user_id": user_id, "agent_id": agent_id})
 
     # Add team member to Redis (by team)
     add_team_member(team_id, user_id, agent_id, sid)

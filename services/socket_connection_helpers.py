@@ -16,6 +16,25 @@ from services.redis_services import (
 
 logger = get_logger()
 
+
+async def merge_socket_session(sio, sid: str, updates: dict) -> dict:
+    """
+    Merge keys into the existing Socket.IO session.
+
+    python-socketio's save_session() replaces the entire session dict, so callers
+    must read-merge-write to avoid dropping keys set on connect or earlier events.
+    """
+    try:
+        session = await sio.get_session(sid)
+    except KeyError:
+        session = {}
+    if not isinstance(session, dict):
+        session = {}
+    session.update(updates)
+    await sio.save_session(sid, session)
+    return session
+
+
 SOCKET_CONNECTIONS_KEY = "socket:global_connections"
 USER_SOCKET_KEY_PREFIX = "socket:elysium-atlas:user_id:"
 
