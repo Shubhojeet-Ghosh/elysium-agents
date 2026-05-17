@@ -3,6 +3,7 @@ Socket.IO configuration and event handlers
 """
 
 import time
+import datetime
 import socketio
 from socketio import AsyncRedisManager
 
@@ -151,6 +152,10 @@ async def handle_atlas_visitor_message(sid,socketData):
     request_started_at = time.perf_counter()
     if isinstance(socketData, dict):
         socketData["_request_started_at"] = request_started_at
+        if not socketData.get("created_at"):
+            socketData["_message_received_at"] = (
+                datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+            )
     logger.info("Event 'atlas-visitor-message' received")
     session = await sio.get_session(sid)
     user_data = session.get("user_data") if session else None

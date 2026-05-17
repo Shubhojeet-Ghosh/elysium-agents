@@ -10,7 +10,10 @@ async def chat_with_visitor_controller_v1(sid, socketData):
     try:
         from services.elysium_atlas_services.atlas_redis_services import get_visitor_sid_by_chat_session
         from services.elysium_atlas_services.atlas_team_member_emit_services import emit_visitor_message
-        from services.elysium_atlas_services.atlas_chat_session_services import create_and_store_chat_messages
+        from services.elysium_atlas_services.atlas_chat_session_services import (
+            create_and_store_chat_messages,
+            coerce_utc_datetime,
+        )
         from sockets import sio
 
         agent_id = socketData.get("agent_id")
@@ -25,9 +28,10 @@ async def chat_with_visitor_controller_v1(sid, socketData):
             logger.warning("atlas team member message missing agent_id/chat_session_id/message")
             return {"success": False, "message": "agent_id, chat_session_id and message are required"}
         
-        message_arrived_at = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+        message_arrived_at = coerce_utc_datetime(
+            socketData.get("created_at") or socketData.get("_message_received_at")
+        )
 
-        # Build payload for storage (role is 'team-member')
         message_payload = {
             "message_id": str(uuid.uuid4()),
             "role": "human",

@@ -2,7 +2,12 @@ from logging_config import get_logger
 from services.elysium_atlas_services.atlas_query_qdrant_services import search_and_merge_agent_knowledge
 from services.elysium_atlas_services.agent_db_operations import get_agent_by_id
 from services.socket_emit_services import emit_atlas_response_chunk
-from services.elysium_atlas_services.atlas_chat_session_services import create_and_store_chat_messages, get_chat_session_data
+from services.elysium_atlas_services.atlas_chat_session_services import (
+    create_and_store_chat_messages,
+    get_chat_session_data,
+    coerce_utc_datetime,
+    format_utc_datetime_for_client,
+)
 
 from config.llm_models_config import resolve_model_handler, DEFAULT_MODEL
 from config.retrieval_strategy_config import DEFAULT_RETRIEVAL_STRATEGY
@@ -13,6 +18,21 @@ import uuid
 import datetime
 
 logger = get_logger()
+
+
+def _utc_now() -> datetime.datetime:
+    return datetime.datetime.now(datetime.timezone.utc)
+
+
+def _resolve_user_message_created_at(additional_params: dict) -> datetime.datetime:
+    """Prefer client send time, then server receive time, then now."""
+    client_timestamp = additional_params.get("created_at")
+    if client_timestamp:
+        return coerce_utc_datetime(client_timestamp)
+    received_timestamp = additional_params.get("_message_received_at")
+    if received_timestamp:
+        return coerce_utc_datetime(received_timestamp)
+    return _utc_now()
 
 
 def format_knowledge_base_string(final_results: list) -> str:
@@ -158,8 +178,8 @@ async def chat_with_agent_v1(agent_id, message, sid=None, chat_session_id=None, 
 
         user_message_id = str(uuid.uuid4())
         agent_message_id = str(uuid.uuid4())
-        user_message_created_at = additional_params.get("created_at") or datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
-        
+        user_message_created_at = _resolve_user_message_created_at(additional_params)
+
         logger.info(f"{chat_log} Loading chat session and agent config")
         chat_session_data, agent_data = await asyncio.gather(
             get_chat_session_data({
@@ -225,7 +245,7 @@ async def chat_with_agent_v1(agent_id, message, sid=None, chat_session_id=None, 
         response_obj = await handler(chat_payload)
 
         response_text = ""
-        agent_message_created_at = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+        agent_message_created_at = _utc_now()
         if stream and hasattr(response_obj, "__aiter__"):
             first_chunk_emitted = False
             request_started_at = additional_params.get("_request_started_at")
@@ -240,7 +260,15 @@ async def chat_with_agent_v1(agent_id, message, sid=None, chat_session_id=None, 
                     await emit_atlas_response_chunk(chunk, done=False, sid=sid)
             
             if sid:
-                await emit_atlas_response_chunk("", done=True, sid=sid, full_response=response_text, message_id=agent_message_id, created_at=agent_message_created_at, role="agent")
+                await emit_atlas_response_chunk(
+                    "",
+                    done=True,
+                    sid=sid,
+                    full_response=response_text,
+                    message_id=agent_message_id,
+                    created_at=format_utc_datetime_for_client(agent_message_created_at),
+                    role="agent",
+                )
             
             # logger.info(
             #     f"{chat_log} llm_streaming done in "
@@ -256,25 +284,25 @@ async def chat_with_agent_v1(agent_id, message, sid=None, chat_session_id=None, 
             # )
 
         if chat_session_id:
-            user_payload = {
-                "message_id": user_message_id,
-                "role": "user",
-                "content": message,
-                "created_at": user_message_created_at,
-            }
-            agent_payload = {
-                "message_id": agent_message_id,
-                "role": "agent",
-                "content": response_text,
-                "created_at": agent_message_created_at
-            }
-            asyncio.create_task(create_and_store_chat_messages(
-                chat_session_id=chat_session_id,
-                agent_id=agent_id,
-                user_message_payload=user_payload,
-                agent_message_payload=agent_payload
-            ))
-            logger.info(f"{chat_log} Queuing chat messages for storage")
+            asyncio.create_task(
+                create_and_store_chat_messages(
+                    chat_session_id=chat_session_id,
+                    agent_id=agent_id,
+                    user_message_payload={
+                        "message_id": user_message_id,
+                        "role": "user",
+                        "content": message,
+                        "created_at": user_message_created_at,
+                    },
+                    agent_message_payload={
+                        "message_id": agent_message_id,
+                        "role": "agent",
+                        "content": response_text,
+                        "created_at": agent_message_created_at,
+                    },
+                )
+            )
+            logger.info(f"{chat_log} Queued chat messages for storage")
 
         logger.info(f"{chat_log} Visitor message processed successfully")
 

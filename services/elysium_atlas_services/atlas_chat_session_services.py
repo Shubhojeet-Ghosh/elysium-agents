@@ -10,6 +10,89 @@ import uuid
 
 logger = get_logger()
 
+
+def coerce_utc_datetime(value) -> datetime.datetime:
+    """
+    Normalize a timestamp to timezone-aware UTC datetime for MongoDB storage.
+    Accepts datetime, ISO strings (including trailing Z), or None (uses now).
+    """
+    if value is None:
+        return datetime.datetime.now(datetime.timezone.utc)
+
+    if isinstance(value, datetime.datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=datetime.timezone.utc)
+        return value.astimezone(datetime.timezone.utc)
+
+    if isinstance(value, str):
+        normalized = value.strip()
+        if normalized.endswith("Z"):
+            normalized = normalized[:-1] + "+00:00"
+        return datetime.datetime.fromisoformat(normalized).astimezone(datetime.timezone.utc)
+
+    return datetime.datetime.now(datetime.timezone.utc)
+
+
+def format_utc_datetime_for_client(value: datetime.datetime) -> str:
+    """ISO-8601 string for sockets/API payloads."""
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=datetime.timezone.utc)
+    else:
+        value = value.astimezone(datetime.timezone.utc)
+    return value.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+
+def serialize_chat_message_for_client(message: Dict[str, Any] | None) -> Dict[str, Any] | None:
+    """Normalize a chat message document for API/socket responses."""
+    if not message:
+        return None
+
+    serialized = dict(message)
+    created_at = serialized.get("created_at")
+    if isinstance(created_at, datetime.datetime):
+        serialized["created_at"] = format_utc_datetime_for_client(created_at)
+    return serialized
+
+
+def build_chat_message_document_from_payload(
+    payload: Dict[str, Any] | None,
+    chat_session_id: str,
+    agent_id: str,
+    conversation_id: str | None = None,
+) -> Dict[str, Any] | None:
+    """
+    Build a single atlas_chat_mesages document with UTC datetime created_at.
+    """
+    if not payload or not isinstance(payload, dict):
+        if payload is not None:
+            logger.warning("Invalid payload type for chat message; expected dict")
+        return None
+
+    role = payload.get("role")
+    content = payload.get("content")
+    if not role or content is None:
+        logger.warning("Missing role or content in chat message payload")
+        return None
+
+    doc: Dict[str, Any] = {
+        "chat_session_id": chat_session_id,
+        "agent_id": agent_id,
+        "message_id": payload.get("message_id"),
+        "role": role,
+        "content": content,
+        "created_at": coerce_utc_datetime(payload.get("created_at")),
+    }
+
+    if conversation_id is not None:
+        doc["conversation_id"] = conversation_id
+
+    team_member_id = payload.get("team_member_id")
+    if team_member_id is not None:
+        doc["team_member_id"] = team_member_id
+
+    return doc
+
+
 async def get_chat_session_data(requestData: Dict[str, Any]) -> Dict[str, Any] | None:
     """
     Service to handle chat session operations.
@@ -183,6 +266,8 @@ async def get_chat_messages_for_session(
         messages = await cursor.to_list(length=None)
         messages.reverse()
 
+        messages = [serialize_chat_message_for_client(msg) for msg in messages]
+
         logger.info(
             "Retrieved %d messages for chat_session_id=%s agent_id=%s conversation_id=%s",
             len(messages),
@@ -266,6 +351,7 @@ def build_chat_message_documents(
     agent_id: str,
     user_message_payload: Dict[str, Any] | None = None,
     agent_message_payload: Dict[str, Any] | None = None,
+    conversation_id: str | None = None,
 ) -> list[Dict[str, Any]]:
     """
     Build message documents for the provided payloads.
@@ -275,6 +361,7 @@ def build_chat_message_documents(
         agent_id: The agent identifier.
         user_message_payload: Optional message payload sent by the user.
         agent_message_payload: Optional message payload sent by the agent.
+        conversation_id: Optional conversation thread identifier.
 
     Returns:
         A list of message documents ready for persistence.
@@ -285,36 +372,10 @@ def build_chat_message_documents(
             return []
 
         messages: list[Dict[str, Any]] = []
-
-        def _build_message_document(payload: Dict[str, Any] | None) -> Dict[str, Any] | None:
-            if not payload:
-                return None
-            if not isinstance(payload, dict):
-                logger.warning("Invalid payload type for chat message; expected dict")
-                return None
-
-            message_id = payload.get("message_id")
-            role = payload.get("role")
-            content = payload.get("content")
-            created_at = payload.get("created_at") or datetime.datetime.now(datetime.timezone.utc).isoformat()
-
-            if not role or content is None:
-                logger.warning("Missing role or content in chat message payload")
-                return None
-
-            doc = {
-                "chat_session_id": chat_session_id,
-                "agent_id": agent_id,
-                "message_id": message_id,
-                "role": role,
-                "content": content,
-                "created_at": created_at,
-            }
-
-            return doc
-
         for payload in (user_message_payload, agent_message_payload):
-            message_doc = _build_message_document(payload)
+            message_doc = build_chat_message_document_from_payload(
+                payload, chat_session_id, agent_id, conversation_id
+            )
             if message_doc:
                 messages.append(message_doc)
 
@@ -354,40 +415,13 @@ async def create_and_store_chat_messages(
 
         logger.info(f"Creating and storing chat messages for chat_session_id={chat_session_id} and agent_id={agent_id} conversation_id={conversation_id}")
 
-        messages: list[Dict[str, Any]] = []
-
-        def _build_message_document(payload: Dict[str, Any] | None) -> Dict[str, Any] | None:
-            if not payload:
-                return None
-            if not isinstance(payload, dict):
-                logger.warning("Invalid payload type for chat message; expected dict")
-                return None
-
-            message_id = payload.get("message_id")
-            role = payload.get("role")
-            content = payload.get("content")
-            created_at = payload.get("created_at") or datetime.datetime.now(datetime.timezone.utc).isoformat()
-
-            if not role or content is None:
-                logger.warning("Missing role or content in chat message payload")
-                return None
-
-            doc = {
-                "chat_session_id": chat_session_id,
-                "agent_id": agent_id,
-                "conversation_id": conversation_id,
-                "message_id": message_id,
-                "role": role,
-                "content": content,
-                "created_at": created_at,
-            }
-
-            return doc
-
-        for payload in (user_message_payload, agent_message_payload):
-            message_doc = _build_message_document(payload)
-            if message_doc:
-                messages.append(message_doc)
+        messages = build_chat_message_documents(
+            chat_session_id,
+            agent_id,
+            user_message_payload=user_message_payload,
+            agent_message_payload=agent_message_payload,
+            conversation_id=conversation_id,
+        )
 
         if not messages:
             return []

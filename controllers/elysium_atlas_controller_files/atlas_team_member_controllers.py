@@ -88,6 +88,10 @@ async def get_team_member_chat_sessions_controller(
             )
             if msg:
                 msg.pop("_id", None)
+                from services.elysium_atlas_services.atlas_chat_session_services import (
+                    serialize_chat_message_for_client,
+                )
+                msg = serialize_chat_message_for_client(msg)
             return msg
 
         last_messages = await asyncio.gather(*[

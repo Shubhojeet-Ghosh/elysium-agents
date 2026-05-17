@@ -7,11 +7,22 @@ from services.socket_emit_services import emit_atlas_response, emit_atlas_respon
 from services.elysium_atlas_services.agent_chat_services import chat_with_agent_v1
 from services.elysium_atlas_services.elysium_atlas_user_plan_services import can_user_send_chat, decrement_user_ai_queries
 from services.elysium_atlas_services.agent_db_operations import get_agent_owner_user_id
-from services.elysium_atlas_services.atlas_chat_session_services import rotate_conversation_id, create_and_store_chat_messages
+from services.elysium_atlas_services.atlas_chat_session_services import (
+    rotate_conversation_id,
+    create_and_store_chat_messages,
+    coerce_utc_datetime,
+)
 
 logger = get_logger()
 
-async def route_visitor_message_to_team_member(agent_id, chat_session_id, message, in_conversation_with, sid=None):
+async def route_visitor_message_to_team_member(
+    agent_id,
+    chat_session_id,
+    message,
+    in_conversation_with,
+    sid=None,
+    created_at=None,
+):
     """
     Route a visitor's message directly to a specific team member.
     Emits via socket and always persists the message to the DB.
@@ -28,14 +39,13 @@ async def route_visitor_message_to_team_member(agent_id, chat_session_id, messag
         from services.elysium_atlas_services.atlas_team_member_emit_services import emit_team_member_message
 
         message_id = str(uuid.uuid4())
-        created_at = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+        message_created_at = coerce_utc_datetime(created_at)
 
-        # Build visitor message payload
         visitor_message_payload = {
             "message_id": message_id,
             "role": "user",
             "content": message,
-            "created_at": created_at
+            "created_at": message_created_at,
         }
 
         # Always persist regardless of whether the team member is online
@@ -76,7 +86,12 @@ async def chat_with_agent_controller_v1(chatPayload,user_data, sid = None):
         # If the visitor is in a conversation with a team member, route directly to them
         if in_conversation_with:
             return await route_visitor_message_to_team_member(
-                agent_id, chat_session_id, message, in_conversation_with, sid
+                agent_id,
+                chat_session_id,
+                message,
+                in_conversation_with,
+                sid,
+                created_at=chatPayload.get("created_at") or chatPayload.get("_message_received_at"),
             )
 
         user_id = await get_agent_owner_user_id(agent_id) if agent_id else None
