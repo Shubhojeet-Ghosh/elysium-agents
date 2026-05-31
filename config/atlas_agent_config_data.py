@@ -40,7 +40,7 @@ ELYSIUM_ATLAS_AGENT_CONFIG_DATA = {
         "max_visitor_message_chars": 4000,
     },
     "visitor_presence_config": {
-        "stale_visitor_threshold_seconds": 10,
+        "stale_visitor_threshold_seconds": 1800,
     },
     "chat_session_init_config": {
         "chat_session_id": None,
