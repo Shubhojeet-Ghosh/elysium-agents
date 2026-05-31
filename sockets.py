@@ -21,7 +21,7 @@ from services.socket_connection_helpers import (
     get_user_id_from_user_data,
     merge_socket_session,
 )
-from services.elysium_atlas_services.atlas_visitor_socket_services import handle_atlas_visitor_connected_service, handle_atlas_team_member_connected_service, handle_team_member_disconnected_service, handle_team_member_explicit_disconnect_service, emit_agent_visitors_list, handle_set_visitor_alias_service
+from services.elysium_atlas_services.atlas_visitor_socket_services import handle_atlas_visitor_connected_service, handle_atlas_team_member_connected_service, handle_team_member_disconnected_service, handle_team_member_explicit_disconnect_service, emit_agent_visitors_list, handle_set_visitor_alias_service, emit_agent_visitor_disconnected_event
 
 logger = get_logger()
 
@@ -117,13 +117,7 @@ async def disconnect(sid, reason=None):
                     logger.info(f"Emitted agent_visitor_count_updated to room {team_room} for agent {agent_id}: {visitor_count}")
 
             # Notify team members scoped to this agent that a specific visitor disconnected
-            agent_members_room = f"agent_{agent_id}_members"
-            await sio.emit(
-                "agent_visitor_disconnected",
-                {"agent_id": agent_id, "chat_session_id": chat_session_id, "sid": sid},
-                room=agent_members_room
-            )
-            logger.info(f"Emitted agent_visitor_disconnected to room {agent_members_room} for agent {agent_id}, chat_session_id {chat_session_id}, sid {sid}")
+            await emit_agent_visitor_disconnected_event(agent_id, chat_session_id, sid)
 
         # Check if it's a team member and remove from team/agent Redis
         team_id = session.get("team_id") if session else None

@@ -51,6 +51,15 @@ def serialize_chat_message_for_client(message: Dict[str, Any] | None) -> Dict[st
     created_at = serialized.get("created_at")
     if isinstance(created_at, datetime.datetime):
         serialized["created_at"] = format_utc_datetime_for_client(created_at)
+    read_at = serialized.get("read_at")
+    if isinstance(read_at, datetime.datetime):
+        serialized["read_at"] = format_utc_datetime_for_client(read_at)
+    read_by = serialized.get("read_by")
+    if read_by is not None:
+        serialized["read_by"] = str(read_by)
+    mongo_id = serialized.get("_id")
+    if mongo_id is not None:
+        serialized["_id"] = str(mongo_id)
     return serialized
 
 
@@ -261,8 +270,10 @@ async def get_chat_messages_for_session(
                 "role": 1,
                 "content": 1,
                 "created_at": 1,
+                "read_at": 1,
+                "read_by": 1,
                 "conversation_id": 1,
-                "_id": 0,
+                "_id": 1,
             },
         ).sort("created_at", -1).limit(limit)
 
@@ -594,3 +605,283 @@ async def patch_chat_session(agent_id: str, chat_session_id: str, fields: Dict[s
     except Exception as e:
         logger.error(f"Error in patch_chat_session: {str(e)}")
         return False
+
+
+async def get_chat_message_by_object_id(
+    message_object_id: str,
+    agent_id: str,
+    chat_session_id: str,
+) -> Dict[str, Any] | None:
+    """Fetch a single chat message scoped to agent_id and chat_session_id."""
+    if not message_object_id or not agent_id or not chat_session_id:
+        return None
+    if not ObjectId.is_valid(message_object_id):
+        return None
+
+    collection = get_collection("atlas_chat_mesages")
+    return await collection.find_one(
+        {
+            "_id": ObjectId(message_object_id),
+            "agent_id": agent_id,
+            "chat_session_id": chat_session_id,
+        }
+    )
+
+
+async def resolve_chat_message_identifier(
+    message_identifier: str,
+    agent_id: str,
+    chat_session_id: str,
+) -> Dict[str, Any] | None:
+    """
+    Resolve a message by Mongo _id or by the client UUID stored in message_id.
+    """
+    if not message_identifier or not agent_id or not chat_session_id:
+        return None
+
+    collection = get_collection("atlas_chat_mesages")
+    base_query = {"agent_id": agent_id, "chat_session_id": chat_session_id}
+
+    if ObjectId.is_valid(message_identifier):
+        doc = await collection.find_one({**base_query, "_id": ObjectId(message_identifier)})
+        if doc:
+            return doc
+
+    return await collection.find_one({**base_query, "message_id": message_identifier})
+
+
+def stored_message_metadata(stored_doc: Dict[str, Any] | None) -> Dict[str, Any]:
+    """Build socket/API metadata from a persisted chat message document."""
+    if not stored_doc:
+        return {}
+
+    metadata: Dict[str, Any] = {}
+    mongo_id = stored_doc.get("_id")
+    if mongo_id is not None:
+        metadata["_id"] = str(mongo_id)
+
+    client_message_id = stored_doc.get("message_id")
+    if client_message_id is not None:
+        metadata["message_id"] = client_message_id
+
+    role = stored_doc.get("role")
+    if role is not None:
+        metadata["role"] = role
+
+    created_at = stored_doc.get("created_at")
+    if isinstance(created_at, datetime.datetime):
+        metadata["created_at"] = format_utc_datetime_for_client(created_at)
+    elif created_at is not None:
+        metadata["created_at"] = created_at
+
+    return metadata
+
+
+def _serialize_session_datetime(value) -> str | None:
+    if isinstance(value, datetime.datetime):
+        return value.isoformat()
+    return value
+
+
+async def session_has_prior_team_member_conversation(
+    agent_id: str,
+    chat_session_id: str,
+) -> bool:
+    """
+    True when the session qualifies for team-member-chat-sessions
+    (at least one team member has participated — team_member_ids is non-empty).
+    """
+    try:
+        if not agent_id or not chat_session_id:
+            return False
+
+        collection = get_collection("atlas_chat_sessions")
+        doc = await collection.find_one(
+            {"agent_id": agent_id, "chat_session_id": chat_session_id},
+            {"team_member_ids": 1},
+        )
+        if not doc:
+            return False
+
+        team_member_ids = doc.get("team_member_ids") or []
+        return isinstance(team_member_ids, list) and len(team_member_ids) > 0
+
+    except Exception as e:
+        logger.error(f"Error checking prior team member conversation: {str(e)}")
+        return False
+
+
+async def get_last_chat_message_for_session(
+    agent_id: str,
+    chat_session_id: str,
+    conversation_id: str | None = None,
+) -> Dict[str, Any] | None:
+    """Fetch the most recent message in a conversation thread."""
+    if not agent_id or not chat_session_id:
+        return None
+
+    query: Dict[str, Any] = {
+        "agent_id": agent_id,
+        "chat_session_id": chat_session_id,
+    }
+    if conversation_id:
+        query["conversation_id"] = conversation_id
+
+    collection = get_collection("atlas_chat_mesages")
+    msg = await collection.find_one(query, sort=[("created_at", -1)])
+    return serialize_chat_message_for_client(msg) if msg else None
+
+
+async def build_messaging_session_update_payload(
+    agent_id: str,
+    chat_session_id: str,
+    last_message: Dict[str, Any] | None = None,
+) -> Dict[str, Any] | None:
+    """
+    Build a team-member-chat-sessions row for real-time Messaging updates.
+    Returns None when the session is not eligible (no prior team member conversation).
+    """
+    try:
+        if not agent_id or not chat_session_id:
+            return None
+
+        if not await session_has_prior_team_member_conversation(agent_id, chat_session_id):
+            return None
+
+        collection = get_collection("atlas_chat_sessions")
+        doc = await collection.find_one(
+            {"agent_id": agent_id, "chat_session_id": chat_session_id},
+        )
+        if not doc:
+            return None
+
+        conversation_id = doc.get("conversation_id")
+        if last_message is None:
+            last_message = await get_last_chat_message_for_session(
+                agent_id, chat_session_id, conversation_id
+            )
+
+        unread_count = await count_unread_visitor_messages(
+            agent_id, chat_session_id, conversation_id
+        )
+
+        session_fields = (
+            "chat_session_id",
+            "alias_name",
+            "last_message_at",
+            "visitor_online",
+            "last_connected_at",
+            "geo_data",
+        )
+        payload: Dict[str, Any] = {"agent_id": agent_id, "conversation_mode": "ai"}
+        for field in session_fields:
+            payload[field] = _serialize_session_datetime(doc.get(field))
+
+        payload["last_message"] = last_message
+        payload["has_unread_messages"] = unread_count > 0
+        payload["unread_visitor_message_count"] = unread_count
+        return payload
+
+    except Exception as e:
+        logger.error(f"Error building messaging session update payload: {str(e)}")
+        return None
+
+
+async def count_unread_visitor_messages(
+    agent_id: str,
+    chat_session_id: str,
+    conversation_id: str | None = None,
+) -> int:
+    """
+    Count visitor messages (role=user) without read_at in the current conversation thread.
+    """
+    try:
+        if not agent_id or not chat_session_id:
+            return 0
+
+        query: Dict[str, Any] = {
+            "agent_id": agent_id,
+            "chat_session_id": chat_session_id,
+            "role": "user",
+            "$or": [{"read_at": {"$exists": False}}, {"read_at": None}],
+        }
+        if conversation_id:
+            query["conversation_id"] = conversation_id
+
+        collection = get_collection("atlas_chat_mesages")
+        return await collection.count_documents(query)
+
+    except Exception as e:
+        logger.error(f"Error counting unread visitor messages: {str(e)}")
+        return 0
+
+
+async def mark_chat_message_as_read(
+    message_identifier: str,
+    agent_id: str,
+    chat_session_id: str,
+    read_by: str | None = None,
+) -> Dict[str, Any]:
+    """
+    Set read_at on an atlas_chat_mesages document (UTC datetime).
+    message_identifier may be the Mongo _id or the client UUID in message_id.
+    read_by: user _id of the first reader (audit); stored only on the first read.
+    Idempotent: preserves the first read_at and read_by if already set.
+    """
+    try:
+        if not message_identifier or not agent_id or not chat_session_id:
+            return {
+                "success": False,
+                "message": "message_id, agent_id and chat_session_id are required",
+            }
+
+        message = await resolve_chat_message_identifier(
+            message_identifier, agent_id, chat_session_id
+        )
+        if not message:
+            return {"success": False, "message": "Message not found"}
+
+        message_object_id = str(message["_id"])
+        collection = get_collection("atlas_chat_mesages")
+        existing_read_at = message.get("read_at")
+        if existing_read_at:
+            read_at = coerce_utc_datetime(existing_read_at)
+            stored_read_by = message.get("read_by")
+            if stored_read_by is not None:
+                stored_read_by = str(stored_read_by)
+        else:
+            read_at = datetime.datetime.now(datetime.timezone.utc)
+            update_fields: Dict[str, Any] = {"read_at": read_at}
+            if read_by is not None:
+                update_fields["read_by"] = str(read_by)
+            await collection.update_one(
+                {"_id": message["_id"]},
+                {"$set": update_fields},
+            )
+            stored_read_by = str(read_by) if read_by is not None else None
+
+        logger.info(
+            "Marked message %s as read for chat_session_id=%s agent_id=%s read_by=%s",
+            message_object_id,
+            chat_session_id,
+            agent_id,
+            stored_read_by,
+        )
+
+        data: Dict[str, Any] = {
+            "_id": message_object_id,
+            "message_id": message.get("message_id"),
+            "read_at": format_utc_datetime_for_client(read_at),
+        }
+        if stored_read_by is not None:
+            data["read_by"] = stored_read_by
+
+        return {
+            "success": True,
+            "message": "Message marked as read",
+            "data": data,
+        }
+
+    except Exception as e:
+        logger.error(f"Error in mark_chat_message_as_read: {str(e)}")
+        return {"success": False, "message": "Failed to mark message as read"}

@@ -13,6 +13,7 @@ async def chat_with_visitor_controller_v1(sid, socketData):
         from services.elysium_atlas_services.atlas_chat_session_services import (
             create_and_store_chat_messages,
             coerce_utc_datetime,
+            stored_message_metadata,
         )
         from sockets import sio
 
@@ -39,13 +40,13 @@ async def chat_with_visitor_controller_v1(sid, socketData):
         if team_member_id:
             message_payload["team_member_id"] = team_member_id
 
-        # Always store the team-member message asynchronously
-        asyncio.create_task(create_and_store_chat_messages(
+        stored_messages = await create_and_store_chat_messages(
             chat_session_id=chat_session_id,
             agent_id=agent_id,
             user_message_payload=None,
             agent_message_payload=message_payload,
-        ))
+        )
+        message_metadata = stored_message_metadata(stored_messages[0] if stored_messages else None)
 
         # Track team member participation on the chat session (idempotent, async)
         if team_member_id:
@@ -62,7 +63,14 @@ async def chat_with_visitor_controller_v1(sid, socketData):
         # Attempt to emit to visitor if they're online
         visitor_sid = get_visitor_sid_by_chat_session(agent_id, chat_session_id)
         if visitor_sid:
-            await emit_visitor_message(visitor_sid, agent_id, chat_session_id, message, team_member_id)
+            await emit_visitor_message(
+                visitor_sid,
+                agent_id,
+                chat_session_id,
+                message,
+                team_member_id,
+                message_metadata=message_metadata,
+            )
         else:
             logger.warning(f"Visitor not found for agent {agent_id}, chat_session_id {chat_session_id}. Message stored to DB.")
 

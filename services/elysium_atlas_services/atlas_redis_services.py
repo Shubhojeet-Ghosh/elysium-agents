@@ -139,21 +139,23 @@ def add_visitor_to_agent(agent_id, chat_session_id, sid=None, geo_data=None, vis
 
 def get_visitors_for_agent(agent_id, page=1, size=100):
     """
-    Get a paginated list of visitors connected to the agent, sorted by last_connected_at descending (latest first).
-    
-    Args:
-        agent_id (str): The agent ID
-        page (int): Page number (1-based)
-        size (int): Number of visitors per page (default: 100)
-        
+    Get a paginated list of **online** visitors for the agent (Redis hash only).
+    Sorted by last_connected_at descending (latest first).
+
+    Offline visitors are not included; disconnect removes them from this list.
+    MongoDB atlas_chat_sessions retains the session with visitor_online=false.
+
+    Out-of-range page requests are clamped to the last valid page (Option A).
+
     Returns:
         dict: {
-            'visitors': list of visitor dictionaries (sorted latest first),
-            'total': total number of visitors,
-            'page': current page,
-            'size': page size,
-            'has_next': bool indicating if there are more pages,
-            'has_prev': bool indicating if there are previous pages
+            'visitors': list,
+            'total': int (current online count),
+            'page': int (actual page returned, may differ from requested),
+            'size': int,
+            'total_pages': int,
+            'has_next': bool,
+            'has_prev': bool,
         }
     """
     try:
@@ -163,26 +165,46 @@ def get_visitors_for_agent(agent_id, page=1, size=100):
         visitor_list = []
         for sid, data in visitors.items():
             visitor_list.append(json.loads(data))
-        
-        # Sort by last_connected_at descending (latest first), fall back to created_at
+
         def sort_key(v):
             ts = v.get("last_connected_at") or v.get("created_at") or ""
             return ts
         visitor_list.sort(key=sort_key, reverse=True)
 
+        page = max(1, page)
+        size = max(1, size)
         total = len(visitor_list)
+
+        if total == 0:
+            return {
+                "visitors": [],
+                "total": 0,
+                "page": 1,
+                "size": size,
+                "total_pages": 0,
+                "has_next": False,
+                "has_prev": False,
+            }
+
+        total_pages = (total + size - 1) // size
+        page = min(page, total_pages)
+
         start = (page - 1) * size
         end = start + size
         paginated_visitors = visitor_list[start:end]
-        
-        logger.info(f"Retrieved {len(paginated_visitors)} visitors for agent {agent_id} (page {page}, size {size}, total {total})")
+
+        logger.info(
+            f"Retrieved {len(paginated_visitors)} visitors for agent {agent_id} "
+            f"(page {page}, size {size}, total {total}, total_pages {total_pages})"
+        )
         return {
-            'visitors': paginated_visitors,
-            'total': total,
-            'page': page,
-            'size': size,
-            'has_next': end < total,
-            'has_prev': page > 1
+            "visitors": paginated_visitors,
+            "total": total,
+            "page": page,
+            "size": size,
+            "total_pages": total_pages,
+            "has_next": page < total_pages,
+            "has_prev": page > 1,
         }
     except Exception as e:
         logger.error(f"Error getting visitors for agent {agent_id}: {e}")
@@ -451,6 +473,40 @@ def get_visitor_sid_by_chat_session(agent_id, chat_session_id):
     except Exception as e:
         logger.error(f"Error getting visitor sid for agent {agent_id}, chat_session_id {chat_session_id}: {e}")
         return None
+
+def get_visitor_by_chat_session(agent_id, chat_session_id):
+    """
+    Get the live visitor payload for a chat session from the agent visitors hash.
+
+    Returns:
+        dict | None: Visitor data including sid and in_conversation_with, or None if offline.
+    """
+    try:
+        client = get_redis_client()
+        key = f"atlas_{agent_id}_visitors"
+        visitors = client.hgetall(key)
+        for sid, data in visitors.items():
+            visitor = json.loads(data)
+            if visitor.get("chat_session_id") == chat_session_id:
+                if not visitor.get("sid"):
+                    visitor["sid"] = sid
+                return visitor
+        return None
+    except Exception as e:
+        logger.error(
+            f"Error getting visitor for agent {agent_id}, chat_session_id {chat_session_id}: {e}"
+        )
+        return None
+
+def has_connected_team_members_for_agent(agent_id):
+    """True when at least one team member is connected for this agent (agent members hash)."""
+    try:
+        client = get_redis_client()
+        key = f"agent_{agent_id}_members"
+        return client.hlen(key) > 0
+    except Exception as e:
+        logger.error(f"Error checking connected team members for agent {agent_id}: {e}")
+        return False
 
 def get_agent_member_sids_by_user_id(agent_id, user_id):
     """

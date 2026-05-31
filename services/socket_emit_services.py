@@ -46,7 +46,7 @@ async def emit_atlas_response(sid=None, room=None, message=None, payload=None, s
         return {"success": False, "message": "Error emitting atlas_response"}
 
 
-async def emit_atlas_response_chunk(chunk, done=False, sid=None, room=None, skip_sid=None, full_response=None, message_id=None, created_at=None, role=None):
+async def emit_atlas_response_chunk(chunk, done=False, sid=None, room=None, skip_sid=None, full_response=None, message_id=None, created_at=None, role=None, mongo_id=None):
     """
     Emit a single atlas response chunk to a specific socket ID or room.
     Useful for streaming LLM responses one chunk at a time.
@@ -57,9 +57,10 @@ async def emit_atlas_response_chunk(chunk, done=False, sid=None, room=None, skip
     :param room: The room ID to emit to (mutually exclusive with sid)
     :param skip_sid: The socket ID to skip when emitting to a room
     :param full_response: Full response text (included only when done=True)
-    :param message_id: Generated message ID (included only when done=True)
+    :param message_id: Client UUID for the message (included only when done=True)
     :param created_at: Creation timestamp in ISO format (included only when done=True)
     :param role: Role of the sender (included only when done=True)
+    :param mongo_id: MongoDB _id string (included only when done=True)
     """
     try:
         from sockets import sio
@@ -94,6 +95,8 @@ async def emit_atlas_response_chunk(chunk, done=False, sid=None, room=None, skip
                 payload["created_at"] = created_at
             if role is not None:
                 payload["role"] = role
+            if mongo_id is not None:
+                payload["_id"] = mongo_id
 
         # Emit the chunk
         await sio.emit("atlas_response_chunk", payload, **emit_kwargs)

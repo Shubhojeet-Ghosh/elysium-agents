@@ -1,4 +1,5 @@
 from logging_config import get_logger
+from typing import Any, Dict
 from services.elysium_atlas_services.atlas_query_qdrant_services import search_and_merge_agent_knowledge
 from services.elysium_atlas_services.agent_db_operations import get_agent_by_id
 from services.socket_emit_services import emit_atlas_response_chunk
@@ -7,6 +8,7 @@ from services.elysium_atlas_services.atlas_chat_session_services import (
     get_chat_session_data,
     coerce_utc_datetime,
     format_utc_datetime_for_client,
+    serialize_chat_message_for_client,
 )
 
 from config.llm_models_config import resolve_model_handler, DEFAULT_MODEL
@@ -30,6 +32,33 @@ def _resolve_user_message_created_at(additional_params: dict) -> datetime.dateti
     if received_timestamp is not None:
         return coerce_utc_datetime(received_timestamp)
     return _utc_now()
+
+
+def _build_agent_message_from_stored(
+    stored_messages: list | None,
+    agent_message_id: str,
+    response_text: str,
+    agent_message_created_at: datetime.datetime,
+) -> Dict[str, Any] | None:
+    """Serialize the stored AI agent message for socket/API payloads."""
+    agent_stored = next(
+        (doc for doc in (stored_messages or []) if doc.get("role") == "agent"),
+        None,
+    )
+    if agent_stored:
+        return serialize_chat_message_for_client(agent_stored)
+
+    if not response_text:
+        return None
+
+    return serialize_chat_message_for_client(
+        {
+            "message_id": agent_message_id,
+            "role": "agent",
+            "content": response_text,
+            "created_at": agent_message_created_at,
+        }
+    )
 
 
 def format_knowledge_base_string(final_results: list) -> str:
@@ -243,6 +272,7 @@ async def chat_with_agent_v1(agent_id, message, sid=None, chat_session_id=None, 
 
         response_text = ""
         agent_message_created_at = _utc_now()
+        stored_messages = None
         if stream and hasattr(response_obj, "__aiter__"):
             first_chunk_emitted = False
             request_started_at = additional_params.get("_request_started_at")
@@ -255,34 +285,10 @@ async def chat_with_agent_v1(agent_id, message, sid=None, chat_session_id=None, 
                             ttft_ms = (time.perf_counter() - request_started_at) * 1000
                             logger.info(f"{chat_log} Time to first token: {ttft_ms:.0f}ms")
                     await emit_atlas_response_chunk(chunk, done=False, sid=sid)
-            
-            if sid:
-                await emit_atlas_response_chunk(
-                    "",
-                    done=True,
-                    sid=sid,
-                    full_response=response_text,
-                    message_id=agent_message_id,
-                    created_at=format_utc_datetime_for_client(agent_message_created_at),
-                    role="agent",
-                )
-            
-            # logger.info(
-            #     f"{chat_log} llm_streaming done in "
-            #     f"{(time.perf_counter() - step_start) * 1000:.0f}ms "
-            #     f"(chars={len(response_text)})"
-            # )
-        else:
-            response_text = response_obj
-            # logger.info(
-            #     f"{chat_log} llm_call done in "
-            #     f"{(time.perf_counter() - step_start) * 1000:.0f}ms "
-            #     f"(chars={len(response_text) if response_text else 0})"
-            # )
 
-        if chat_session_id:
-            asyncio.create_task(
-                create_and_store_chat_messages(
+            agent_mongo_id = None
+            if chat_session_id:
+                stored_messages = await create_and_store_chat_messages(
                     chat_session_id=chat_session_id,
                     agent_id=agent_id,
                     user_message_payload={
@@ -298,8 +304,59 @@ async def chat_with_agent_v1(agent_id, message, sid=None, chat_session_id=None, 
                         "created_at": agent_message_created_at,
                     },
                 )
+                for stored in stored_messages:
+                    if stored.get("role") == "agent":
+                        agent_mongo_id = stored.get("_id")
+                        break
+                logger.info(f"{chat_log} Stored chat messages before final stream emit")
+
+            if sid:
+                await emit_atlas_response_chunk(
+                    "",
+                    done=True,
+                    sid=sid,
+                    full_response=response_text,
+                    message_id=agent_message_id,
+                    mongo_id=agent_mongo_id,
+                    created_at=format_utc_datetime_for_client(agent_message_created_at),
+                    role="agent",
+                )
+            
+            # logger.info(
+            #     f"{chat_log} llm_streaming done in "
+            #     f"{(time.perf_counter() - step_start) * 1000:.0f}ms "
+            #     f"(chars={len(response_text)})"
+            # )
+        else:
+            response_text = response_obj
+
+        if chat_session_id and not (stream and sid):
+            stored_messages = await create_and_store_chat_messages(
+                chat_session_id=chat_session_id,
+                agent_id=agent_id,
+                user_message_payload={
+                    "message_id": user_message_id,
+                    "role": "user",
+                    "content": message,
+                    "created_at": user_message_created_at,
+                },
+                agent_message_payload={
+                    "message_id": agent_message_id,
+                    "role": "agent",
+                    "content": response_text,
+                    "created_at": agent_message_created_at,
+                },
             )
-            logger.info(f"{chat_log} Queued chat messages for storage")
+            logger.info(f"{chat_log} Stored chat messages")
+
+        agent_message = None
+        if chat_session_id:
+            agent_message = _build_agent_message_from_stored(
+                stored_messages,
+                agent_message_id,
+                response_text,
+                agent_message_created_at,
+            )
 
         logger.info(f"{chat_log} Visitor message processed successfully")
 
@@ -312,6 +369,7 @@ async def chat_with_agent_v1(agent_id, message, sid=None, chat_session_id=None, 
             "agent_data": agent_data,
             "response_text": response_text,
             "chat_history": chat_history,
+            "agent_message": agent_message,
         }
     
     except Exception as e:

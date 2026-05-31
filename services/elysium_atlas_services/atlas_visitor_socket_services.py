@@ -5,6 +5,67 @@ from services.socket_connection_helpers import merge_socket_session
 
 logger = get_logger()
 
+
+def get_online_visitor_total(agent_id: str) -> int:
+    """Current count of online visitors in the Live Visitors list (Redis only)."""
+    count = get_visitor_count_for_agent(agent_id)
+    return count if count is not None else 0
+
+
+async def emit_agent_visitors_pagination_updated(agent_id: str, total: int | None = None):
+    """
+    Notify agent members that the online visitor count changed.
+    Clients should recompute total_pages from total and their active limit.
+    """
+    from sockets import sio
+
+    if total is None:
+        total = get_online_visitor_total(agent_id)
+
+    agent_members_room = f"agent_{agent_id}_members"
+    await sio.emit(
+        "agent_visitors_pagination_updated",
+        {"agent_id": agent_id, "total": total},
+        room=agent_members_room,
+    )
+    logger.info(
+        f"Emitted agent_visitors_pagination_updated to room {agent_members_room} "
+        f"for agent {agent_id}: total={total}"
+    )
+
+
+async def emit_agent_visitor_disconnected_event(
+    agent_id: str,
+    chat_session_id: str | None,
+    sid: str,
+):
+    """
+    Emit disconnect + pagination update for Live Visitors.
+
+    Disconnect removes the visitor from the online Redis list immediately;
+    pagination.total reflects the new online count.
+    """
+    from sockets import sio
+
+    total = get_online_visitor_total(agent_id)
+    agent_members_room = f"agent_{agent_id}_members"
+    await sio.emit(
+        "agent_visitor_disconnected",
+        {
+            "agent_id": agent_id,
+            "chat_session_id": chat_session_id,
+            "sid": sid,
+            "pagination": {"total": total},
+        },
+        room=agent_members_room,
+    )
+    logger.info(
+        f"Emitted agent_visitor_disconnected to room {agent_members_room} "
+        f"for agent {agent_id}, chat_session_id {chat_session_id}, sid {sid}, total={total}"
+    )
+    await emit_agent_visitors_pagination_updated(agent_id, total=total)
+
+
 async def handle_set_visitor_alias_service(socketData, sid):
     """
     Set or update the alias_name for a visitor identified by agent_id + chat_session_id.
@@ -101,16 +162,19 @@ async def handle_visitor_connection(agent_id, chat_session_id, sid, geo_data=Non
     agent_members_room = f"agent_{agent_id}_members"
     if visitor_data:
         visitor_count = get_visitor_count_for_agent(agent_id)
+        total = visitor_count if visitor_count is not None else 0
         await sio.emit(
             "agent_new_visitor",
             {
                 "agent_id": agent_id,
                 "visitor": visitor_data,
-                "total": visitor_count if visitor_count is not None else 0
+                "total": total,
+                "pagination": {"total": total},
             },
             room=agent_members_room
         )
         logger.info(f"Emitted agent_new_visitor to room {agent_members_room} for agent {agent_id}, chat_session_id {chat_session_id}")
+        await emit_agent_visitors_pagination_updated(agent_id, total=total)
 
     # Emit updated visitor count to the agent's team room if agent data is cached/available
     agent_data = await get_or_cache_agent_data_async(agent_id)
@@ -167,16 +231,17 @@ async def handle_team_member_connection(team_id, user_id, agent_id, sid):
 
 async def emit_agent_visitors_list(agent_id, sid, page=1, limit=100):
     """
-    Fetch a paginated visitors list for the given agent from Redis and emit
-    'agent_visitors_list' to the specified socket.
+    Fetch a paginated online visitors list for the agent and emit agent_visitors_list.
 
-    Args:
-        agent_id (str): The agent ID
-        sid (str): Target socket ID
-        page (int): Page number (1-based, default: 1)
-        limit (int): Number of visitors per page (default: 100)
+    The list contains online visitors only (Redis). Out-of-range pages are clamped
+    to the last valid page when visitors exist.
     """
     from sockets import sio
+
+    page = max(1, page)
+    limit = max(1, limit)
+    await merge_socket_session(sio, sid, {"visitors_list_limit": limit})
+
     visitors_data = get_visitors_for_agent(agent_id, page=page, size=limit)
     if visitors_data is not None:
         await sio.emit(
@@ -187,12 +252,17 @@ async def emit_agent_visitors_list(agent_id, sid, page=1, limit=100):
                 "total": visitors_data["total"],
                 "page": visitors_data["page"],
                 "size": visitors_data["size"],
+                "total_pages": visitors_data["total_pages"],
                 "has_next": visitors_data["has_next"],
-                "has_prev": visitors_data["has_prev"]
+                "has_prev": visitors_data["has_prev"],
             },
             to=sid
         )
-        logger.info(f"Emitted agent_visitors_list to socket {sid} for agent {agent_id}: {len(visitors_data['visitors'])} visitors (page {page}, limit {limit}, total {visitors_data['total']})")
+        logger.info(
+            f"Emitted agent_visitors_list to socket {sid} for agent {agent_id}: "
+            f"{len(visitors_data['visitors'])} visitors "
+            f"(page {visitors_data['page']}, limit {limit}, total {visitors_data['total']})"
+        )
     else:
         logger.warning(f"Could not retrieve visitors for agent {agent_id} to emit to socket {sid}")
 
@@ -202,10 +272,9 @@ async def handle_agent_member_connection(agent_id, team_id, user_id, sid, page=1
     await sio.enter_room(sid, room_name)
     logger.info(f"Socket {sid} joined room {room_name} for user_id {user_id}, team_id {team_id}")
 
-    # Add agent member to Redis (by agent)
     add_agent_member(agent_id, team_id, user_id, sid)
+    await merge_socket_session(sio, sid, {"visitors_list_limit": max(1, limit)})
 
-    # Emit the latest visitors for this agent to the newly connected team member
     await emit_agent_visitors_list(agent_id, sid, page=page, limit=limit)
 
 async def handle_atlas_team_member_connected_service(socketData, sid=None):

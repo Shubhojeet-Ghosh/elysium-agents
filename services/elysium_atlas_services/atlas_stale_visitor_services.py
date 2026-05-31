@@ -115,17 +115,13 @@ async def _emit_stale_visitor_events(
     if not cleaned_by_agent:
         return
 
-    from sockets import sio
+    from services.elysium_atlas_services.atlas_visitor_socket_services import (
+        emit_agent_visitor_disconnected_event,
+    )
 
     for agent_id, disconnects in cleaned_by_agent.items():
-        agent_members_room = f"agent_{agent_id}_members"
-
         for sid, chat_session_id in disconnects:
-            await sio.emit(
-                "agent_visitor_disconnected",
-                {"agent_id": agent_id, "chat_session_id": chat_session_id, "sid": sid},
-                room=agent_members_room,
-            )
+            await emit_agent_visitor_disconnected_event(agent_id, chat_session_id, sid)
 
         agent_data = await get_or_cache_agent_data_async(agent_id)
         if not agent_data:
@@ -137,6 +133,8 @@ async def _emit_stale_visitor_events(
 
         visitor_count = get_visitor_count_for_agent(agent_id)
         team_room = f"team_{team_id}_members"
+        from sockets import sio
+
         await sio.emit(
             "agent_visitor_count_updated",
             {

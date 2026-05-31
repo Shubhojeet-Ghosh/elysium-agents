@@ -5,6 +5,10 @@ from fastapi.responses import JSONResponse
 
 from logging_config import get_logger
 from services.mongo_services import get_collection
+from services.elysium_atlas_services.atlas_chat_session_services import (
+    serialize_chat_message_for_client,
+    count_unread_visitor_messages,
+)
 
 logger = get_logger()
 
@@ -26,15 +30,10 @@ async def get_team_member_chat_sessions_controller(
         limit:     Documents per page (default: 20).
 
     Returns:
-        {
-            "success": True,
-            "data": [ ...chat session documents... ],
-            "total": <int>,
-            "page": <int>,
-            "limit": <int>,
-            "has_next": <bool>,
-            "has_prev": <bool>
-        }
+        Each session in data includes:
+            has_unread_messages          – true if visitor messages lack read_at
+            unread_visitor_message_count – count of unread visitor (role=user) messages
+            last_message                 – most recent message in the conversation
     """
     try:
         if not userData or userData.get("success") == False:
@@ -88,9 +87,6 @@ async def get_team_member_chat_sessions_controller(
             )
             if msg:
                 msg.pop("_id", None)
-                from services.elysium_atlas_services.atlas_chat_session_services import (
-                    serialize_chat_message_for_client,
-                )
                 msg = serialize_chat_message_for_client(msg)
             return msg
 
@@ -103,10 +99,19 @@ async def get_team_member_chat_sessions_controller(
             for doc in documents
         ])
 
+        unread_counts = await asyncio.gather(*[
+            count_unread_visitor_messages(
+                doc.get("agent_id"),
+                doc.get("chat_session_id"),
+                doc.get("conversation_id"),
+            )
+            for doc in documents
+        ])
+
         # Return only the required fields; missing keys default to None
         FIELDS = ("chat_session_id", "alias_name", "last_message_at", "visitor_online", "last_connected_at", "geo_data")
         serialised = []
-        for doc, last_msg in zip(documents, last_messages):
+        for doc, last_msg, unread_count in zip(documents, last_messages, unread_counts):
             entry = {}
             for field in FIELDS:
                 val = doc.get(field)
@@ -115,6 +120,8 @@ async def get_team_member_chat_sessions_controller(
                     val = val.isoformat()
                 entry[field] = val
             entry["last_message"] = last_msg
+            entry["has_unread_messages"] = unread_count > 0
+            entry["unread_visitor_message_count"] = unread_count
             serialised.append(entry)
         documents = serialised
 

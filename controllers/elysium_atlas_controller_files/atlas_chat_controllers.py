@@ -1,19 +1,24 @@
 import asyncio
 import uuid
 import datetime
+from fastapi.responses import JSONResponse
 from logging_config import get_logger
 
 from services.socket_emit_services import emit_atlas_response, emit_atlas_response_chunk
 from services.elysium_atlas_services.agent_chat_services import chat_with_agent_v1
 from services.elysium_atlas_services.elysium_atlas_user_plan_services import can_user_send_chat, decrement_user_ai_queries
 from services.elysium_atlas_services.agent_db_operations import get_agent_owner_user_id
+from services.elysium_atlas_services.atlas_team_member_emit_services import emit_agent_visitor_ai_chat_message
 from services.elysium_atlas_services.atlas_chat_session_services import (
     rotate_conversation_id,
     create_and_store_chat_messages,
     coerce_utc_datetime,
+    mark_chat_message_as_read,
+    stored_message_metadata,
 )
 
 logger = get_logger()
+
 
 async def route_visitor_message_to_team_member(
     agent_id,
@@ -48,18 +53,25 @@ async def route_visitor_message_to_team_member(
             "created_at": message_created_at,
         }
 
-        # Always persist regardless of whether the team member is online
-        asyncio.create_task(create_and_store_chat_messages(
+        stored_messages = await create_and_store_chat_messages(
             chat_session_id=chat_session_id,
             agent_id=agent_id,
             user_message_payload=visitor_message_payload,
             agent_message_payload=None,
-        ))
+        )
+        message_metadata = stored_message_metadata(stored_messages[0] if stored_messages else None)
 
         # Emit to team member sockets if any are online
         team_member_sids = get_agent_member_sids_by_user_id(agent_id, in_conversation_with)
         if team_member_sids:
-            await emit_team_member_message(team_member_sids, agent_id, chat_session_id, message, chat_session_id)
+            await emit_team_member_message(
+                team_member_sids,
+                agent_id,
+                chat_session_id,
+                message,
+                chat_session_id,
+                message_metadata=message_metadata,
+            )
         else:
             logger.warning(
                 f"Team member {in_conversation_with} is not online for agent {agent_id}. "
@@ -117,6 +129,13 @@ async def chat_with_agent_controller_v1(chatPayload,user_data, sid = None):
                 "message": chat_response.get("message", "Chat request failed."),
             }
 
+        if agent_id and chat_session_id:
+            await emit_agent_visitor_ai_chat_message(
+                agent_id,
+                chat_session_id,
+                agent_message=chat_response.get("agent_message"),
+            )
+
         if user_id:
             asyncio.create_task(decrement_user_ai_queries(user_id))
 
@@ -146,3 +165,51 @@ async def rotate_conversation_id_controller(requestData: dict):
     except Exception as e:
         logger.error(f"Error in rotate_conversation_id_controller: {e}")
         return {"success": False, "message": "An error occurred while rotating conversation ID"}
+
+
+async def mark_chat_message_read_controller(requestData: dict):
+    """
+    Mark a chat message as read.
+
+    Request body:
+        message_id       – MongoDB _id or client UUID (message_id field on the doc)
+        agent_id         – agent the message belongs to
+        chat_session_id  – session the message belongs to
+        read_by          – optional; user _id of the reader (team member). Stored only on first read.
+    """
+    try:
+        message_id = requestData.get("message_id")
+        agent_id = requestData.get("agent_id")
+        chat_session_id = requestData.get("chat_session_id")
+        read_by = requestData.get("read_by")
+
+        if not message_id or not agent_id or not chat_session_id:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "success": False,
+                    "message": "message_id, agent_id and chat_session_id are required",
+                },
+            )
+
+        result = await mark_chat_message_as_read(
+            message_id,
+            agent_id,
+            chat_session_id,
+            read_by=read_by,
+        )
+        if not result.get("success"):
+            status_code = 404 if result.get("message") == "Message not found" else 400
+            return JSONResponse(
+                status_code=status_code,
+                content={"success": False, "message": result.get("message", "Failed to mark message as read")},
+            )
+
+        return JSONResponse(status_code=200, content=result)
+
+    except Exception as e:
+        logger.error(f"Error in mark_chat_message_read_controller: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "message": "An error occurred while marking the message as read"},
+        )
