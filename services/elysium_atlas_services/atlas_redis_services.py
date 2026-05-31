@@ -239,6 +239,33 @@ def get_visitor_count_for_agent(agent_id):
         logger.error(f"Error getting visitor count for agent {agent_id}: {e}")
         return None
 
+def iter_all_agent_visitor_entries():
+    """
+    Yield (agent_id, sid, visitor_data) for every visitor in every agent visitors hash.
+
+    Scans Redis keys matching atlas_*_visitors.
+    """
+    try:
+        client = get_redis_client()
+        prefix = "atlas_"
+        suffix = "_visitors"
+        for key in client.scan_iter(match=f"{prefix}*{suffix}", count=100):
+            if not key.startswith(prefix) or not key.endswith(suffix):
+                continue
+            agent_id = key[len(prefix):-len(suffix)]
+            if not agent_id:
+                continue
+            visitors = client.hgetall(key)
+            for sid, data in visitors.items():
+                try:
+                    visitor_data = json.loads(data)
+                except json.JSONDecodeError:
+                    logger.warning(f"Skipping invalid visitor JSON in {key} for sid {sid}")
+                    continue
+                yield agent_id, sid, visitor_data
+    except Exception as e:
+        logger.error(f"Error iterating agent visitor entries: {e}")
+
 def add_team_member(team_id, user_id, agent_id, sid):
     """
     Add or update a team member in the team's members hash in Redis.
