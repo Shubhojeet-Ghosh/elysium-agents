@@ -115,16 +115,16 @@ async def _emit_stale_visitor_events(
     if not cleaned_by_agent:
         return
 
-    from sockets import sio
+    from services.external_socket_emit import emit_to_room
 
     for agent_id, disconnects in cleaned_by_agent.items():
         agent_members_room = f"agent_{agent_id}_members"
 
         for sid, chat_session_id in disconnects:
-            await sio.emit(
+            await emit_to_room(
                 "agent_visitor_disconnected",
                 {"agent_id": agent_id, "chat_session_id": chat_session_id, "sid": sid},
-                room=agent_members_room,
+                agent_members_room,
             )
 
         agent_data = await get_or_cache_agent_data_async(agent_id)
@@ -137,13 +137,13 @@ async def _emit_stale_visitor_events(
 
         visitor_count = get_visitor_count_for_agent(agent_id)
         team_room = f"team_{team_id}_members"
-        await sio.emit(
+        await emit_to_room(
             "agent_visitor_count_updated",
             {
                 "agent_id": agent_id,
                 "visitor_count": visitor_count if visitor_count is not None else 0,
             },
-            room=team_room,
+            team_room,
         )
         logger.info(
             f"Emitted stale cleanup events for agent {agent_id}: "
