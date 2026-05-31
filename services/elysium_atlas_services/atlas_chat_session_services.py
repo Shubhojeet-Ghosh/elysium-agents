@@ -127,6 +127,9 @@ async def get_chat_session_data(requestData: Dict[str, Any]) -> Dict[str, Any] |
             if "last_message_at" in document and document["last_message_at"]:
                 v = document["last_message_at"]
                 document["last_message_at"] = v.isoformat() if isinstance(v, datetime.datetime) else v
+            if "last_connected_at" in document and document["last_connected_at"]:
+                v = document["last_connected_at"]
+                document["last_connected_at"] = v.isoformat() if isinstance(v, datetime.datetime) else v
 
             # Ensure conversation_id exists; backfill if missing from older documents
             if not document.get("conversation_id"):
@@ -524,7 +527,7 @@ async def set_visitor_online_status(agent_id: str, chat_session_id: str, visitor
 
         update_fields: Dict[str, Any] = {"visitor_online": visitor_online}
         if visitor_online:
-            update_fields["last_connected_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="milliseconds")
+            update_fields["last_connected_at"] = datetime.datetime.now(datetime.timezone.utc)
 
         result = await collection.update_one(
             {"chat_session_id": chat_session_id, "agent_id": agent_id},
