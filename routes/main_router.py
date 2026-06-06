@@ -7,10 +7,18 @@ from routes.elysium_atlas.elysium_atlas_agent_routes import elysium_atlas_agent_
 from routes.elysium_atlas.atlas_visitors_routes import atlas_visitors_router
 from routes.elysium_atlas.atlas_team_members_routes import atlas_team_members_router
 from routes.elysium_chat_routers.elysium_chat_router import elysium_chat_router
+from routes.email_agent.email_login_routes import email_login_router
+from routes.email_agent.email_department_routes import email_department_router
+from routes.email_agent.gmail_routes import gmail_router
+from routes.email_agent.email_ai_agent_routes import email_ai_agent_router
 
 # Create the main router with a prefix
 main_router = APIRouter(prefix = "/elysium-agents")
 
+main_router.include_router(email_login_router)
+main_router.include_router(email_department_router)
+main_router.include_router(gmail_router)
+main_router.include_router(email_ai_agent_router)
 main_router.include_router(elysium_atlas_router)
 main_router.include_router(elysium_atlas_user_auth_router)
 main_router.include_router(elysium_atlas_agent_router)

@@ -24,4 +24,6 @@ dependencies = [
     "anthropic>=0.34.0",
     "docx2txt>=0.9",
     "xai-sdk>=1.5.0",
+    "bcrypt>=5.0.0",
+    "email-validator>=2.3.0",
 ]

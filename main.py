@@ -14,7 +14,12 @@ from routes.main_router import main_router
 from services.redis_services import initialize_redis_client, close_redis_client
 from services.mongo_services import initialize_mongo_client, close_mongo_client
 from services.qdrant_services import initialize_qdrant_client, close_qdrant_client
-from services.mongo_indexes import create_mongo_indexes
+from services.mongo_indexes import (
+    backfill_department_team_ids,
+    backfill_email_thread_assignment_fields,
+    backfill_email_user_roles,
+    create_mongo_indexes,
+)
 from sockets import socketio_app
 
 logger = get_logger()
@@ -31,7 +36,10 @@ async def lifespan(app: FastAPI):
     # Initialize MongoDB client connection
     await initialize_mongo_client()
     
-    # Create MongoDB indexes
+    # Backfill legacy data and create MongoDB indexes
+    await backfill_email_user_roles()
+    await backfill_email_thread_assignment_fields()
+    await backfill_department_team_ids()
     await create_mongo_indexes()
     
     # Initialize Qdrant client connection

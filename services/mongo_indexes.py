@@ -4,6 +4,86 @@ from config.settings import settings
 
 logger = get_logger()
 
+EMAIL_USERS_COLLECTION = "email-users"
+EMAIL_THREADS_COLLECTION = "email-threads"
+EMAIL_DEPARTMENTS_COLLECTION = "email-departments"
+
+
+async def backfill_email_user_roles() -> None:
+    """Set role=admin on legacy email-users documents that do not have a role field."""
+    try:
+        email_users_collection = get_collection(EMAIL_USERS_COLLECTION)
+        backfill_result = await email_users_collection.update_many(
+            {"role": {"$exists": False}},
+            {"$set": {"role": "admin"}},
+        )
+        if backfill_result.modified_count:
+            logger.info(
+                f"Backfilled role=admin on {backfill_result.modified_count} email-users document(s)"
+            )
+    except Exception as e:
+        logger.error(f"Failed to backfill email user roles: {e}")
+        raise
+
+
+async def backfill_email_thread_assignment_fields() -> None:
+    """Set empty department_id and assigned_user_id on legacy email-threads documents."""
+    try:
+        email_threads_collection = get_collection(EMAIL_THREADS_COLLECTION)
+
+        department_backfill = await email_threads_collection.update_many(
+            {"department_id": {"$exists": False}},
+            {"$set": {"department_id": ""}},
+        )
+        if department_backfill.modified_count:
+            logger.info(
+                "Backfilled department_id on "
+                f"{department_backfill.modified_count} email-threads document(s)"
+            )
+
+        assigned_user_backfill = await email_threads_collection.update_many(
+            {"assigned_user_id": {"$exists": False}},
+            {"$set": {"assigned_user_id": ""}},
+        )
+        if assigned_user_backfill.modified_count:
+            logger.info(
+                "Backfilled assigned_user_id on "
+                f"{assigned_user_backfill.modified_count} email-threads document(s)"
+            )
+    except Exception as e:
+        logger.error(f"Failed to backfill email thread assignment fields: {e}")
+        raise
+
+
+async def backfill_department_team_ids() -> None:
+    """Infer team_id on legacy email-departments documents from linked email-users."""
+    try:
+        departments_collection = get_collection(EMAIL_DEPARTMENTS_COLLECTION)
+        users_collection = get_collection(EMAIL_USERS_COLLECTION)
+        backfilled_count = 0
+
+        async for department in departments_collection.find({"team_id": {"$exists": False}}):
+            department_id = str(department["_id"])
+            user = await users_collection.find_one({"department_id": department_id})
+            team_id = (user or {}).get("team_id", "").strip()
+            if not team_id:
+                continue
+
+            await departments_collection.update_one(
+                {"_id": department["_id"]},
+                {"$set": {"team_id": team_id}},
+            )
+            backfilled_count += 1
+
+        if backfilled_count:
+            logger.info(
+                f"Backfilled team_id on {backfilled_count} email-departments document(s)"
+            )
+    except Exception as e:
+        logger.error(f"Failed to backfill department team_id values: {e}")
+        raise
+
+
 async def create_mongo_indexes():
     """
     Create MongoDB indexes.
@@ -83,6 +163,85 @@ async def create_mongo_indexes():
         logger.info("Index created on atlas_chat_mesages.created_at")
         await atlas_chat_mesages_collection.create_index([("agent_id", 1), ("chat_session_id", 1)], name="agent_id_chat_session_id_index_messages")
         logger.info("Compound index created on atlas_chat_mesages.agent_id and chat_session_id")
+
+        # Create indexes for email-users collection
+        email_users_collection = get_collection("email-users")
+        await email_users_collection.create_index("email", name="email_1", unique=True)
+        logger.info("Unique index created on email-users.email")
+        await email_users_collection.create_index("team_id", name="team_id_1")
+        logger.info("Index created on email-users.team_id")
+        await email_users_collection.create_index("department_id", name="department_id_1")
+        logger.info("Index created on email-users.department_id")
+
+        # Create indexes for email-departments collection
+        email_departments_collection = get_collection(EMAIL_DEPARTMENTS_COLLECTION)
+        await email_departments_collection.create_index("team_id", name="team_id_1")
+        logger.info("Index created on email-departments.team_id")
+
+        # Create indexes for email-gmail_accounts collection
+        email_gmail_accounts_collection = get_collection("email-gmail_accounts")
+        await email_gmail_accounts_collection.create_index(
+            [("user_id", 1), ("email_address", 1)],
+            name="user_id_email_address_1",
+            unique=True,
+        )
+        logger.info("Unique compound index created on email-gmail_accounts.user_id + email_address")
+        await email_gmail_accounts_collection.create_index("user_id", name="user_id_1")
+        logger.info("Index created on email-gmail_accounts.user_id")
+        await email_gmail_accounts_collection.create_index("team_id", name="team_id_1")
+        logger.info("Index created on email-gmail_accounts.team_id")
+
+        # Create indexes for email-ai-agents collection
+        email_ai_agents_collection = get_collection("email-ai-agents")
+        await email_ai_agents_collection.create_index("team_id", name="team_id_1")
+        logger.info("Index created on email-ai-agents.team_id")
+        await email_ai_agents_collection.create_index("gmail_account_id", name="gmail_account_id_1")
+        logger.info("Index created on email-ai-agents.gmail_account_id")
+        await email_ai_agents_collection.create_index("user_id", name="user_id_1")
+        logger.info("Index created on email-ai-agents.user_id")
+        await email_ai_agents_collection.create_index("sync_status", name="sync_status_1")
+        logger.info("Index created on email-ai-agents.sync_status")
+
+        # Create indexes for email-thread-messages collection
+        email_thread_messages_collection = get_collection("email-thread-messages")
+        await email_thread_messages_collection.create_index(
+            [("gmail_account_id", 1), ("gmail_message_id", 1)],
+            name="gmail_account_id_gmail_message_id_1",
+            unique=True,
+        )
+        logger.info("Unique compound index created on email-thread-messages.gmail_account_id + gmail_message_id")
+        await email_thread_messages_collection.create_index("thread_id", name="thread_id_1")
+        logger.info("Index created on email-thread-messages.thread_id")
+        await email_thread_messages_collection.create_index("team_id", name="team_id_1")
+        logger.info("Index created on email-thread-messages.team_id")
+        await email_thread_messages_collection.create_index(
+            [("team_id", 1), ("thread_id", 1), ("received_at", 1)],
+            name="team_id_thread_id_received_at_1",
+        )
+        logger.info("Compound index created on email-thread-messages.team_id + thread_id + received_at")
+
+        # Create indexes for email-threads collection
+        email_threads_collection = get_collection("email-threads")
+        await email_threads_collection.create_index(
+            [("gmail_account_id", 1), ("thread_id", 1)],
+            name="gmail_account_id_thread_id_1",
+            unique=True,
+        )
+        logger.info("Unique compound index created on email-threads.gmail_account_id + thread_id")
+        await email_threads_collection.create_index("team_id", name="team_id_1")
+        logger.info("Index created on email-threads.team_id")
+        await email_threads_collection.create_index(
+            [("team_id", 1), ("last_message_at", -1)],
+            name="team_id_last_message_at_1",
+        )
+        logger.info("Compound index created on email-threads.team_id + last_message_at")
+
+        # Create indexes for email-user-department-mapping collection
+        email_user_department_mapping_collection = get_collection("email-user-department-mapping")
+        await email_user_department_mapping_collection.create_index("user_id", name="user_id_1", unique=True)
+        logger.info("Unique index created on email-user-department-mapping.user_id")
+        await email_user_department_mapping_collection.create_index("department_id", name="department_id_1")
+        logger.info("Index created on email-user-department-mapping.department_id")
 
         logger.info("MongoDB indexes created / verified successfully.")
 

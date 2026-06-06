@@ -37,6 +37,10 @@ class Settings(BaseSettings):
     ATLAS_WIDGET_VERSION: str
     ELYSIUM_CDN_BASE_URL: str
     XAI_API_KEY: str = Field(default="")
+    # Google Gmail OAuth
+    GOOGLE_CLIENT_ID: str
+    GOOGLE_CLIENT_SECRET: str
+    GOOGLE_REDIRECT_URI: str = Field(default="")
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
