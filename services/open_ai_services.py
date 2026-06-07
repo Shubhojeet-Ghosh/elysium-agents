@@ -1,3 +1,4 @@
+import json
 from typing import List, Optional, Dict, Any, AsyncGenerator, Union, Type, TypeVar
 from openai import AsyncOpenAI
 from pydantic import BaseModel
@@ -166,6 +167,79 @@ async def openai_chat_completion_reasoning(params: Dict[str, Any]) -> Union[str,
         return content or ""
     except Exception as e:
         logger.error(f"Error calling reasoning completion: {e}")
+        raise
+
+
+async def openai_chat_completion_with_tools(params: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Reasoning-oriented chat completion with optional tool calling (no temperature).
+
+    Args:
+        params: Supported keys:
+            - messages (list, required)
+            - model (str)
+            - tools (list): OpenAI tool definitions
+            - tool_choice (str | dict): defaults to "auto"
+
+    Returns:
+        Dict with:
+            - content (str): assistant text, if any
+            - tool_calls (list): [{ id, name, arguments }]
+    """
+    model = params.get("model", "gpt-5.4")
+    messages = params.get("messages") or []
+    tools = params.get("tools") or []
+    tool_choice = params.get("tool_choice", "auto")
+
+    if not isinstance(messages, list) or len(messages) == 0:
+        logger.warning("chat_completion_with_tools called without messages")
+        return {"content": "", "tool_calls": []}
+
+    try:
+        client = get_openai_client()
+        request_kwargs: Dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+        }
+        if tools:
+            request_kwargs["tools"] = tools
+            request_kwargs["tool_choice"] = tool_choice
+
+        response = await client.chat.completions.create(**request_kwargs)
+
+        if not response.choices:
+            return {"content": "", "tool_calls": []}
+
+        message = response.choices[0].message
+        tool_calls: List[Dict[str, Any]] = []
+
+        if message.tool_calls:
+            for tool_call in message.tool_calls:
+                parsed_arguments: Dict[str, Any] = {}
+                raw_arguments = tool_call.function.arguments or "{}"
+                try:
+                    parsed_arguments = json.loads(raw_arguments)
+                except json.JSONDecodeError:
+                    logger.warning(
+                        f"Failed to parse tool arguments for {tool_call.function.name}: "
+                        f"{raw_arguments}"
+                    )
+
+                tool_calls.append({
+                    "id": tool_call.id,
+                    "name": tool_call.function.name,
+                    "arguments": parsed_arguments,
+                })
+
+        logger.debug(
+            f"Tool completion using model={model}, tool_calls={len(tool_calls)}"
+        )
+        return {
+            "content": message.content or "",
+            "tool_calls": tool_calls,
+        }
+    except Exception as e:
+        logger.error(f"Error calling chat completion with tools: {e}")
         raise
 
 

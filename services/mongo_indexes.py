@@ -237,6 +237,11 @@ async def create_mongo_indexes():
             name="team_id_last_message_at_1",
         )
         logger.info("Compound index created on email-threads.team_id + last_message_at")
+        await email_threads_collection.create_index(
+            [("team_id", 1), ("ai_action.status", 1)],
+            name="team_id_ai_action_status_1",
+        )
+        logger.info("Compound index created on email-threads.team_id + ai_action.status")
 
         # Create indexes for email-knowledge collection
         email_knowledge_collection = get_collection(EMAIL_KNOWLEDGE_COLLECTION)
@@ -272,6 +277,29 @@ async def create_mongo_indexes():
         email_recipient_rules_collection = get_collection("email-recipient-rules")
         await email_recipient_rules_collection.create_index("team_id", name="team_id_1")
         logger.info("Index created on email-recipient-rules.team_id")
+
+        # Create indexes for email-flow-runs collection
+        email_flow_runs_collection = get_collection("email-flow-runs")
+        await email_flow_runs_collection.create_index("run_id", name="run_id_1", unique=True)
+        logger.info("Unique index created on email-flow-runs.run_id")
+        await email_flow_runs_collection.create_index("agent_id", name="agent_id_1")
+        logger.info("Index created on email-flow-runs.agent_id")
+        await email_flow_runs_collection.create_index("thread_id", name="thread_id_1")
+        logger.info("Index created on email-flow-runs.thread_id")
+        await email_flow_runs_collection.create_index(
+            [("team_id", 1), ("thread_id", 1), ("created_at", -1)],
+            name="team_id_thread_id_created_at_1",
+        )
+        logger.info("Compound index created on email-flow-runs.team_id + thread_id + created_at")
+        await email_flow_runs_collection.create_index("status", name="status_1")
+        logger.info("Index created on email-flow-runs.status")
+
+        # Create indexes for email-thread-messages flow processing fields
+        await email_thread_messages_collection.create_index(
+            "processing_status",
+            name="processing_status_1",
+        )
+        logger.info("Index created on email-thread-messages.processing_status")
 
         # Create indexes for email-user-department-mapping collection
         email_user_department_mapping_collection = get_collection("email-user-department-mapping")

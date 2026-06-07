@@ -7,6 +7,7 @@ from config.email_ai_agent_models import (
     GetEmailThreadRequest,
     ListTeamEmailAiAgentsRequest,
     ListTeamEmailThreadsRequest,
+    SendThreadAiDraftRequest,
     TriggerAgentSyncRequest,
     UpdateEmailAiAgentRequest,
 )
@@ -24,6 +25,7 @@ from services.email_agent_services.email_ai_agent_services import (
 from services.email_agent_services.email_thread_services import (
     get_email_thread_detail,
     list_team_email_threads,
+    send_thread_ai_draft,
 )
 
 logger = get_logger()
@@ -107,6 +109,7 @@ async def create_email_ai_agent_controller(
             reply_action=request_data.reply_action.model_dump(),
             routing_rule_ids=request_data.routing_rule_ids,
             recipient_rule_ids=request_data.recipient_rule_ids,
+            email_format_template=request_data.email_format_template,
         )
 
         status_code = result.get("status_code", 200 if result.get("success") else 400)
@@ -201,6 +204,7 @@ async def update_email_ai_agent_controller(
             reply_action=request_data.reply_action.model_dump(),
             routing_rule_ids=request_data.routing_rule_ids,
             recipient_rule_ids=request_data.recipient_rule_ids,
+            email_format_template=request_data.email_format_template,
         )
 
         status_code = result.get("status_code", 200 if result.get("success") else 400)
@@ -436,5 +440,55 @@ async def get_email_thread_controller(
             content={
                 "success": False,
                 "message": "An error occurred while fetching the email thread.",
+            },
+        )
+
+
+async def send_thread_ai_draft_controller(
+    request_data: SendThreadAiDraftRequest,
+    user_data: dict,
+):
+    try:
+        auth_user = _get_authenticated_email_user(user_data)
+        if isinstance(auth_user, JSONResponse):
+            return auth_user
+
+        if request_data.team_id.strip() != auth_user["team_id"].strip():
+            return _forbidden_response("team_id does not match authenticated user.")
+
+        result = await send_thread_ai_draft(
+            team_id=request_data.team_id,
+            thread_id=request_data.thread_id,
+            role=auth_user["role"],
+            user_id=auth_user["user_id"],
+            user_department_id=auth_user["department_id"],
+        )
+        status_code = result.get("status_code", 200 if result.get("success") else 400)
+
+        if not result.get("success"):
+            return JSONResponse(
+                status_code=status_code,
+                content={
+                    "success": False,
+                    "message": result.get("message", "Failed to send AI draft."),
+                },
+            )
+
+        return JSONResponse(
+            status_code=status_code,
+            content={
+                "success": True,
+                "message": result.get("message"),
+                "data": result["data"],
+            },
+        )
+
+    except Exception as e:
+        logger.error(f"Error in send_thread_ai_draft_controller: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "success": False,
+                "message": "An error occurred while sending the AI draft.",
             },
         )

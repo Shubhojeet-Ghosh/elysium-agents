@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict, List, TypedDict
 
 from bson import ObjectId
 from bson.errors import InvalidId
@@ -9,6 +9,15 @@ from services.email_agent_services.email_ai_agent_services import (
     EMAIL_AI_AGENTS_COLLECTION,
     get_email_ai_agent_by_id,
     get_email_ai_agent_id_str,
+)
+from services.email_agent_services.email_flows.email_flow_constants import (
+    DEFAULT_THREAD_MESSAGE_LIMIT,
+    MESSAGE_PROCESSING_STATUS_PENDING,
+    MESSAGE_PROCESSING_STATUS_SKIPPED,
+)
+from services.email_agent_services.email_flows.email_flow_trigger_services import (
+    SyncThreadFlowTrigger,
+    run_sync_flows_for_threads,
 )
 from services.email_agent_services.email_thread_services import (
     EMAIL_THREAD_MESSAGES_COLLECTION,
@@ -26,6 +35,40 @@ from services.email_agent_services.gmail_oauth_services import get_gmail_account
 from services.mongo_services import get_collection
 
 logger = get_logger()
+
+
+class _NewInboundThread(TypedDict):
+    thread_id: str
+    trigger_message_id: str
+    received_at: datetime
+
+
+def _track_new_inbound_thread(
+    threads_with_new_inbound: Dict[str, _NewInboundThread],
+    *,
+    thread_id: str,
+    gmail_message_id: str,
+    received_at: datetime | None,
+) -> None:
+    """Keep the newest inbound insert per thread for a single sync-triggered flow run."""
+    normalized_thread_id = thread_id.strip()
+    if not normalized_thread_id or not gmail_message_id.strip():
+        return
+
+    if received_at is not None and received_at.tzinfo is None:
+        received_at = received_at.replace(tzinfo=timezone.utc)
+    elif received_at is not None:
+        received_at = received_at.astimezone(timezone.utc)
+    else:
+        received_at = datetime.min.replace(tzinfo=timezone.utc)
+
+    existing = threads_with_new_inbound.get(normalized_thread_id)
+    if existing is None or received_at >= existing["received_at"]:
+        threads_with_new_inbound[normalized_thread_id] = {
+            "thread_id": normalized_thread_id,
+            "trigger_message_id": gmail_message_id.strip(),
+            "received_at": received_at,
+        }
 
 
 def _get_sync_cutoff(agent: Dict[str, Any]) -> datetime:
@@ -82,7 +125,38 @@ async def _store_thread_message(
         "gmail_message_id": gmail_message_id,
     })
     if existing:
+        now = datetime.now(timezone.utc)
+        await collection.update_one(
+            {"_id": existing["_id"]},
+            {
+                "$set": {
+                    "subject": parsed_message.get("subject", ""),
+                    "from": parsed_message.get("from", ""),
+                    "to": parsed_message.get("to", []),
+                    "cc": parsed_message.get("cc", []),
+                    "bcc": parsed_message.get("bcc", []),
+                    "reply_to": parsed_message.get("reply_to", ""),
+                    "message_id_header": parsed_message.get("message_id_header", ""),
+                    "snippet": parsed_message.get("snippet", ""),
+                    "body_text": parsed_message.get("body_text", ""),
+                    "body_html": parsed_message.get("body_html", ""),
+                    "received_at": parsed_message.get("received_at"),
+                    "label_ids": parsed_message.get("label_ids", []),
+                    "is_unread": parsed_message.get("is_unread", False),
+                    "metadata": parsed_message.get("metadata", {}),
+                    "direction": parsed_message.get("direction", "inbound"),
+                    "updated_at": now,
+                }
+            },
+        )
         return False
+
+    direction = parsed_message.get("direction", "inbound")
+    processing_status = (
+        MESSAGE_PROCESSING_STATUS_PENDING
+        if direction == "inbound"
+        else MESSAGE_PROCESSING_STATUS_SKIPPED
+    )
 
     document = {
         "agent_id": get_email_ai_agent_id_str(agent),
@@ -90,7 +164,7 @@ async def _store_thread_message(
         "team_id": agent.get("team_id", ""),
         "gmail_message_id": gmail_message_id,
         "thread_id": parsed_message.get("thread_id", ""),
-        "direction": parsed_message.get("direction", "inbound"),
+        "direction": direction,
         "subject": parsed_message.get("subject", ""),
         "from": parsed_message.get("from", ""),
         "to": parsed_message.get("to", []),
@@ -106,6 +180,9 @@ async def _store_thread_message(
         "is_unread": parsed_message.get("is_unread", False),
         "metadata": parsed_message.get("metadata", {}),
         "status": "stored",
+        "processing_status": processing_status,
+        "flow_run_id": None,
+        "processed_at": None,
         "created_at": now,
         "updated_at": now,
     }
@@ -178,6 +255,7 @@ async def run_agent_inbox_sync(agent_id: str) -> None:
         skipped_count = 0
         threads_processed = 0
         latest_received_at: datetime | None = None
+        threads_with_new_inbound: Dict[str, _NewInboundThread] = {}
 
         agent_id_str = get_email_ai_agent_id_str(agent)
         gmail_account_id = agent.get("gmail_account_id", "")
@@ -212,6 +290,13 @@ async def run_agent_inbox_sync(agent_id: str) -> None:
                             received_at = received_at.replace(tzinfo=timezone.utc)
                         if latest_received_at is None or received_at > latest_received_at:
                             latest_received_at = received_at
+                    if parsed_message.get("direction") == "inbound":
+                        _track_new_inbound_thread(
+                            threads_with_new_inbound,
+                            thread_id=thread_id,
+                            gmail_message_id=parsed_message.get("gmail_message_id", ""),
+                            received_at=received_at if isinstance(received_at, datetime) else None,
+                        )
                 else:
                     skipped_count += 1
 
@@ -224,6 +309,26 @@ async def run_agent_inbox_sync(agent_id: str) -> None:
                 )
                 threads_processed += 1
 
+        flow_summary: Dict[str, Any] | None = None
+        thread_triggers: List[SyncThreadFlowTrigger] = [
+            {
+                "thread_id": item["thread_id"],
+                "trigger_message_id": item["trigger_message_id"],
+            }
+            for item in threads_with_new_inbound.values()
+        ]
+
+        if thread_triggers:
+            logger.info(
+                f"Agent {agent_id} running sync-triggered flows for "
+                f"{len(thread_triggers)} thread(s)"
+            )
+            flow_summary = await run_sync_flows_for_threads(
+                agent_id=agent_id,
+                thread_triggers=thread_triggers,
+                message_limit=DEFAULT_THREAD_MESSAGE_LIMIT,
+            )
+
         new_synced_at = latest_received_at or datetime.now(timezone.utc)
         await _set_agent_sync_state(
             agent_id,
@@ -232,9 +337,18 @@ async def run_agent_inbox_sync(agent_id: str) -> None:
             clear_error=True,
         )
 
+        flow_log = ""
+        if flow_summary is not None:
+            flow_log = (
+                f", flows={{total={flow_summary['threads_processed']}, "
+                f"completed={flow_summary['completed']}, "
+                f"failed={flow_summary['failed']}, "
+                f"skipped={flow_summary['skipped']}}}"
+            )
+
         logger.info(
             f"Agent {agent_id} thread sync complete: threads={threads_processed}, "
-            f"inserted={inserted_count}, skipped={skipped_count}"
+            f"inserted={inserted_count}, skipped={skipped_count}{flow_log}"
         )
 
     except Exception as e:

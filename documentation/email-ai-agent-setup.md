@@ -28,7 +28,7 @@ When active, sync pulls **complete email threads** into Mongo — both emails yo
 2. Connect Gmail    →  email-gmail_accounts (gmail_account_id)
 3. Create knowledge →  POST /email-knowledge/v1/create  →  knowledge_id
 4. Register tools   →  POST /email-tool-definitions/v1/create  →  tool_id(s)
-5. Create agent     →  name + gmail_account_id + system_prompt + knowledge_id + tool_ids + llm_model + reply_action
+5. Create agent     →  name + gmail_account_id + system_prompt + knowledge_id + tool_ids + llm_model + reply_action (+ optional email_format_template)
 6. Trigger sync     →  fetch up to 20 threads with recent activity
 7. List threads     →  inbox list (snippet only)
 8. Get thread       →  full conversation with bodies
@@ -56,7 +56,8 @@ http://localhost:7000/elysium-agents
 | **Update Agent**    | `POST /email-ai-agents/v1/update`            | User edits agent configuration                            |
 | **Sync Inbox**      | `POST /email-ai-agents/v1/trigger-sync`      | Agent exists and `sync_status !== "syncing"`              |
 | **Refresh Threads** | `POST /email-ai-agents/v1/list-team-threads` | Inbox list page / after sync                              |
-| **Open Thread**     | `POST /email-ai-agents/v1/get-thread`        | User clicks a thread row                                  |
+| **Open Thread**     | `POST /email-ai-agents/v1/get-thread`        | User clicks a thread row; show `ai_action` draft if ready |
+| **Send AI Draft**   | `POST /email-ai-agents/v1/send-thread-draft` | User clicks Send on draft panel                           |
 | **Refresh Agents**  | `POST /email-ai-agents/v1/list-team-agents`  | Agent list page                                           |
 
 ---
@@ -247,6 +248,7 @@ Authorization: Bearer <jwt>
   "name": "Support Agent",
   "gmail_account_id": "674a1b2c3d4e5f6789012345",
   "system_prompt": "You are a helpful support agent. Answer customer emails professionally using the provided knowledge base.",
+  "email_format_template": "Use a professional tone.\n\nGreeting: Hi {customer_name},\n\nBody: 2-3 short paragraphs answering the question.\n\nClosing:\nBest regards,\nSupport Team",
   "knowledge_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
   "tool_ids": [
     "674d1a2b3c4e5f6789012345",
@@ -272,6 +274,7 @@ Authorization: Bearer <jwt>
 | `name` | Yes | Display name for the agent |
 | `gmail_account_id` | Yes | Mongo `_id` from `email-gmail_accounts` |
 | `system_prompt` | Yes | Instructions for how the agent should behave |
+| `email_format_template` | No | Optional string describing how generated reply emails should be structured (sections, tone, sign-off). Passed to the **Generate Email** flow node at reply time. Omit or `""` → no extra format constraint beyond `system_prompt`. Max 10,000 chars. |
 | `knowledge_id` | Yes | UUID from `POST /email-knowledge/v1/create` (must belong to same team) |
 | `tool_ids` | Yes | Array of Mongo `_id` strings from `email-tools` (1–20 tools, same team) |
 | `llm_model` | Yes | LLM model code (e.g. `gpt-4o-mini`, `claude-sonnet-4-5`) — stored on agent, used at reply time |
@@ -304,6 +307,7 @@ On create: `status=active`, `activated_at=now` — only thread activity **after*
     "inbox_name": "Support Inbox",
     "email_address": "support@gmail.com",
     "system_prompt": "You are a helpful support agent...",
+    "email_format_template": "Use a professional tone.\n\nGreeting: Hi {customer_name},\n\nBody: 2-3 short paragraphs.\n\nClosing:\nBest regards,\nSupport Team",
     "knowledge_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
     "tool_ids": [
       "674d1a2b3c4e5f6789012345",
@@ -352,7 +356,7 @@ Missing or invalid JWT, or `user_id` / `team_id` missing from token.
 const BASE = "http://localhost:7000/elysium-agents";
 const token = localStorage.getItem("auth_token");
 
-async function createEmailAiAgent(name, gmailAccountId, systemPrompt, knowledgeId, toolIds, llmModel, replyAction, routingRuleIds, recipientRuleIds) {
+async function createEmailAiAgent(name, gmailAccountId, systemPrompt, knowledgeId, toolIds, llmModel, replyAction, routingRuleIds, recipientRuleIds, emailFormatTemplate) {
   const res = await fetch(`${BASE}/email-ai-agents/v1/create`, {
     method: "POST",
     headers: {
@@ -363,6 +367,7 @@ async function createEmailAiAgent(name, gmailAccountId, systemPrompt, knowledgeI
       name,
       gmail_account_id: gmailAccountId,
       system_prompt: systemPrompt,
+      email_format_template: emailFormatTemplate ?? "",
       knowledge_id: knowledgeId,
       tool_ids: toolIds,
       llm_model: llmModel,
@@ -416,6 +421,7 @@ No JWT required (prototype).
     "status": "active",
     "sync_status": "idle",
     "system_prompt": "You are a helpful support agent...",
+    "email_format_template": "Use a professional tone.\n\nGreeting: Hi {customer_name},\n\nBody: 2-3 short paragraphs.\n\nClosing:\nBest regards,\nSupport Team",
     "knowledge_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
     "tool_ids": ["674d1a2b3c4e5f6789012345"],
     "llm_model": "gpt-4o-mini",
@@ -478,6 +484,7 @@ Authorization: Bearer <jwt>
   "name": "Support Agent v2",
   "gmail_account_id": "674a1b2c3d4e5f6789012345",
   "system_prompt": "You are a helpful support agent. Always cite the knowledge base.",
+  "email_format_template": "Keep replies under 200 words. Use bullet points for action items.",
   "knowledge_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
   "tool_ids": [
     "674d1a2b3c4e5f6789012345",
@@ -499,6 +506,7 @@ Authorization: Bearer <jwt>
 | `name` | Yes | Display name |
 | `gmail_account_id` | Yes | Connected Gmail inbox |
 | `system_prompt` | Yes | LLM instructions |
+| `email_format_template` | No | Optional reply layout/format template — same as create |
 | `knowledge_id` | Yes | Team knowledge UUID |
 | `tool_ids` | Yes | Tool definition ids from `email-tools` |
 | `llm_model` | Yes | Model code |
@@ -729,6 +737,36 @@ Sorted by `last_message_at` descending (newest conversations first).
       "has_unread": true,
       "department_id": "",
       "assigned_user_id": "",
+      "action_required": true,
+      "ai_action": {
+        "status": "draft_ready",
+        "type": "draft",
+        "flow_run_id": "run_abc123",
+        "trigger_message_id": "674d4e5f6789012350",
+        "gmail_draft_id": "r-123456789",
+        "gmail_draft_message_id": "18f3draft456",
+        "confidence": 0.72,
+        "subject": "Re: Need help with my order",
+        "recipients": {
+          "to": ["customer@example.com"],
+          "cc": ["shubhojeet.official@gmail.com"],
+          "bcc": [],
+          "cc_users": [
+            { "user_id": "6a23597fc25333c86ca81440", "email": "shubhojeet.official@gmail.com", "name": "Shubh" }
+          ],
+          "bcc_users": [],
+          "matched_recipient_rules": [
+            {
+              "_id": "6a25892b6548ece0c1cd4904",
+              "rule_name": "Sales and Pricing Inquiries",
+              "cc": ["shubhojeet.official@gmail.com"],
+              "bcc": []
+            }
+          ]
+        },
+        "created_at": "2026-06-06T14:30:04Z",
+        "resolved_at": null
+      },
       "updated_at": "2026-06-06T14:30:05Z"
     }
   ],
@@ -753,6 +791,19 @@ Sorted by `last_message_at` descending (newest conversations first).
 | `has_prev`       | `true` if `page > 1`        |
 
 No `body_text` / `body_html` here — use `get-thread` for full content.
+
+### AI action badges (draft ready)
+
+After a successful flow run with `reply_action.mode: "draft"`, threads with a pending Gmail draft include:
+
+| Field | Type | Meaning |
+| ----- | ---- | ------- |
+| `action_required` | boolean | `true` when `ai_action.status === "draft_ready"` — show **Review draft** / actionable UI |
+| `ai_action` | object \| null | Denormalized draft metadata from `save_gmail_draft` (null when no pending action) |
+
+**Frontend:** filter or badge threads where `action_required === true` — e.g. **“Draft ready — review”**.
+
+Full UI guide (inbox badge, thread draft panel, **Send from app**): **[email-draft-review-ui.md](./email-draft-review-ui.md)**.
 
 ---
 
@@ -804,7 +855,25 @@ Same thread visibility rules as **List Team Threads** apply here. Returns `403` 
     "message_count": 3,
     "has_unread": true,
     "department_id": "",
-    "assigned_user_id": ""
+    "assigned_user_id": "",
+    "action_required": true,
+    "ai_action": {
+      "status": "draft_ready",
+      "type": "draft",
+      "flow_run_id": "run_abc123",
+      "trigger_message_id": "674d4e5f6789012350",
+      "gmail_draft_id": "r-123456789",
+      "confidence": 0.72,
+      "subject": "Re: Need help with my order",
+      "body_text": "Hi John,\n\nThank you for reaching out...",
+      "recipients": {
+        "to": ["customer@example.com"],
+        "cc": ["shubhojeet.official@gmail.com"],
+        "bcc": []
+      },
+      "created_at": "2026-06-06T14:30:04Z",
+      "resolved_at": null
+    }
   },
   "count": 2,
   "messages": [
@@ -825,6 +894,20 @@ Same thread visibility rules as **List Team Threads** apply here. Returns `403` 
       "received_at": "2026-06-06T12:05:00Z",
       "is_unread": false,
       "label_ids": ["INBOX"],
+      "processing_status": "completed",
+      "flow_run_id": "run_abc123",
+      "processed_at": "2026-06-06T14:30:05Z",
+      "ai_outcome": {
+        "type": "draft_created",
+        "flow_run_id": "run_abc123",
+        "gmail_draft_id": "r-123456789",
+        "confidence": 0.72,
+        "recipients": {
+          "to": ["customer@example.com"],
+          "cc": ["shubhojeet.official@gmail.com"],
+          "bcc": []
+        }
+      },
       "created_at": "2026-06-06T12:06:00Z"
     },
     {
@@ -833,7 +916,15 @@ Same thread visibility rules as **List Team Threads** apply here. Returns `403` 
       "from": "Support <support@gmail.com>",
       "to": ["customer@example.com"],
       "body_text": "Thanks for reaching out...",
-      "received_at": "2026-06-06T13:00:00Z"
+      "received_at": "2026-06-06T13:00:00Z",
+      "ai_reply": {
+        "assisted": true,
+        "mode": "reviewed",
+        "flow_run_id": "run_abc123",
+        "agent_id": "674c3d4e5f6789012349",
+        "confidence": 0.72,
+        "gmail_draft_id": "r-123456789"
+      }
     }
   ],
   "pagination": {
@@ -849,6 +940,88 @@ Same thread visibility rules as **List Team Threads** apply here. Returns `403` 
 
 `thread.message_count` = total messages in thread. `pagination.total` matches that count. `count` = messages returned on **this page** only.
 
+### Message AI fields
+
+| Field | When set | Meaning |
+| ----- | -------- | ------- |
+| `processing_status` | Sync + flow | `pending` → `processing` → `completed` / `failed` / `skipped` |
+| `flow_run_id` | Flow Start | Links to `email-flow-runs.run_id` |
+| `processed_at` | Flow complete | When processing finished |
+| `ai_outcome` | `save_gmail_draft` | On the **trigger inbound** only — `{ type: "draft_created", gmail_draft_id, recipients, ... }` |
+| `ai_reply` | `send-thread-draft` | On **outbound** only — AI-assisted send metadata (see below) |
+
+**`ai_reply` (outbound messages only):**
+
+| Field | Value |
+| ----- | ----- |
+| `assisted` | `true` |
+| `mode` | `"reviewed"` — sent via app after AI draft; `"auto"` — future auto-send |
+| `flow_run_id` | Source flow run |
+| `agent_id` | Agent that generated the draft |
+| `confidence` | Model confidence from generation |
+| `gmail_draft_id` | Gmail draft that was sent |
+
+**Frontend:** show chip **“AI · reviewed”** on outbound when `message.ai_reply?.assisted && message.ai_reply.mode === "reviewed"`.
+
+Highlight the message where `message_id === thread.ai_action.trigger_message_id` when showing “AI drafted a reply to this email.”
+
+Use `thread.ai_action.body_text` for the draft preview in the thread view (plain text).
+
+---
+
+## 8. Send Thread AI Draft
+
+Send the pending Gmail draft from your app (Gmail `drafts.send`). See **[email-draft-review-ui.md](./email-draft-review-ui.md)** for the full UX flow.
+
+```
+POST /elysium-agents/email-ai-agents/v1/send-thread-draft
+```
+
+**Headers:** `Authorization: Bearer <jwt>`
+
+**Body:**
+
+```json
+{
+  "team_id": "team_123",
+  "thread_id": "18f3abc123"
+}
+```
+
+**Success `200`:**
+
+```json
+{
+  "success": true,
+  "message": "AI draft sent successfully.",
+  "data": {
+    "thread_id": "18f3abc123",
+    "gmail_draft_id": "r-123456789",
+    "gmail_message_id": "18f3sent789",
+    "gmail_thread_id": "18f3abc123",
+    "label_ids": ["SENT"],
+    "ai_action_status": "resolved",
+    "ai_reply": {
+      "assisted": true,
+      "mode": "reviewed",
+      "flow_run_id": "run_abc123",
+      "agent_id": "674c3d4e5f6789012349",
+      "confidence": 0.72,
+      "gmail_draft_id": "r-123456789"
+    }
+  }
+}
+```
+
+Sets `thread.ai_action.status` to **`resolved`** and tags the sent outbound row in **`email-thread-messages`** with **`ai_reply`**.
+
+| Status | Meaning |
+| ------ | ------- |
+| `409` | No pending draft on this thread |
+| `403` | User cannot access thread |
+
+After send, optionally **`trigger-sync`** on the agent so the outbound message appears in `get-thread` messages.
+
 ---
 
 ## MongoDB: `email-ai-agents`
@@ -861,6 +1034,7 @@ Agent configuration document.
   "name": "Support Agent",
   "gmail_account_id": "674a1b2c3d4e5f6789012345",
   "system_prompt": "You are a helpful support agent. Answer customer emails professionally using the provided knowledge base.",
+  "email_format_template": "Use a professional tone.\n\nGreeting: Hi {customer_name},\n\nBody: 2-3 short paragraphs answering the question.\n\nClosing:\nBest regards,\nSupport Team",
   "knowledge_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
   "tool_ids": [
     "674d1a2b3c4e5f6789012345",
@@ -889,6 +1063,7 @@ Agent configuration document.
 | Field | Description |
 | ----- | ----------- |
 | `system_prompt` | LLM instructions for this agent's tone and behaviour |
+| `email_format_template` | Optional template for how AI reply emails should be formatted (used by Generate Email node) |
 | `knowledge_id` | Links to `email-knowledge` Mongo doc + Qdrant chunks for RAG |
 | `tool_ids` | Array of Mongo `_id` strings from `email-tools` tool definitions |
 | `llm_model` | Model code for AI replies (e.g. `gpt-4o-mini`) |
@@ -924,6 +1099,18 @@ Thread summary for inbox list.
   "has_unread": true,
   "department_id": "",
   "assigned_user_id": "",
+  "ai_action": {
+    "status": "draft_ready",
+    "type": "draft",
+    "flow_run_id": "...",
+    "trigger_message_id": "...",
+    "gmail_draft_id": "...",
+    "confidence": 0.72,
+    "subject": "Re: ...",
+    "recipients": { "to": [], "cc": [], "bcc": [] },
+    "created_at": "...",
+    "resolved_at": null
+  },
   "created_at": "...",
   "updated_at": "..."
 }
@@ -933,6 +1120,7 @@ Thread summary for inbox list.
 | ----- | ----------- |
 | `department_id` | Department assigned to this thread. Empty until assigned — **members cannot see** unassigned threads. When set, only members in that department can see it (unless `assigned_user_id` restricts further). |
 | `assigned_user_id` | Team user assigned to this thread. Empty until assigned. When empty, all members in the thread's department can see it. When set, only that user (plus admins) can see it. |
+| `ai_action` | Pending AI work on this thread. `status: "draft_ready"` when a Gmail draft awaits human review. Cleared or superseded when the user sends or a newer inbound is processed (future). |
 
 ---
 
@@ -956,11 +1144,37 @@ One document per email (inbound or outbound).
   "label_ids": ["UNREAD", "INBOX"],
   "is_unread": true,
   "metadata": { "has_attachments": false },
-  "status": "stored"
+  "status": "stored",
+  "processing_status": "completed",
+  "flow_run_id": "...",
+  "processed_at": "...",
+  "ai_outcome": {
+    "type": "draft_created",
+    "flow_run_id": "...",
+    "gmail_draft_id": "...",
+    "confidence": 0.72,
+    "recipients": { "to": [], "cc": [], "bcc": [] }
+  },
+  "ai_reply": {
+    "assisted": true,
+    "mode": "reviewed",
+    "flow_run_id": "...",
+    "agent_id": "...",
+    "confidence": 0.72,
+    "gmail_draft_id": "..."
+  }
 }
 ```
 
 `direction: "outbound"` when Gmail `labelIds` contains `SENT`.
+
+| Field | Description |
+| ----- | ----------- |
+| `processing_status` | Flow lifecycle on inbound messages (`pending` on new sync inserts) |
+| `ai_outcome` | Inbound trigger only — draft was created for this customer email |
+| `ai_reply` | Outbound only — AI assisted this sent reply (`mode: reviewed` or `auto`) |
+
+**Gmail draft visibility:** drafts are created via Gmail API on the linked inbox account. The user sees them in **Gmail** on that thread (draft reply in the conversation). OAuth must include `gmail.compose` — reconnect the inbox if an existing connection predates this scope.
 
 ---
 
@@ -1154,13 +1368,14 @@ async function syncInbox(agentId) {
 
 | API               | Method | Path                                    | Auth | Body |
 | ----------------- | ------ | --------------------------------------- | ---- | ---- |
-| Create agent      | `POST` | `/email-ai-agents/v1/create`            | JWT  | `{ name, gmail_account_id, system_prompt, knowledge_id, tool_ids, llm_model, reply_action?, routing_rule_ids?, recipient_rule_ids? }` |
+| Create agent      | `POST` | `/email-ai-agents/v1/create`            | JWT  | `{ name, gmail_account_id, system_prompt, knowledge_id, tool_ids, llm_model, email_format_template?, reply_action?, routing_rule_ids?, recipient_rule_ids? }` |
 | Get agent         | `POST` | `/email-ai-agents/v1/get-agent`         | No   | `{ agent_id }` |
-| Update agent      | `POST` | `/email-ai-agents/v1/update`            | JWT  | `{ agent_id, name, …, reply_action?, routing_rule_ids?, recipient_rule_ids? }` — agent ↔ flow sync when `flow_id` set (planned) |
+| Update agent      | `POST` | `/email-ai-agents/v1/update`            | JWT  | `{ agent_id, name, …, email_format_template?, reply_action?, routing_rule_ids?, recipient_rule_ids? }` — agent ↔ flow sync when `flow_id` set (planned) |
 | List team agents  | `POST` | `/email-ai-agents/v1/list-team-agents`  | No   | `{ team_id }` |
 | Trigger sync      | `POST` | `/email-ai-agents/v1/trigger-sync`      | JWT  | `{ agent_id }` |
 | List team threads | `POST` | `/email-ai-agents/v1/list-team-threads` | JWT  | `{ team_id, page?, limit? }` |
 | Get thread        | `POST` | `/email-ai-agents/v1/get-thread`        | JWT  | `{ team_id, thread_id, page?, limit? }` |
+| Send AI draft     | `POST` | `/email-ai-agents/v1/send-thread-draft` | JWT  | `{ team_id, thread_id }` |
 
 ### Related APIs (knowledge & tools)
 
@@ -1174,7 +1389,7 @@ async function syncInbox(agentId) {
 
 | Collection | Purpose |
 | ---------- | ------- |
-| `email-ai-agents` | Agent config: inbox, system_prompt, knowledge_id, tool_ids, llm_model, reply_action, routing_rule_ids, recipient_rule_ids, flow_id, sync state |
+| `email-ai-agents` | Agent config: inbox, system_prompt, email_format_template, knowledge_id, tool_ids, llm_model, reply_action, routing_rule_ids, recipient_rule_ids, flow_id, sync state |
 | `email-knowledge` | Knowledge metadata (text + vectors in Qdrant) |
 | `email-tools` | Registered external tool definitions for LLM |
 | `email-threads` | Thread summaries for inbox list |

@@ -37,6 +37,16 @@ MODEL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "mode": "reasoning",
         "handler": openai_chat_completion_reasoning,
     },
+    "gpt-5.4": {
+        "family": "openai-gpt-5",
+        "mode": "reasoning",
+        "handler": openai_chat_completion_reasoning,
+    },
+    "gpt-5.5": {
+        "family": "openai-gpt-5",
+        "mode": "reasoning",
+        "handler": openai_chat_completion_reasoning,
+    },
     # Groq chat
     "openai/gpt-oss-120b": {
         "family": "groq",

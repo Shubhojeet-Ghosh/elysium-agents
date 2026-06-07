@@ -1,5 +1,8 @@
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
+
+from bson import ObjectId
+from bson.errors import InvalidId
 
 from logging_config import get_logger
 from middlewares.jwt_middleware import generate_jwt_token
@@ -212,6 +215,30 @@ async def get_email_user_by_email(email: str) -> Optional[Dict[str, Any]]:
     """Fetch a user document by email."""
     collection = get_collection(EMAIL_USERS_COLLECTION)
     return await collection.find_one({"email": _normalize_email(email)})
+
+
+async def get_email_users_by_ids(user_ids: List[str]) -> Dict[str, Dict[str, Any]]:
+    """Fetch multiple email-users documents by MongoDB _id. Returns map of id string -> document."""
+    if not user_ids:
+        return {}
+
+    collection = get_collection(EMAIL_USERS_COLLECTION)
+    object_ids = []
+    for user_id in user_ids:
+        try:
+            object_ids.append(ObjectId(user_id.strip()))
+        except InvalidId:
+            continue
+
+    if not object_ids:
+        return {}
+
+    users: Dict[str, Dict[str, Any]] = {}
+    cursor = collection.find({"_id": {"$in": object_ids}})
+    async for user in cursor:
+        users[get_user_id_str(user)] = user
+
+    return users
 
 
 async def login_email_user(email: str, password: str) -> Dict[str, Any]:

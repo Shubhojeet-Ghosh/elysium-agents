@@ -30,6 +30,34 @@ def serialize_routing_rule(rule: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+async def get_routing_rules_by_ids(
+    routing_rule_ids: List[str],
+) -> Dict[str, Dict[str, Any]]:
+    """Fetch multiple routing rules by MongoDB _id. Returns map of id string -> document."""
+    if not routing_rule_ids:
+        return {}
+
+    collection = get_collection(EMAIL_ROUTING_RULES_COLLECTION)
+    object_ids = []
+
+    for routing_rule_id in routing_rule_ids:
+        try:
+            object_ids.append(ObjectId(routing_rule_id.strip()))
+        except InvalidId:
+            continue
+
+    if not object_ids:
+        return {}
+
+    rules: Dict[str, Dict[str, Any]] = {}
+    cursor = collection.find({"_id": {"$in": object_ids}})
+
+    async for rule in cursor:
+        rules[get_routing_rule_id_str(rule)] = rule
+
+    return rules
+
+
 async def get_routing_rule_by_id(routing_rule_id: str) -> Optional[Dict[str, Any]]:
     try:
         object_id = ObjectId(routing_rule_id.strip())

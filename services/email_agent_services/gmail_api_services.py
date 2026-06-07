@@ -1,5 +1,6 @@
 import base64
 from datetime import datetime, timezone
+from email.mime.text import MIMEText
 from email.utils import parsedate_to_datetime
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -13,6 +14,7 @@ logger = get_logger()
 
 GMAIL_MESSAGES_LIST_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages"
 GMAIL_THREADS_LIST_URL = "https://gmail.googleapis.com/gmail/v1/users/me/threads"
+GMAIL_DRAFTS_URL = "https://gmail.googleapis.com/gmail/v1/users/me/drafts"
 SYNC_BATCH_SIZE = 20
 
 async def refresh_access_token(refresh_token: str) -> Dict[str, Any]:
@@ -256,6 +258,131 @@ async def get_gmail_message(access_token: str, message_id: str) -> Dict[str, Any
         }
 
     return {"success": True, "data": response.json()}
+
+
+def _format_from_address(email_address: str, display_name: str = "") -> str:
+    normalized_email = (email_address or "").strip()
+    normalized_name = (display_name or "").strip()
+    if not normalized_email:
+        return ""
+    if normalized_name:
+        return f"{normalized_name} <{normalized_email}>"
+    return normalized_email
+
+
+def build_plain_text_reply_mime(
+    *,
+    to_addresses: List[str],
+    cc_addresses: List[str],
+    bcc_addresses: List[str],
+    subject: str,
+    body_text: str,
+    from_address: str = "",
+    in_reply_to: str = "",
+    references: str = "",
+) -> str:
+    """Build a base64url-encoded RFC 2822 MIME message for Gmail drafts.send."""
+    message = MIMEText(body_text or "", "plain", "utf-8")
+    if to_addresses:
+        message["To"] = ", ".join(to_addresses)
+    if cc_addresses:
+        message["Cc"] = ", ".join(cc_addresses)
+    if bcc_addresses:
+        message["Bcc"] = ", ".join(bcc_addresses)
+    if subject:
+        message["Subject"] = subject
+    if from_address:
+        message["From"] = from_address
+    if in_reply_to:
+        message["In-Reply-To"] = in_reply_to
+        message["References"] = references or in_reply_to
+    return base64.urlsafe_b64encode(message.as_bytes()).decode("ascii")
+
+
+async def send_gmail_draft(
+    access_token: str,
+    *,
+    gmail_draft_id: str,
+) -> Dict[str, Any]:
+    """Send an existing Gmail draft (users.drafts.send)."""
+    normalized_draft_id = (gmail_draft_id or "").strip()
+    if not normalized_draft_id:
+        return {
+            "success": False,
+            "message": "gmail_draft_id is required.",
+        }
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(
+            f"{GMAIL_DRAFTS_URL}/send",
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json",
+            },
+            json={"id": normalized_draft_id},
+        )
+
+    if response.status_code != 200:
+        logger.error(f"Gmail send draft failed: {response.status_code} {response.text}")
+        return {
+            "success": False,
+            "message": "Failed to send Gmail draft.",
+            "details": response.text,
+        }
+
+    data = response.json()
+    return {
+        "success": True,
+        "data": {
+            "gmail_message_id": data.get("id", ""),
+            "thread_id": data.get("threadId", ""),
+            "label_ids": data.get("labelIds", []) or [],
+        },
+    }
+
+
+async def create_gmail_draft(
+    access_token: str,
+    *,
+    thread_id: str,
+    raw_message: str,
+) -> Dict[str, Any]:
+    """Create a Gmail draft scoped to an existing thread."""
+    payload = {
+        "message": {
+            "raw": raw_message,
+            "threadId": thread_id,
+        }
+    }
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(
+            GMAIL_DRAFTS_URL,
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+        )
+
+    if response.status_code != 200:
+        logger.error(f"Gmail create draft failed: {response.status_code} {response.text}")
+        return {
+            "success": False,
+            "message": "Failed to create Gmail draft.",
+            "details": response.text,
+        }
+
+    data = response.json()
+    draft_message = data.get("message", {}) or {}
+    return {
+        "success": True,
+        "data": {
+            "gmail_draft_id": data.get("id", ""),
+            "gmail_draft_message_id": draft_message.get("id", ""),
+            "thread_id": draft_message.get("threadId", thread_id),
+        },
+    }
 
 
 def is_message_after_cutoff(message: Dict[str, Any], cutoff: datetime) -> bool:

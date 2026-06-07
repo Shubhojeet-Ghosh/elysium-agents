@@ -94,6 +94,7 @@ def _serialize_email_ai_agent(agent: Dict[str, Any], gmail_account: Dict[str, An
         "inbox_name": gmail_account.get("inbox_name", "") if gmail_account else "",
         "email_address": gmail_account.get("email_address", "") if gmail_account else "",
         "system_prompt": agent.get("system_prompt", ""),
+        "email_format_template": agent.get("email_format_template", "") or "",
         "knowledge_id": agent.get("knowledge_id", ""),
         "tool_ids": agent.get("tool_ids", []),
         "llm_model": agent.get("llm_model", ""),
@@ -271,12 +272,14 @@ async def create_email_ai_agent(
     reply_action: Dict[str, Any] | None = None,
     routing_rule_ids: List[str] | None = None,
     recipient_rule_ids: List[str] | None = None,
+    email_format_template: str = "",
 ) -> Dict[str, Any]:
     """Create an email AI agent linked to a Gmail inbox, system prompt, knowledge base, tools, and LLM model."""
     normalized_name = name.strip()
     normalized_team_id = team_id.strip()
     normalized_gmail_account_id = gmail_account_id.strip()
     normalized_system_prompt = system_prompt.strip()
+    normalized_email_format_template = email_format_template.strip()
     normalized_knowledge_id = knowledge_id.strip()
     normalized_tool_ids = _normalize_tool_ids(tool_ids)
     normalized_llm_model = llm_model.strip()
@@ -330,6 +333,7 @@ async def create_email_ai_agent(
             "name": normalized_name,
             "gmail_account_id": normalized_gmail_account_id,
             "system_prompt": normalized_system_prompt,
+            "email_format_template": normalized_email_format_template,
             "knowledge_id": normalized_knowledge_id,
             "tool_ids": normalized_tool_ids,
             "llm_model": normalized_llm_model,
@@ -414,6 +418,7 @@ async def update_email_ai_agent(
     reply_action: Dict[str, Any] | None = None,
     routing_rule_ids: List[str] | None = None,
     recipient_rule_ids: List[str] | None = None,
+    email_format_template: str = "",
 ) -> Dict[str, Any]:
     """Update an existing email AI agent's configuration fields."""
     normalized_team_id = team_id.strip()
@@ -421,6 +426,7 @@ async def update_email_ai_agent(
     normalized_name = name.strip()
     normalized_gmail_account_id = gmail_account_id.strip()
     normalized_system_prompt = system_prompt.strip()
+    normalized_email_format_template = email_format_template.strip()
     normalized_knowledge_id = knowledge_id.strip()
     normalized_tool_ids = _normalize_tool_ids(tool_ids)
     normalized_llm_model = llm_model.strip()
@@ -489,6 +495,7 @@ async def update_email_ai_agent(
             "name": normalized_name,
             "gmail_account_id": normalized_gmail_account_id,
             "system_prompt": normalized_system_prompt,
+            "email_format_template": normalized_email_format_template,
             "knowledge_id": normalized_knowledge_id,
             "tool_ids": normalized_tool_ids,
             "llm_model": normalized_llm_model,

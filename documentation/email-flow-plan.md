@@ -5,6 +5,7 @@ How to combine **thread context**, **system prompt**, **knowledge base (RAG)**, 
 **Status:** Planning document (not yet implemented)
 
 **Related docs:**
+- [email-flow-nodes.md](./email-flow-nodes.md) — per-node I/O contract + `@xyflow/react` flow builder UI (living doc)
 - [email-ai-agent-setup.md](./email-ai-agent-setup.md) — agent config, Gmail sync, threads, [agent ↔ workflow sync](./email-ai-agent-setup.md#agent--workflow-sync)
 - [email-knowledge-api.md](./email-knowledge-api.md) — KB indexing & retrieval
 - [email-tool-definitions-api.md](./email-tool-definitions-api.md) — register tools for LLM
@@ -91,7 +92,6 @@ flowchart LR
         C[FlowContext]
         N1[Start]
         N2[Load Thread Context]
-        N3[System Prompt]
         N4[Read KB]
         N5[Read Tools]
         N6[AI Department Router]
@@ -116,7 +116,7 @@ flowchart LR
     AG -.->|hydrate bindings| B
     B --> F
     B --> C
-    N1 --> N2 --> N3 --> N4 --> N5 --> N6 --> N7 --> N8 --> N9
+    N1 --> N2 --> N4 --> N5 --> N6 --> N7 --> N8 --> N9
     N9 --> N10A
     N9 --> N10B
     N10A --> N11
@@ -140,7 +140,6 @@ Every agent starts with this linear graph. Power users may fork it; the system s
 ```
 Start
   → Load Thread Context
-  → System Prompt
   → Read KB
   → Read Tools
   → AI Department Router
@@ -171,7 +170,7 @@ reply_action.mode = auto_send
 
 ### 5.2 Agent ↔ flow synchronization (bidirectional)
 
-The **agent document** (`email-ai-agents`) and the **workflow graph** (`email-flows`) must always show the **same** KB, tools, prompt, model, and reply policy. Sync works **both ways**:
+The **agent document** (`email-ai-agents`) and the **workflow graph** (`email-flows`) must always show the **same** KB, tools, model, and reply policy. Sync works **both ways** (`system_prompt` stays on the agent only — not a flow node; see §5.3):
 
 | Direction | Who edits | What happens |
 | --------- | --------- | ------------ |
@@ -189,13 +188,12 @@ See also: [Agent ↔ workflow sync](./email-ai-agent-setup.md#agent--workflow-sy
 | ----- | --------- | ------------------- | --------------- |
 | `knowledge_id` | `read_kb` | `config.knowledge_id` | `knowledge_id` |
 | `tool_ids` | `read_tools` | `config.tool_ids` | `tool_ids` |
-| `system_prompt` | `system_prompt` | `config.system_prompt` | `system_prompt` |
 | `llm_model` | `generate_email` | `config.llm_model` | `llm_model` |
 | `reply_action` | `save_gmail_draft` / `send_email` (tail) | `config.reply_action` | `reply_action` |
 | `department_rules` (future) | `ai_department_router` | `config.department_rules` | `department_rules` |
 | `recipient_rules` (future) | `ai_recipients_generator` | `config.recipient_rules` | `recipient_rules` |
 
-**Agent-only (not driven by flow):** `name`, `gmail_account_id`, `user_id`, `team_id`, sync state.
+**Agent-only (not driven by flow):** `name`, `gmail_account_id`, `user_id`, `team_id`, `system_prompt`, sync state.
 
 **Flow-only (not copied to agent):** `generate_email.format_prompt`, `read_kb.limit`, `call_external_tool.tools[]`, node positions, edges.
 
@@ -204,7 +202,6 @@ See also: [Agent ↔ workflow sync](./email-ai-agent-setup.md#agent--workflow-sy
 | Agent / flow value | Flow node `type` | Canvas label |
 | ------------------ | ---------------- | ------------ |
 | `gmail_account_id` + inbox email | `load_thread_context` | Inbox: `support@gmail.com` (agent-only) |
-| `system_prompt` | `system_prompt` | Truncated preview |
 | `knowledge_id` + title | `read_kb` | `Return Policy` · `a1b2c3d4-...` |
 | `tool_ids` + names | `read_tools` | `Get Ticket Status`, `Create Ticket`, … |
 | `llm_model` | `generate_email` | `gpt-4o-mini` |
@@ -252,7 +249,7 @@ Both run after successful create/update. Frontend should re-fetch agent + flow a
 
 #### Shared flows (multiple agents)
 
-If two agents share the same custom `flow_id`, saving the flow runs **flow → agent** sync for **both** agents (same KB/tools/prompt on each). Product may later restrict one-flow-one-agent; document current behaviour as team template pattern.
+If two agents share the same custom `flow_id`, saving the flow runs **flow → agent** sync for **both** agents (same KB/tools/model/reply on each). Product may later restrict one-flow-one-agent; document current behaviour as team template pattern.
 
 #### Hydrated response for frontend (`get-flow-for-agent`)
 
@@ -323,6 +320,49 @@ Each node has:
 
 All nodes share a **`FlowContext`** (see §7).
 
+**Agent-only fields (no flow node):** `system_prompt` is configured on `email-ai-agents` and edited in agent settings — it does **not** appear on the workflow canvas. The **Start** node copies `agent.system_prompt` into `FlowContext` at run time so downstream LLM nodes (Generate Email, Read Tools, routers) can use it.
+
+#### Implementation model — one function per node
+
+In code, **each node is one async function** with a fixed signature. No node classes — match the rest of the email services (plain functions + dicts).
+
+```python
+async def execute_<node_type>_node(
+    context: dict,
+    config: dict,
+    agent: dict,
+) -> dict:
+    # read inputs from context (+ agent where needed)
+    # do work
+    # write outputs back onto context
+    return context
+```
+
+| Concept | Code |
+| -------- | ---- |
+| Node on canvas | `type` string → handler in a registry dict |
+| Inputs | Keys on `context` + fields on `agent` |
+| Outputs | Same `context` dict, updated in place |
+| Pipe between nodes | **`FlowContext`** — node A writes, node B reads |
+
+Nodes do **not** return values to each other directly. The engine runs them in order; each handler enriches the shared `context` object (persisted on `email-flow-runs` after every step).
+
+**Example chain (Load Thread Context → Read KB):**
+
+```
+Load Thread Context
+  reads:  trigger_message_id, agent (gmail_account_id, team_id)
+  writes: context.thread, context.compressed_query   ← built from the customer's email
+
+Read KB
+  reads:  context.compressed_query, agent.knowledge_id
+  writes: context.kb_chunks
+```
+
+`compressed_query` is a short text derived from the inbound message (subject + snippet + ~500 chars of body). **Read KB** passes it to `retrieve_relevant_knowledge_chunks()`, which embeds that text and searches Qdrant for similar pre-indexed KB chunks. The retrieval query comes from the **email**; **which KB** to search comes from **agent config** — both are required.
+
+Pure helpers (no I/O) live in `email_flow_context.py` — e.g. `build_compressed_query()`, `trim_message_for_llm()`.
+
 ---
 
 #### Node: **Start**
@@ -335,9 +375,9 @@ All nodes share a **`FlowContext`** (see §7).
 - Load agent; verify `status === "active"`
 - Verify trigger message exists, `direction === "inbound"`, `status === "stored"`
 - Skip if message already has `flow_run_id` or `processing_status !== "pending"` (idempotency)
-- Initialize empty `FlowContext`
+- Initialize `FlowContext` and set `context.system_prompt` from `agent.system_prompt`
 
-**Outputs:** `context.run_id`, `context.trigger_message`
+**Outputs:** `context.run_id`, `context.trigger_message`, `context.system_prompt`
 
 **Config:** none
 
@@ -350,7 +390,8 @@ All nodes share a **`FlowContext`** (see §7).
 **Agent binding:** `agent.gmail_account_id` → inbox `email_address` / `inbox_name`.
 
 **Actions:**
-- Fetch all messages for `thread_id` + `gmail_account_id`, oldest-first (same as `get-thread` without pagination limit for MVP, or cap at N with “summary of older” later)
+- Fetch messages from **Mongo** (`email-thread-messages`) for `thread_id` + `gmail_account_id` + `team_id`, oldest-first — sync already stored them; do **not** call Gmail again
+- Cap at last **10 messages** for MVP (full bodies); older messages summarized later
 - Build `context.thread`:
   - `thread_id`, `subject`, `participants`, `message_count`
   - `messages[]` — trimmed bodies for LLM (prefer `body_text`; strip excessive quoting if needed)
@@ -367,24 +408,9 @@ subject + latest_inbound.snippet + last 1–2 inbound body paragraphs (max ~500 
 
 Optionally use a cheap LLM call: “Summarize the customer’s current ask in one sentence.”
 
-**Reuses:** `email_thread_services` message fetch patterns from [email-ai-agent-setup.md](./email-ai-agent-setup.md).
+**Reuses:** Internal query helper extracted from `email_thread_services` (same collections as `get-thread`, without pagination/auth layer).
 
----
-
-#### Node: **System Prompt**
-
-**Purpose:** Load agent instructions into the LLM system layer.
-
-**Agent binding:** `agent.system_prompt` — shown on canvas as read-only preview.
-
-**Actions:**
-- Read `agent.system_prompt` from `email-ai-agents`
-- Set `context.system_prompt`
-- Optionally merge agent-level **tone/format defaults** (future field on agent)
-
-**Outputs:** `context.system_prompt`
-
-**Config:** none — prompt is edited on the agent, not in the flow builder
+**Implementation:** `nodes/load_thread_context_node.py` calls `load_thread_messages_for_flow()` + `build_compressed_query()` from `email_flow_context.py`.
 
 ---
 
@@ -392,12 +418,16 @@ Optionally use a cheap LLM call: “Summarize the customer’s current ask in on
 
 **Purpose:** RAG — fetch top relevant knowledge chunks for this thread.
 
+**Inputs from context:** `compressed_query` (from **Load Thread Context** — must be set before this node runs).
+
+**Inputs from agent:** `knowledge_id` (which KB collection to search in Qdrant).
+
 **Agent binding:** `config.knowledge_id` on the flow node (synced with `agent.knowledge_id`) + title lookup — canvas shows the KB selected on the workflow or agent settings.
 
 **Actions:**
 - Resolve `knowledge_id` from agent (after sync) or node `config.knowledge_id`
 - If `agent.knowledge_id` is empty → skip, set `context.kb_chunks = []`
-- Call `retrieve_relevant_knowledge_chunks(knowledge_id, context.compressed_query, limit=5)`
+- Call `retrieve_relevant_knowledge_chunks(knowledge_id, context.compressed_query, limit=5)` — embeds the email-derived query, searches pre-indexed chunks
 - Store chunks in `context.kb_chunks` with scores and `text_content`
 
 **Outputs:** `context.kb_chunks`, `context.kb_title`
@@ -514,7 +544,7 @@ Optionally use a cheap LLM call: “Summarize the customer’s current ask in on
 
 **Actions:**
 - Build LLM messages:
-  - **System:** `context.system_prompt` + KB chunks + tool results + formatting instructions
+  - **System:** `context.system_prompt` (from agent, set at Start) + KB chunks + tool results + formatting instructions
   - **User:** full thread transcript (or summarized) + “Write the reply to the latest customer message”
 - Apply **format prompt** from node config (how the body should look)
 - Optional **template** — wrap body in HTML/text template with placeholders
@@ -700,7 +730,19 @@ All nodes read and write a single JSON-serializable object persisted on the flow
 }
 ```
 
+**How data passes between nodes:**
+
+| Step | Reads from `context` | Reads from `agent` | Writes to `context` |
+| ---- | -------------------- | ------------------ | ------------------- |
+| Start | — | `system_prompt`, `status` | `system_prompt`, `run_id`, `trigger_message` |
+| Load Thread Context | `trigger_message_id` | `gmail_account_id`, `team_id` | `thread`, `compressed_query` |
+| Read KB | `compressed_query` | `knowledge_id` | `kb_chunks`, `kb_title` |
+| Generate Email | `system_prompt`, `thread`, `kb_chunks` | `llm_model` | `draft` |
+
+Later nodes (tools, routing, recipients) follow the same pattern — each function reads what prior steps produced plus any agent config it needs.
+
 **Design rules:**
+- `system_prompt` is populated on the agent document and copied into context at **Start** — not stored on any flow node
 - Nodes must not mutate global agent config
 - Nodes may update `email-threads` (routing) and message processing fields
 - Failed node → run `status = "failed"`, store error, optionally retry from failed node (later)
@@ -740,7 +782,7 @@ Stores flow definitions (default + custom).
       "label": "Load Thread Context",
       "position": { "x": 0, "y": 100 },
       "config": {},
-      "edges": [{ "to": "system_prompt" }]
+      "edges": [{ "to": "read_kb" }]
     }
   ],
   "created_at": "2026-06-07T10:00:00Z",
@@ -811,7 +853,7 @@ Add fields:
 
 Existing fields unchanged: `system_prompt`, `knowledge_id`, `tool_ids`, `llm_model`, `reply_action`.
 
-When **`push_flow_to_agent`** runs, these agent fields are overwritten from the linked flow’s node `config`. When **`push_agent_to_flow`** runs, flow node `config` is overwritten from the agent.
+When **`push_flow_to_agent`** runs, syncable agent fields (`knowledge_id`, `tool_ids`, `llm_model`, `reply_action`, …) are overwritten from the linked flow’s node `config`. `system_prompt` is **not** part of flow sync — it remains agent-only. When **`push_agent_to_flow`** runs, flow node `config` is overwritten from the agent (excluding `system_prompt`).
 
 ---
 
@@ -868,7 +910,6 @@ services/email_agent_services/email_flows/
   nodes/
     start_node.py
     load_thread_context_node.py
-    system_prompt_node.py
     read_kb_node.py
     read_tools_node.py
     ai_department_router_node.py
@@ -881,9 +922,28 @@ services/email_agent_services/email_flows/
 ```
 
 **Execution model (MVP):**
-- Sync completes → `asyncio.create_task(run_flow(run_id))` or background worker queue
-- Engine loads flow → validates DAG (no cycles) → runs nodes sequentially following edges
-- Each node: `async def execute(context, config, agent) -> context`
+- **Trigger:** when sync inserts a new **inbound** message (`_store_thread_message` returns `True`), call `enqueue_flow_run(agent_id, thread_id, message_id)` — set `processing_status: "pending"` on insert
+- **Run:** `asyncio.create_task(run_flow(run_id))` (same pattern as `background_tasks.add_task(run_agent_inbox_sync, …)`)
+- **Engine:** `email_flow_engine.py` loads flow + agent → walks nodes in edge order → dispatches via handler registry:
+
+```python
+NODE_HANDLERS = {
+    "start": execute_start_node,
+    "load_thread_context": execute_load_thread_context_node,
+    "read_kb": execute_read_kb_node,
+    # ...
+}
+
+async def run_flow(run_id: str) -> None:
+    ctx = {}
+    for node in ordered_nodes:
+        handler = NODE_HANDLERS[node["type"]]
+        ctx = await handler(ctx, node.get("config", {}), agent)
+        await persist_run_context(run_id, ctx, node["node_id"])
+```
+
+- **No classes** — modular functions per node file under `nodes/`, shared `dict` context, thin orchestrator
+- **MVP graph:** hardcode default node list in `email_flow_constants.py` first; `email-flows` CRUD and canvas come in Phase 4
 
 **Later:** Celery/RQ, parallel branches, conditional edges.
 
@@ -1026,7 +1086,6 @@ import { ReactFlow } from "@xyflow/react";
 const nodeTypes = {
   start: StartNode,
   load_thread_context: LoadThreadContextNode,
-  system_prompt: SystemPromptNode,
   read_kb: ReadKbNode,
   read_tools: ReadToolsNode,
   ai_department_router: DepartmentRouterNode,
@@ -1080,14 +1139,13 @@ System default flow (`is_deletable: false`) → **preview only**, no save.
 |--------|--------------------------|------------------------------|
 | `read_kb` | `knowledge_id`, `limit` | Yes — `knowledge_id` |
 | `read_tools` | `tool_ids`, `max_tool_calls` | Yes — `tool_ids` |
-| `system_prompt` | `system_prompt` | Yes |
 | `generate_email` | `llm_model`, `format_prompt`, `body_template` | Yes — `llm_model` only |
 | `call_external_tool` | `tools[]` (post-draft allowlist) | No (flow-only) |
 | `save_gmail_draft` / `send_email` | `reply_action` | Yes |
 
-After **flow save**, call `push_flow_to_agent` so agent settings reflect KB/tools/prompt/model/reply changes. After **agent save**, call `push_agent_to_flow` and refresh the canvas.
+After **flow save**, call `push_flow_to_agent` so agent settings reflect KB/tools/model/reply changes. After **agent save**, call `push_agent_to_flow` and refresh the canvas.
 
-`name` and `gmail_account_id` are **agent-only** — not editable from workflow nodes.
+`name`, `gmail_account_id`, and `system_prompt` are **agent-only** — not editable from workflow nodes.
 
 ---
 
@@ -1106,34 +1164,33 @@ Minimal linear graph for `default_email_agent_flow_v1`. The **tail** is stored a
   "tail_resolution": "agent.reply_action.mode",
   "nodes": [
     { "node_id": "start", "type": "start", "label": "Start", "position": { "x": 250, "y": 0 }, "edges": [{ "to": "load_thread_context" }] },
-    { "node_id": "load_thread_context", "type": "load_thread_context", "label": "Load Thread Context", "position": { "x": 250, "y": 100 }, "edges": [{ "to": "system_prompt" }] },
-    { "node_id": "system_prompt", "type": "system_prompt", "label": "System Prompt", "position": { "x": 250, "y": 200 }, "edges": [{ "to": "read_kb" }] },
-    { "node_id": "read_kb", "type": "read_kb", "label": "Read KB", "position": { "x": 250, "y": 300 }, "config": { "limit": 5, "knowledge_id": "" }, "edges": [{ "to": "read_tools" }] },
-    { "node_id": "read_tools", "type": "read_tools", "label": "Read Tools", "position": { "x": 250, "y": 400 }, "config": { "max_tool_calls": 3, "tool_ids": [] }, "edges": [{ "to": "ai_department_router" }] },
-    { "node_id": "ai_department_router", "type": "ai_department_router", "label": "AI Department Router", "position": { "x": 250, "y": 500 }, "edges": [{ "to": "ai_recipients_generator" }] },
-    { "node_id": "ai_recipients_generator", "type": "ai_recipients_generator", "label": "AI Recipients Generator", "position": { "x": 250, "y": 600 }, "edges": [{ "to": "generate_email" }] },
+    { "node_id": "load_thread_context", "type": "load_thread_context", "label": "Load Thread Context", "position": { "x": 250, "y": 100 }, "edges": [{ "to": "read_kb" }] },
+    { "node_id": "read_kb", "type": "read_kb", "label": "Read KB", "position": { "x": 250, "y": 200 }, "config": { "limit": 5, "knowledge_id": "" }, "edges": [{ "to": "read_tools" }] },
+    { "node_id": "read_tools", "type": "read_tools", "label": "Read Tools", "position": { "x": 250, "y": 300 }, "config": { "max_tool_calls": 3, "tool_ids": [] }, "edges": [{ "to": "ai_department_router" }] },
+    { "node_id": "ai_department_router", "type": "ai_department_router", "label": "AI Department Router", "position": { "x": 250, "y": 400 }, "edges": [{ "to": "ai_recipients_generator" }] },
+    { "node_id": "ai_recipients_generator", "type": "ai_recipients_generator", "label": "AI Recipients Generator", "position": { "x": 250, "y": 500 }, "edges": [{ "to": "generate_email" }] },
     {
       "node_id": "generate_email",
       "type": "generate_email",
       "label": "Generate Email",
-      "position": { "x": 250, "y": 700 },
+      "position": { "x": 250, "y": 600 },
       "config": {
         "format_prompt": "Write a clear, professional email reply. Address the customer's latest question directly. Keep it concise."
       },
       "edges": [{ "to": "call_external_tool" }]
     },
-    { "node_id": "call_external_tool", "type": "call_external_tool", "label": "Call External Tool", "position": { "x": 250, "y": 800 }, "config": { "tools": [] }, "edges": [{ "to": "tail_action" }] },
+    { "node_id": "call_external_tool", "type": "call_external_tool", "label": "Call External Tool", "position": { "x": 250, "y": 700 }, "config": { "tools": [] }, "edges": [{ "to": "tail_action" }] },
     {
       "node_id": "tail_action",
       "type": "resolved",
       "label": "Tail action",
-      "position": { "x": 250, "y": 900 },
+      "position": { "x": 250, "y": 800 },
       "resolve": {
         "draft": { "type": "save_gmail_draft", "label": "Save Gmail Draft", "edges": [{ "to": "stop" }] },
         "auto_send": { "type": "send_email", "label": "Send Email", "edges": [{ "to": "stop" }] }
       }
     },
-    { "node_id": "stop", "type": "stop", "label": "Stop", "position": { "x": 250, "y": 1000 }, "edges": [] }
+    { "node_id": "stop", "type": "stop", "label": "Stop", "position": { "x": 250, "y": 900 }, "edges": [] }
   ]
 }
 ```
@@ -1152,7 +1209,7 @@ On agent create, set `flow_id` to this document’s `_id` (resolved at seed time
 | Existing capability | Used by node |
 |--------------------|--------------|
 | `email-thread-messages` + sync | Start, Load Thread Context |
-| `agent.system_prompt` | System Prompt |
+| `agent.system_prompt` | Start (copied to `FlowContext`), Generate Email |
 | `retrieve_relevant_knowledge_chunks()` | Read KB |
 | `get_tools_by_ids()` + `format_tool_for_llm()` | Read Tools |
 | HTTP tool endpoints | Read Tools, Call External Tool |
@@ -1168,9 +1225,10 @@ On agent create, set `flow_id` to this document’s `_id` (resolved at seed time
 - [ ] Seed `default_email_agent_flow_v1` in `email-flows`
 - [ ] Add `flow_id` to agents (default on create) — `reply_action` already on agent create/update API
 - [ ] Add `processing_status` on inbound messages
-- [ ] Flow engine + FlowContext + sequential node handlers
-- [ ] Trigger enqueue after sync (inbound only)
-- [ ] Nodes: Start → Load Thread → System Prompt → Read KB → Generate Email → tail (`save_gmail_draft` or `send_email`) → Stop
+- [ ] Flow engine + FlowContext + one async handler function per node (see §5.3)
+- [ ] `load_thread_messages_for_flow()` + `build_compressed_query()` — Mongo only, no Gmail refetch
+- [ ] Trigger `enqueue_flow_run` after sync inserts inbound message
+- [ ] Nodes: Start → Load Thread → Read KB → Generate Email → tail (`save_gmail_draft` or `send_email`) → Stop
 - [ ] `email-flow-runs` persistence + get-run API
 
 **Deliverable:** Sync → automatic internal draft stored in Mongo; visible in API.

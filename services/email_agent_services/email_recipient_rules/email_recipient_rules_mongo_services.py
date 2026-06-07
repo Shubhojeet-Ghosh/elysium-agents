@@ -38,6 +38,34 @@ async def get_recipient_rule_by_id(recipient_rule_id: str) -> Optional[Dict[str,
     return await collection.find_one({"_id": object_id})
 
 
+async def get_recipient_rules_by_ids(
+    recipient_rule_ids: List[str],
+) -> Dict[str, Dict[str, Any]]:
+    """Fetch multiple recipient rules by MongoDB _id. Returns map of id string -> document."""
+    if not recipient_rule_ids:
+        return {}
+
+    collection = get_collection(EMAIL_RECIPIENT_RULES_COLLECTION)
+    object_ids = []
+
+    for recipient_rule_id in recipient_rule_ids:
+        try:
+            object_ids.append(ObjectId(recipient_rule_id.strip()))
+        except InvalidId:
+            continue
+
+    if not object_ids:
+        return {}
+
+    rules: Dict[str, Dict[str, Any]] = {}
+    cursor = collection.find({"_id": {"$in": object_ids}})
+
+    async for rule in cursor:
+        rules[get_recipient_rule_id_str(rule)] = rule
+
+    return rules
+
+
 async def insert_recipient_rule(document: Dict[str, Any]) -> Dict[str, Any]:
     collection = get_collection(EMAIL_RECIPIENT_RULES_COLLECTION)
     result = await collection.insert_one(document)

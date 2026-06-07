@@ -4,7 +4,9 @@ Connect a user's Gmail inbox to Elysium Agents. **OAuth UI runs entirely on the 
 
 **Storage:** MongoDB only. No Redis.
 
-**Not in Phase 1:** reading emails, sending emails, push notifications.
+**Backend uses the inbox for:** sync/read mail (`gmail.readonly`), **save AI reply drafts** (`gmail.compose`), and **send replies** when auto-send is enabled (`gmail.send`).
+
+**Frontend rule:** on **every** Connect / Reconnect, request **all three** Gmail scopes in one OAuth URL. Do not request only `readonly` + `compose` — users would need to reconnect again when auto-send ships.
 
 ---
 
@@ -33,6 +35,17 @@ Connect a user's Gmail inbox to Elysium Agents. **OAuth UI runs entirely on the 
 
 Also enable **Gmail API** on the project.
 
+Under **OAuth consent screen → Scopes**, add (or verify) at minimum:
+
+| Scope | Used for |
+| ----- | -------- |
+| `.../auth/gmail.readonly` | Inbox sync, read threads |
+| `.../auth/gmail.compose` | Save Gmail drafts (`save_gmail_draft` — draft mode) |
+| `.../auth/gmail.send` | Send emails (`send_email` — auto-send mode; request now so users don't reconnect later) |
+| `openid` `email` `profile` | User identity |
+
+Enabling scopes in Google Cloud Console only allows the app to **request** them. The user must still **grant** them in the OAuth URL `scope` param when connecting (see below).
+
 **Production:** add your production frontend origin + redirect URI.
 
 ---
@@ -55,6 +68,33 @@ GOOGLE_REDIRECT_URI="http://localhost:3000/email/inbox-settings"
 
 ### Step 1 — Build Google OAuth URL
 
+**Required Gmail scopes — request all of these on connect (must match backend `config/gmail_oauth_config.py`):**
+
+```javascript
+// Single source of truth on the frontend — keep in sync with backend.
+// Always pass the FULL list on Connect and Reconnect (readonly + compose + send).
+const GMAIL_OAUTH_SCOPES = [
+  "https://www.googleapis.com/auth/gmail.readonly",
+  "https://www.googleapis.com/auth/gmail.compose",
+  "https://www.googleapis.com/auth/gmail.send",
+  "openid",
+  "email",
+  "profile",
+].join(" ");
+```
+
+| Scope | Why the frontend must request it **now** |
+| ----- | ---------------------------------------- |
+| `gmail.readonly` | Sync + read threads in the app |
+| `gmail.compose` | Create Gmail drafts when AI finishes (`save_gmail_draft`) — missing → **403** on draft save |
+| `gmail.send` | Send replies when `reply_action.mode` is `auto_send` (`send_email` node) — request at connect so the same refresh token works for send later |
+| `openid` `email` `profile` | Identity |
+
+| Agent `reply_action.mode` | Gmail scope used at runtime |
+| ------------------------- | --------------------------- |
+| `draft` (default) | `gmail.compose` (create draft) |
+| `auto_send` | `gmail.send` (send message); may fall back to `gmail.compose` if confidence is low |
+
 When user clicks **Connect Gmail**, redirect or open:
 
 ```
@@ -62,10 +102,33 @@ https://accounts.google.com/o/oauth2/v2/auth
   ?client_id={GOOGLE_CLIENT_ID}
   &redirect_uri=http://localhost:3000/email/inbox-settings
   &response_type=code
-  &scope=https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send openid email profile
+  &scope=https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.compose https://www.googleapis.com/auth/gmail.send openid email profile
   &access_type=offline
   &prompt=consent
   &state={random_string}
+```
+
+**JavaScript example:**
+
+```javascript
+const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID;
+const REDIRECT_URI = "http://localhost:3000/email/inbox-settings";
+
+function buildGmailOAuthUrl() {
+  const params = new URLSearchParams({
+    client_id: GOOGLE_CLIENT_ID,
+    redirect_uri: REDIRECT_URI,
+    response_type: "code",
+    scope: GMAIL_OAUTH_SCOPES,
+    access_type: "offline",
+    prompt: "consent",
+    state: crypto.randomUUID(),
+  });
+  return `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
+}
+
+// Connect new inbox OR reconnect after scope changes — always use prompt=consent
+window.location.href = buildGmailOAuthUrl();
 ```
 
 | Param | Required | Notes |
@@ -73,12 +136,25 @@ https://accounts.google.com/o/oauth2/v2/auth
 | `client_id` | Yes | From Google Console (can be env var on frontend) |
 | `redirect_uri` | Yes | Must match `GOOGLE_REDIRECT_URI` |
 | `response_type` | Yes | Always `code` |
-| `scope` | Yes | Gmail + openid scopes (see above) |
+| `scope` | Yes | **All three Gmail scopes** + openid (see `GMAIL_OAUTH_SCOPES` above) |
 | `access_type` | Yes | `offline` — needed for **refresh_token** |
-| `prompt` | Yes | `consent` — ensures refresh token on first connect |
+| `prompt` | Yes | `consent` — required when **adding scopes** or reconnecting; ensures user re-approves and Google returns a new refresh token |
 | `state` | Recommended | CSRF protection; validate on return |
 
-Use `encodeURIComponent` for `redirect_uri` and `scope` in the URL.
+Use `encodeURIComponent` for `redirect_uri` and `scope` if building the URL manually ( `URLSearchParams` handles this automatically).
+
+### Reconnect after scope changes
+
+If an inbox was connected with an **old** `scope` string (e.g. only `readonly` + `send`, or missing `compose` / `send`), API calls fail with **403 insufficient scopes** — even if scopes are enabled in Google Cloud Console.
+
+**Fix for users with existing connections:**
+
+1. Update frontend `GMAIL_OAUTH_SCOPES` to the **full** list: `readonly` + `compose` + `send` + openid (above).
+2. User clicks **Reconnect** (same flow as Connect — `POST /accounts` with a new `code`).
+3. Use `prompt=consent` so Google shows the consent screen again and issues a token with all scopes.
+4. After redirect, verify Google's `scope` query param includes **`gmail.compose`** and **`gmail.send`** (URL-encoded as `...%2Fgmail.compose` and `...%2Fgmail.send`).
+
+Same email reconnecting updates the existing `email-gmail_accounts` row (`200` response).
 
 ### Step 2 — Read `code` from query params
 
@@ -339,7 +415,14 @@ One document = one Gmail inbox linked to one user.
   "email_address": "user@gmail.com",
   "google_subject_id": "google_user_id",
   "display_name": "John Doe",
-  "scopes": ["gmail.readonly", "gmail.send", "openid", "email", "profile"],
+  "scopes": [
+    "https://www.googleapis.com/auth/gmail.readonly",
+    "https://www.googleapis.com/auth/gmail.compose",
+    "https://www.googleapis.com/auth/gmail.send",
+    "openid",
+    "email",
+    "profile"
+  ],
   "refresh_token": "stored_plain_mvp",
   "status": "active",
   "last_token_refresh_at": "2026-06-06T10:00:00Z",
@@ -365,17 +448,35 @@ One document = one Gmail inbox linked to one user.
 
 | Scope | Purpose |
 |-------|---------|
-| `gmail.readonly` | Read mail (Phase 2+) |
-| `gmail.send` | Send replies (later) |
+| `gmail.readonly` | Sync inbox, list/get threads |
+| `gmail.compose` | Create Gmail drafts (`reply_action.mode: draft`) |
+| `gmail.send` | Send replies (`reply_action.mode: auto_send`) — **include on connect** |
 | `openid` `email` `profile` | User identity |
+
+**Important:** Scopes on the Google Cloud Console ≠ scopes on the user's token. Only scopes in the frontend OAuth URL `scope` param are granted at connect time.
+
+**Do not** use a minimal scope set (e.g. readonly-only) and add more later — Google does not upgrade existing refresh tokens when you change the frontend URL; users must reconnect.
+
+### Troubleshooting: 403 insufficient scopes
+
+If the email flow fails at `save_gmail_draft` or (later) `send_email` with:
+
+```text
+ACCESS_TOKEN_SCOPE_INSUFFICIENT
+```
+
+→ The inbox refresh token is missing a required scope (`gmail.compose` and/or `gmail.send`). Use the **full** `GMAIL_OAUTH_SCOPES` list and **reconnect** with `prompt=consent`.
 
 ---
 
 ## Frontend checklist
 
 - [ ] Login first → store JWT
-- [ ] Build Google OAuth URL with correct `redirect_uri` and scopes
-- [ ] Use `access_type=offline` + `prompt=consent`
+- [ ] Define `GMAIL_OAUTH_SCOPES` with **`readonly` + `compose` + `send`** + openid (all three Gmail scopes every time)
+- [ ] Build Google OAuth URL with correct `redirect_uri` and **full** scope string
+- [ ] Use `access_type=offline` + `prompt=consent` (especially on reconnect)
+- [ ] After OAuth redirect, confirm `scope` query param includes **`gmail.compose`** and **`gmail.send`**
+- [ ] **Reconnect** any inbox connected before the full scope string was used on the frontend
 - [ ] On inbox-settings load, read `code` from query params
 - [ ] Save `code` to `sessionStorage`, clean URL with `replaceState`
 - [ ] Collect `inbox_name` from user
@@ -404,6 +505,7 @@ One document = one Gmail inbox linked to one user.
 
 ---
 
-## Next phase (preview)
+## Related — email AI agent
 
-Phase 2 uses `refresh_token` from `email-gmail_accounts` to poll or watch for new emails.
+- [email-ai-agent-setup.md](./email-ai-agent-setup.md) — agents, sync, threads, `ai_action` / draft-ready badges
+- [email-flow-reprocess-thread-api.md](./email-flow-reprocess-thread-api.md) — test full flow including `save_gmail_draft`

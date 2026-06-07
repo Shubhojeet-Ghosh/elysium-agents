@@ -6,6 +6,7 @@ from config.email_ai_agent_models import (
     GetEmailThreadRequest,
     ListTeamEmailAiAgentsRequest,
     ListTeamEmailThreadsRequest,
+    SendThreadAiDraftRequest,
     TriggerAgentSyncRequest,
     UpdateEmailAiAgentRequest,
 )
@@ -15,6 +16,7 @@ from controllers.email_agent_controller_files.email_ai_agent_controllers import 
     get_email_thread_controller,
     list_team_email_ai_agents_controller,
     list_team_email_threads_controller,
+    send_thread_ai_draft_controller,
     trigger_agent_sync_controller,
     update_email_ai_agent_controller,
 )
@@ -82,3 +84,12 @@ async def get_email_thread_route(
 ):
     """Get a full email thread with complete message bodies."""
     return await get_email_thread_controller(request_data, user)
+
+
+@email_ai_agent_router.post("/v1/send-thread-draft")
+async def send_thread_ai_draft_route(
+    request_data: SendThreadAiDraftRequest,
+    user: dict = Depends(authorize_user),
+):
+    """Send the pending AI-generated Gmail draft for a thread."""
+    return await send_thread_ai_draft_controller(request_data, user)

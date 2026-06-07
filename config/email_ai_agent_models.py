@@ -25,6 +25,14 @@ class CreateEmailAiAgentRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=256)
     gmail_account_id: str = Field(..., min_length=1, max_length=128)
     system_prompt: str = Field(..., min_length=1, max_length=20_000)
+    email_format_template: str = Field(
+        default="",
+        max_length=10_000,
+        description=(
+            "Optional template describing how AI-generated reply emails should be formatted "
+            "(structure, tone, sections). Used by the Generate Email flow node."
+        ),
+    )
     knowledge_id: str = Field(..., min_length=1, max_length=128)
     tool_ids: List[str] = Field(..., min_length=1, max_length=20)
     llm_model: str = Field(..., min_length=1, max_length=128)
@@ -42,6 +50,14 @@ class UpdateEmailAiAgentRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=256)
     gmail_account_id: str = Field(..., min_length=1, max_length=128)
     system_prompt: str = Field(..., min_length=1, max_length=20_000)
+    email_format_template: str = Field(
+        default="",
+        max_length=10_000,
+        description=(
+            "Optional template describing how AI-generated reply emails should be formatted "
+            "(structure, tone, sections). Used by the Generate Email flow node."
+        ),
+    )
     knowledge_id: str = Field(..., min_length=1, max_length=128)
     tool_ids: List[str] = Field(..., min_length=1, max_length=20)
     llm_model: str = Field(..., min_length=1, max_length=128)
@@ -69,3 +85,8 @@ class GetEmailThreadRequest(BaseModel):
     thread_id: str = Field(..., min_length=1, max_length=256)
     page: int = Field(default=1, ge=1)
     limit: int = Field(default=20, ge=1, le=100)
+
+
+class SendThreadAiDraftRequest(BaseModel):
+    team_id: str = Field(..., min_length=1, max_length=128)
+    thread_id: str = Field(..., min_length=1, max_length=256)
