@@ -30,6 +30,10 @@ http://localhost:7000/elysium-agents
 
 Departments must exist **before** registering users. Each user is assigned a `department_id` at registration.
 
+For **LLM email routing** (which department owns an inbound thread), create rules per department via [email-routing-rules-api.md](./email-routing-rules-api.md).
+
+For **CC / BCC on AI replies** (when to add team members), see [email-recipient-rules-api.md](./email-recipient-rules-api.md).
+
 ---
 
 ## Data model (for reference)

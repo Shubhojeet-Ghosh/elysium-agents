@@ -2,17 +2,21 @@ from fastapi import APIRouter, BackgroundTasks, Depends
 
 from config.email_ai_agent_models import (
     CreateEmailAiAgentRequest,
+    GetEmailAiAgentRequest,
     GetEmailThreadRequest,
     ListTeamEmailAiAgentsRequest,
     ListTeamEmailThreadsRequest,
     TriggerAgentSyncRequest,
+    UpdateEmailAiAgentRequest,
 )
 from controllers.email_agent_controller_files.email_ai_agent_controllers import (
     create_email_ai_agent_controller,
+    get_email_ai_agent_controller,
     get_email_thread_controller,
     list_team_email_ai_agents_controller,
     list_team_email_threads_controller,
     trigger_agent_sync_controller,
+    update_email_ai_agent_controller,
 )
 from middlewares.jwt_middleware import authorize_user
 
@@ -29,6 +33,21 @@ async def create_email_ai_agent_route(
 ):
     """Create an email AI agent with a name and linked Gmail inbox."""
     return await create_email_ai_agent_controller(request_data, user)
+
+
+@email_ai_agent_router.post("/v1/get-agent")
+async def get_email_ai_agent_route(request_data: GetEmailAiAgentRequest):
+    """Get a single email AI agent by agent_id."""
+    return await get_email_ai_agent_controller(request_data)
+
+
+@email_ai_agent_router.post("/v1/update")
+async def update_email_ai_agent_route(
+    request_data: UpdateEmailAiAgentRequest,
+    user: dict = Depends(authorize_user),
+):
+    """Update an email AI agent's configuration fields."""
+    return await update_email_ai_agent_controller(request_data, user)
 
 
 @email_ai_agent_router.post("/v1/list-team-agents")

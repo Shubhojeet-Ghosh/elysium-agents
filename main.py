@@ -48,6 +48,12 @@ async def lifespan(app: FastAPI):
     # Ensure agent knowledge base collection exists
     from services.elysium_atlas_services.qdrant_collection_helpers import ensure_agent_knowledge_base_collection_exists
     await ensure_agent_knowledge_base_collection_exists()
+
+    # Ensure email knowledge collection exists
+    from services.email_agent_services.email_knowledge.email_knowledge_qdrant_services import (
+        ensure_email_knowledge_collection_exists,
+    )
+    await ensure_email_knowledge_collection_exists()
     
     yield
     

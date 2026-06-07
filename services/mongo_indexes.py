@@ -7,6 +7,8 @@ logger = get_logger()
 EMAIL_USERS_COLLECTION = "email-users"
 EMAIL_THREADS_COLLECTION = "email-threads"
 EMAIL_DEPARTMENTS_COLLECTION = "email-departments"
+EMAIL_KNOWLEDGE_COLLECTION = "email-knowledge"
+EMAIL_TOOLS_DEFINITIONS_COLLECTION = "email-tools"
 
 
 async def backfill_email_user_roles() -> None:
@@ -235,6 +237,41 @@ async def create_mongo_indexes():
             name="team_id_last_message_at_1",
         )
         logger.info("Compound index created on email-threads.team_id + last_message_at")
+
+        # Create indexes for email-knowledge collection
+        email_knowledge_collection = get_collection(EMAIL_KNOWLEDGE_COLLECTION)
+        await email_knowledge_collection.create_index("team_id", name="team_id_1")
+        logger.info("Index created on email-knowledge.team_id")
+        await email_knowledge_collection.create_index("knowledge_id", name="knowledge_id_1", unique=True)
+        logger.info("Unique index created on email-knowledge.knowledge_id")
+
+        # Create indexes for email-tools collection (external tool definitions)
+        email_tools_definitions_collection = get_collection(EMAIL_TOOLS_DEFINITIONS_COLLECTION)
+        await email_tools_definitions_collection.create_index("team_id", name="team_id_1")
+        logger.info("Index created on email-tools.team_id")
+        await email_tools_definitions_collection.create_index(
+            [("team_id", 1), ("name", 1)],
+            name="team_id_name_1",
+            unique=True,
+        )
+        logger.info("Unique compound index created on email-tools.team_id + name")
+
+        # Create indexes for email-routing-rules collection
+        email_routing_rules_collection = get_collection("email-routing-rules")
+        await email_routing_rules_collection.create_index("team_id", name="team_id_1")
+        logger.info("Index created on email-routing-rules.team_id")
+        await email_routing_rules_collection.create_index(
+            [("team_id", 1), ("status", 1), ("priority", 1)],
+            name="team_id_status_priority_1",
+        )
+        logger.info("Compound index created on email-routing-rules.team_id + status + priority")
+        await email_routing_rules_collection.create_index("department_id", name="department_id_1")
+        logger.info("Index created on email-routing-rules.department_id")
+
+        # Create indexes for email-recipient-rules collection
+        email_recipient_rules_collection = get_collection("email-recipient-rules")
+        await email_recipient_rules_collection.create_index("team_id", name="team_id_1")
+        logger.info("Index created on email-recipient-rules.team_id")
 
         # Create indexes for email-user-department-mapping collection
         email_user_department_mapping_collection = get_collection("email-user-department-mapping")

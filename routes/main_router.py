@@ -11,6 +11,11 @@ from routes.email_agent.email_login_routes import email_login_router
 from routes.email_agent.email_department_routes import email_department_router
 from routes.email_agent.gmail_routes import gmail_router
 from routes.email_agent.email_ai_agent_routes import email_ai_agent_router
+from routes.email_agent.email_knowledge_routes import email_knowledge_router
+from routes.email_agent.email_tools_routes import email_tools_router
+from routes.email_agent.email_tool_definition_routes import email_tool_definition_router
+from routes.email_agent.email_routing_rules_routes import email_routing_rules_router
+from routes.email_agent.email_recipient_rules_routes import email_recipient_rules_router
 
 # Create the main router with a prefix
 main_router = APIRouter(prefix = "/elysium-agents")
@@ -19,6 +24,11 @@ main_router.include_router(email_login_router)
 main_router.include_router(email_department_router)
 main_router.include_router(gmail_router)
 main_router.include_router(email_ai_agent_router)
+main_router.include_router(email_knowledge_router)
+main_router.include_router(email_tools_router)
+main_router.include_router(email_tool_definition_router)
+main_router.include_router(email_routing_rules_router)
+main_router.include_router(email_recipient_rules_router)
 main_router.include_router(elysium_atlas_router)
 main_router.include_router(elysium_atlas_user_auth_router)
 main_router.include_router(elysium_atlas_agent_router)
