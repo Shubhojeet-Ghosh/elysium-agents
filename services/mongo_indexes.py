@@ -203,6 +203,13 @@ async def create_mongo_indexes():
         logger.info("Index created on email-ai-agents.user_id")
         await email_ai_agents_collection.create_index("sync_status", name="sync_status_1")
         logger.info("Index created on email-ai-agents.sync_status")
+        await email_ai_agents_collection.create_index(
+            "flow_id",
+            name="flow_id_1",
+            unique=True,
+            sparse=True,
+        )
+        logger.info("Unique sparse index created on email-ai-agents.flow_id")
 
         # Create indexes for email-thread-messages collection
         email_thread_messages_collection = get_collection("email-thread-messages")
@@ -293,6 +300,16 @@ async def create_mongo_indexes():
         logger.info("Compound index created on email-flow-runs.team_id + thread_id + created_at")
         await email_flow_runs_collection.create_index("status", name="status_1")
         logger.info("Index created on email-flow-runs.status")
+
+        # Create indexes for email-flows collection
+        email_flows_collection = get_collection("email-flows")
+        await email_flows_collection.create_index("team_id", name="team_id_1")
+        logger.info("Index created on email-flows.team_id")
+        await email_flows_collection.create_index(
+            [("team_id", 1), ("updated_at", -1)],
+            name="team_id_updated_at_1",
+        )
+        logger.info("Compound index created on email-flows.team_id + updated_at")
 
         # Create indexes for email-thread-messages flow processing fields
         await email_thread_messages_collection.create_index(

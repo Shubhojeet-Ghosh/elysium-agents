@@ -7,7 +7,16 @@ from bson.errors import InvalidId
 from services.email_agent_services.email_flows.email_flow_constants import (
     AI_ACTION_STATUS_DRAFT_READY,
     AI_ACTION_STATUS_RESOLVED,
+    AI_ACTION_STATUS_SENT,
+    AI_ACTION_STATUS_SUPERSEDED,
+    AI_ACTION_TYPE_AUTO_SEND,
+    AI_OUTCOME_AUTO_SENT,
+    AI_OUTCOME_DRAFT_CREATED,
+    AI_THREAD_STATUS_FAILED,
+    AI_THREAD_STATUS_IDLE,
+    AI_THREAD_STATUS_PROCESSING,
     DEFAULT_THREAD_MESSAGE_LIMIT,
+    FLOW_RUN_STATUS_FAILED,
     MESSAGE_PROCESSING_STATUS_SKIPPED,
 )
 from services.email_agent_services.email_thread_services import (
@@ -255,6 +264,108 @@ async def resolve_thread_ai_action(
     return False
 
 
+async def mark_thread_ai_processing(
+    *,
+    thread_id: str,
+    team_id: str,
+    gmail_account_id: str,
+    flow_run_id: str,
+    trigger_message_id: str,
+) -> bool:
+    """Denormalize in-flight AI work on email-threads for inbox list polling."""
+    collection = get_collection(EMAIL_THREADS_COLLECTION)
+    now = _utc_now()
+    ai_status = {
+        "current_status": AI_THREAD_STATUS_PROCESSING,
+        "flow_run_id": (flow_run_id or "").strip(),
+        "trigger_message_id": (trigger_message_id or "").strip(),
+        "started_at": now,
+        "updated_at": now,
+        "last_error": None,
+    }
+
+    for query in _thread_lookup_queries(
+        thread_id=thread_id,
+        team_id=team_id,
+        gmail_account_id=gmail_account_id,
+    ):
+        thread = await collection.find_one(query)
+        if not thread:
+            continue
+
+        update_fields: Dict[str, Any] = {
+            "ai_status": ai_status,
+            "updated_at": now,
+        }
+
+        existing_action = thread.get("ai_action") or {}
+        if (existing_action.get("status") or "").strip() == AI_ACTION_STATUS_DRAFT_READY:
+            superseded_action = dict(existing_action)
+            superseded_action["status"] = AI_ACTION_STATUS_SUPERSEDED
+            superseded_action["resolved_at"] = now
+            superseded_action["updated_at"] = now
+            update_fields["ai_action"] = superseded_action
+
+        await collection.update_one(query, {"$set": update_fields})
+        return True
+
+    return False
+
+
+async def finalize_thread_ai_status(
+    *,
+    thread_id: str,
+    team_id: str,
+    gmail_account_id: str,
+    flow_run_id: str,
+    final_status: str,
+    error: str = "",
+) -> bool:
+    """
+    Clear or finalize thread ai_status when a flow run ends.
+
+    Only updates when ai_status.flow_run_id matches the run (avoids stale overwrites).
+    """
+    collection = get_collection(EMAIL_THREADS_COLLECTION)
+    now = _utc_now()
+    normalized_run_id = (flow_run_id or "").strip()
+    normalized_error = (error or "").strip()
+
+    if final_status == FLOW_RUN_STATUS_FAILED:
+        next_status = AI_THREAD_STATUS_FAILED
+    else:
+        next_status = AI_THREAD_STATUS_IDLE
+
+    for query in _thread_lookup_queries(
+        thread_id=thread_id,
+        team_id=team_id,
+        gmail_account_id=gmail_account_id,
+    ):
+        thread = await collection.find_one(query)
+        if not thread:
+            continue
+
+        existing_status = thread.get("ai_status") or {}
+        if (existing_status.get("flow_run_id") or "").strip() != normalized_run_id:
+            return False
+
+        ai_status = dict(existing_status)
+        ai_status["current_status"] = next_status
+        ai_status["updated_at"] = now
+        if next_status == AI_THREAD_STATUS_FAILED:
+            ai_status["last_error"] = normalized_error or "Flow run failed."
+        else:
+            ai_status["last_error"] = None
+
+        await collection.update_one(
+            query,
+            {"$set": {"ai_status": ai_status, "updated_at": now}},
+        )
+        return True
+
+    return False
+
+
 def build_draft_ready_ai_action(
     *,
     flow_run_id: str,
@@ -266,10 +377,13 @@ def build_draft_ready_ai_action(
     body_text: str,
     recipients: Dict[str, Any],
     action_type: str = "draft",
+    fallback_reason: str = "",
+    auto_send_min_confidence: float | None = None,
+    threshold_met: bool | None = None,
 ) -> Dict[str, Any]:
     now = _utc_now()
     normalized_body = (body_text or "").strip()
-    return {
+    payload: Dict[str, Any] = {
         "status": AI_ACTION_STATUS_DRAFT_READY,
         "type": action_type,
         "flow_run_id": flow_run_id,
@@ -290,6 +404,13 @@ def build_draft_ready_ai_action(
         "created_at": now,
         "resolved_at": None,
     }
+    if fallback_reason:
+        payload["fallback_reason"] = fallback_reason
+    if auto_send_min_confidence is not None:
+        payload["auto_send_min_confidence"] = auto_send_min_confidence
+    if threshold_met is not None:
+        payload["threshold_met"] = threshold_met
+    return payload
 
 
 def build_draft_created_ai_outcome(
@@ -299,13 +420,86 @@ def build_draft_created_ai_outcome(
     gmail_draft_message_id: str,
     confidence: float,
     recipients: Dict[str, Any],
+    fallback_reason: str = "",
+    auto_send_min_confidence: float | None = None,
+    threshold_met: bool | None = None,
 ) -> Dict[str, Any]:
-    return {
-        "type": "draft_created",
+    payload: Dict[str, Any] = {
+        "type": AI_OUTCOME_DRAFT_CREATED,
         "flow_run_id": flow_run_id,
         "gmail_draft_id": gmail_draft_id,
         "gmail_draft_message_id": gmail_draft_message_id,
         "confidence": confidence,
+        "recipients": {
+            "to": recipients.get("to") or [],
+            "cc": recipients.get("cc") or [],
+            "bcc": recipients.get("bcc") or [],
+            "cc_users": recipients.get("cc_users") or [],
+            "bcc_users": recipients.get("bcc_users") or [],
+            "matched_recipient_rules": recipients.get("matched_recipient_rules") or [],
+        },
+    }
+    if fallback_reason:
+        payload["fallback_reason"] = fallback_reason
+    if auto_send_min_confidence is not None:
+        payload["auto_send_min_confidence"] = auto_send_min_confidence
+    if threshold_met is not None:
+        payload["threshold_met"] = threshold_met
+    return payload
+
+
+def build_auto_sent_ai_action(
+    *,
+    flow_run_id: str,
+    trigger_message_id: str,
+    gmail_message_id: str,
+    confidence: float,
+    auto_send_min_confidence: float,
+    subject: str,
+    body_text: str,
+    recipients: Dict[str, Any],
+) -> Dict[str, Any]:
+    now = _utc_now()
+    normalized_body = (body_text or "").strip()
+    return {
+        "status": AI_ACTION_STATUS_SENT,
+        "type": AI_ACTION_TYPE_AUTO_SEND,
+        "flow_run_id": flow_run_id,
+        "trigger_message_id": trigger_message_id,
+        "gmail_message_id": gmail_message_id,
+        "confidence": confidence,
+        "auto_send_min_confidence": auto_send_min_confidence,
+        "threshold_met": True,
+        "subject": subject,
+        "body_text": normalized_body,
+        "recipients": {
+            "to": recipients.get("to") or [],
+            "cc": recipients.get("cc") or [],
+            "bcc": recipients.get("bcc") or [],
+            "cc_users": recipients.get("cc_users") or [],
+            "bcc_users": recipients.get("bcc_users") or [],
+            "matched_recipient_rules": recipients.get("matched_recipient_rules") or [],
+        },
+        "created_at": now,
+        "resolved_at": now,
+    }
+
+
+def build_auto_sent_ai_outcome(
+    *,
+    flow_run_id: str,
+    gmail_message_id: str,
+    confidence: float,
+    auto_send_min_confidence: float,
+    recipients: Dict[str, Any],
+) -> Dict[str, Any]:
+    return {
+        "type": AI_OUTCOME_AUTO_SENT,
+        "flow_run_id": flow_run_id,
+        "gmail_message_id": gmail_message_id,
+        "confidence": confidence,
+        "auto_send_min_confidence": auto_send_min_confidence,
+        "threshold_met": True,
         "recipients": {
             "to": recipients.get("to") or [],
             "cc": recipients.get("cc") or [],

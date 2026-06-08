@@ -459,7 +459,7 @@ One document = one Gmail inbox linked to one user.
 
 ### Troubleshooting: 403 insufficient scopes
 
-If the email flow fails at `save_gmail_draft` or (later) `send_email` with:
+If the email flow fails at `save_gmail_draft` or `send_email` with:
 
 ```text
 ACCESS_TOKEN_SCOPE_INSUFFICIENT
@@ -507,5 +507,6 @@ ACCESS_TOKEN_SCOPE_INSUFFICIENT
 
 ## Related — email AI agent
 
-- [email-ai-agent-setup.md](./email-ai-agent-setup.md) — agents, sync, threads, `ai_action` / draft-ready badges
+- [email-ai-agent-setup.md](./email-ai-agent-setup.md) — agents and sync
+- [email-threads-api.md](./email-threads-api.md) — threads, `ai_action` / draft-ready badges
 - [email-flow-reprocess-thread-api.md](./email-flow-reprocess-thread-api.md) — test full flow including `save_gmail_draft`

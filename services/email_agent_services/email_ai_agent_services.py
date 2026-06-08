@@ -101,6 +101,7 @@ def _serialize_email_ai_agent(agent: Dict[str, Any], gmail_account: Dict[str, An
         "reply_action": normalize_reply_action(agent.get("reply_action")),
         "routing_rule_ids": agent.get("routing_rule_ids", []),
         "recipient_rule_ids": agent.get("recipient_rule_ids", []),
+        "flow_id": (agent.get("flow_id") or "").strip(),
         "created_at": _format_datetime(agent.get("created_at")),
         "updated_at": _format_datetime(agent.get("updated_at")),
     }
@@ -158,13 +159,20 @@ async def _validate_gmail_account_for_team(
     return None
 
 
-async def _validate_tools_for_team(tool_ids: List[str], team_id: str) -> Dict[str, Any] | None:
+async def _validate_tools_for_team(
+    tool_ids: List[str],
+    team_id: str,
+    *,
+    require_at_least_one: bool = True,
+) -> Dict[str, Any] | None:
     if not tool_ids:
-        return {
-            "success": False,
-            "status_code": 400,
-            "message": "At least one tool_id is required.",
-        }
+        if require_at_least_one:
+            return {
+                "success": False,
+                "status_code": 400,
+                "message": "At least one tool_id is required.",
+            }
+        return None
 
     tools_by_id = await get_tools_by_ids(tool_ids)
     missing_tool_ids = [tool_id for tool_id in tool_ids if tool_id not in tools_by_id]
@@ -273,6 +281,7 @@ async def create_email_ai_agent(
     routing_rule_ids: List[str] | None = None,
     recipient_rule_ids: List[str] | None = None,
     email_format_template: str = "",
+    flow_id: str = "",
 ) -> Dict[str, Any]:
     """Create an email AI agent linked to a Gmail inbox, system prompt, knowledge base, tools, and LLM model."""
     normalized_name = name.strip()
@@ -286,6 +295,7 @@ async def create_email_ai_agent(
     normalized_reply_action = normalize_reply_action(reply_action)
     normalized_routing_rule_ids = _normalize_id_list(routing_rule_ids or [])
     normalized_recipient_rule_ids = _normalize_id_list(recipient_rule_ids or [])
+    normalized_requested_flow_id = flow_id.strip()
 
     if not normalized_llm_model:
         return {
@@ -308,7 +318,9 @@ async def create_email_ai_agent(
             return validation_error
 
         validation_error = await _validate_tools_for_team(
-            normalized_tool_ids, normalized_team_id
+            normalized_tool_ids,
+            normalized_team_id,
+            require_at_least_one=False,
         )
         if validation_error:
             return validation_error
@@ -324,6 +336,18 @@ async def create_email_ai_agent(
         )
         if validation_error:
             return validation_error
+
+        if normalized_requested_flow_id:
+            from services.email_agent_services.email_flows.email_flow_mongo_services import (
+                validate_flow_available_for_agent,
+            )
+
+            validation_error = await validate_flow_available_for_agent(
+                normalized_requested_flow_id,
+                normalized_team_id,
+            )
+            if validation_error:
+                return validation_error
 
         gmail_account = await get_gmail_account_by_id(normalized_gmail_account_id)
         now = datetime.now(timezone.utc)
@@ -353,6 +377,33 @@ async def create_email_ai_agent(
 
         result = await collection.insert_one(document)
         agent_id = str(result.inserted_id)
+        agent_doc = {**document, "_id": result.inserted_id}
+
+        try:
+            from services.email_agent_services.email_flows.email_flow_mongo_services import (
+                attach_flow_to_agent,
+                ensure_and_sync_agent_flow,
+            )
+
+            if normalized_requested_flow_id:
+                agent_doc = await attach_flow_to_agent(
+                    agent_doc,
+                    normalized_requested_flow_id,
+                )
+            else:
+                linked_flow_id = await ensure_and_sync_agent_flow(agent_doc)
+                agent_doc["flow_id"] = linked_flow_id
+        except Exception as flow_error:
+            await collection.delete_one({"_id": result.inserted_id})
+            logger.error(
+                f"Failed to create default workflow for agent {agent_id}: {flow_error}",
+                exc_info=True,
+            )
+            return {
+                "success": False,
+                "status_code": 500,
+                "message": "Email AI agent created but default workflow setup failed.",
+            }
 
         logger.info(f"Created email AI agent {agent_id} for team {normalized_team_id}")
 
@@ -361,7 +412,7 @@ async def create_email_ai_agent(
             "status_code": 201,
             "message": "Email AI agent created successfully.",
             "data": _serialize_email_ai_agent(
-                {**document, "_id": result.inserted_id},
+                agent_doc,
                 gmail_account,
             ),
         }
@@ -419,6 +470,7 @@ async def update_email_ai_agent(
     routing_rule_ids: List[str] | None = None,
     recipient_rule_ids: List[str] | None = None,
     email_format_template: str = "",
+    flow_id: str | None = None,
 ) -> Dict[str, Any]:
     """Update an existing email AI agent's configuration fields."""
     normalized_team_id = team_id.strip()
@@ -457,6 +509,23 @@ async def update_email_ai_agent(
                 "message": "Email AI agent does not belong to your team.",
             }
 
+        current_flow_id = (agent.get("flow_id") or "").strip()
+
+        if flow_id is not None:
+            normalized_requested_flow_id = flow_id.strip()
+            if normalized_requested_flow_id and normalized_requested_flow_id != current_flow_id:
+                from services.email_agent_services.email_flows.email_flow_mongo_services import (
+                    validate_flow_available_for_agent,
+                )
+
+                validation_error = await validate_flow_available_for_agent(
+                    normalized_requested_flow_id,
+                    normalized_team_id,
+                    exclude_agent_id=normalized_agent_id,
+                )
+                if validation_error:
+                    return validation_error
+
         validation_error = await _validate_knowledge_for_team(
             normalized_knowledge_id, normalized_team_id
         )
@@ -470,7 +539,9 @@ async def update_email_ai_agent(
             return validation_error
 
         validation_error = await _validate_tools_for_team(
-            normalized_tool_ids, normalized_team_id
+            normalized_tool_ids,
+            normalized_team_id,
+            require_at_least_one=False,
         )
         if validation_error:
             return validation_error
@@ -505,6 +576,11 @@ async def update_email_ai_agent(
             "updated_at": now,
         }
 
+        if flow_id is not None:
+            normalized_requested_flow_id = flow_id.strip()
+            if normalized_requested_flow_id and normalized_requested_flow_id != current_flow_id:
+                update_fields["flow_id"] = normalized_requested_flow_id
+
         await collection.update_one(
             {"_id": agent["_id"]},
             {"$set": update_fields},
@@ -512,13 +588,49 @@ async def update_email_ai_agent(
 
         updated_agent = {**agent, **update_fields}
 
+        flow_synced = False
+        try:
+            from services.email_agent_services.email_flows.email_flow_mongo_services import (
+                attach_flow_to_agent,
+                ensure_and_sync_agent_flow,
+                sync_flow_from_agent,
+            )
+
+            final_flow_id = (updated_agent.get("flow_id") or "").strip()
+            requested_flow_id = flow_id.strip() if flow_id is not None else ""
+
+            if flow_id is not None and requested_flow_id and requested_flow_id != current_flow_id:
+                updated_agent = await attach_flow_to_agent(updated_agent, requested_flow_id)
+                final_flow_id = updated_agent.get("flow_id", "")
+            elif final_flow_id:
+                await sync_flow_from_agent(final_flow_id, updated_agent)
+                flow_synced = True
+            else:
+                final_flow_id = await ensure_and_sync_agent_flow(updated_agent)
+                flow_synced = True
+
+            updated_agent["flow_id"] = final_flow_id
+        except Exception as flow_error:
+            logger.error(
+                f"Failed to sync default workflow for agent {normalized_agent_id}: {flow_error}",
+                exc_info=True,
+            )
+            return {
+                "success": False,
+                "status_code": 500,
+                "message": "Email AI agent updated but workflow sync failed.",
+            }
+
         logger.info(f"Updated email AI agent {normalized_agent_id} for team {normalized_team_id}")
+
+        agent_payload = _serialize_email_ai_agent(updated_agent, gmail_account)
+        agent_payload["flow_synced"] = flow_synced
 
         return {
             "success": True,
             "status_code": 200,
             "message": "Email AI agent updated successfully.",
-            "data": _serialize_email_ai_agent(updated_agent, gmail_account),
+            "data": agent_payload,
         }
 
     except Exception as e:

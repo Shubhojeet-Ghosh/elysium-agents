@@ -17,6 +17,30 @@
       "remarks": "Ticket received. A support agent will be assigned shortly.",
       "expected_resolution_due_date": "2026-06-20",
       "created_at": "2026-06-05T09:15:00+00:00"
+    },
+    "TKT-1004": {
+      "status": "open",
+      "remarks": "Your support ticket has been created. A team member will review your request and respond shortly.",
+      "expected_resolution_due_date": "2026-06-15",
+      "created_at": "2026-06-08T01:08:46.717238+00:00"
+    },
+    "TKT-1005": {
+      "status": "open",
+      "remarks": "Your support ticket has been created. A team member will review your request and respond shortly.",
+      "expected_resolution_due_date": "2026-06-15",
+      "created_at": "2026-06-08T01:24:00.752644+00:00"
+    },
+    "TKT-1006": {
+      "status": "open",
+      "remarks": "Your support ticket has been created. A team member will review your request and respond shortly.",
+      "expected_resolution_due_date": "2026-06-15",
+      "created_at": "2026-06-08T01:24:33.722376+00:00"
+    },
+    "TKT-1007": {
+      "status": "open",
+      "remarks": "Your support ticket has been created. A team member will review your request and respond shortly.",
+      "expected_resolution_due_date": "2026-06-15",
+      "created_at": "2026-06-08T01:28:49.156893+00:00"
     }
   }
 }

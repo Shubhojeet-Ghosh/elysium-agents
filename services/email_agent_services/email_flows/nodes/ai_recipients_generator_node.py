@@ -8,6 +8,9 @@ from services.email_agent_services.email_flows.email_flow_constants import (
     NODE_LOG_STATUS_SKIPPED,
     NODE_TYPE_AI_RECIPIENTS_GENERATOR,
 )
+from services.email_agent_services.email_flows.email_gmail_reply_services import (
+    apply_base_reply_recipients,
+)
 from services.email_agent_services.email_flows.email_recipient_rules_llm_services import (
     evaluate_recipient_rules_with_llm,
     summarize_recipient_rules_for_llm,
@@ -63,34 +66,40 @@ async def _load_recipient_rules(
     return active_rules, warnings
 
 
-def _set_recipients_context_defaults(context: Dict[str, Any]) -> None:
-    context["recipients"] = {
-        "to": [],
-        "cc": [],
-        "bcc": [],
-        "cc_user_ids": [],
-        "bcc_user_ids": [],
-        "cc_users": [],
-        "bcc_users": [],
-        "matched_rule_ids": [],
-        "matched_recipient_rules": [],
-        "decision_source": "",
-        "reason": "",
-    }
-
-
-def _resolve_reply_to_address(context: Dict[str, Any]) -> str:
-    trigger_message = context.get("trigger_message") or {}
-    reply_to = (trigger_message.get("reply_to") or "").strip()
-    if reply_to:
-        return reply_to
-
-    latest_inbound = (context.get("thread") or {}).get("latest_inbound") or {}
-    latest_reply_to = (latest_inbound.get("reply_to") or "").strip()
-    if latest_reply_to:
-        return latest_reply_to
-
-    return (trigger_message.get("from") or latest_inbound.get("from") or "").strip()
+def _apply_inbound_preserving_recipients(
+    context: Dict[str, Any],
+    *,
+    rule_cc: List[str] | None = None,
+    rule_bcc: List[str] | None = None,
+    decision_source: str = "",
+    reason: str = "",
+    cc_user_ids: List[str] | None = None,
+    bcc_user_ids: List[str] | None = None,
+    cc_users: List[Dict[str, str]] | None = None,
+    bcc_users: List[Dict[str, str]] | None = None,
+    matched_rule_ids: List[str] | None = None,
+    matched_recipient_rules: List[Dict[str, Any]] | None = None,
+) -> Dict[str, List[str]]:
+    resolved = apply_base_reply_recipients(
+        context,
+        rule_cc=rule_cc,
+        rule_bcc=rule_bcc,
+    )
+    _apply_recipients_result(
+        context,
+        to_addresses=resolved["to"],
+        cc_user_ids=cc_user_ids or [],
+        bcc_user_ids=bcc_user_ids or [],
+        cc_users=cc_users or [],
+        bcc_users=bcc_users or [],
+        cc_addresses=resolved["cc"],
+        bcc_addresses=resolved["bcc"],
+        matched_rule_ids=matched_rule_ids or [],
+        matched_recipient_rules=matched_recipient_rules or [],
+        decision_source=decision_source,
+        reason=reason,
+    )
+    return resolved
 
 
 def _dedupe_preserve_order(values: List[str]) -> List[str]:
@@ -286,7 +295,11 @@ async def execute_ai_recipients_generator_node(
 
     try:
         if not recipient_rule_ids:
-            _set_recipients_context_defaults(context)
+            _apply_inbound_preserving_recipients(
+                context,
+                decision_source="skipped",
+                reason="No recipient_rule_ids on agent or node config.",
+            )
             logger.info(
                 f"ai_recipients_generator_node skipped thread_id={thread_id} — "
                 "no recipient_rule_ids configured"
@@ -324,7 +337,13 @@ async def execute_ai_recipients_generator_node(
         }
 
         if not active_rules:
-            _set_recipients_context_defaults(context)
+            _apply_inbound_preserving_recipients(
+                context,
+                decision_source="skipped",
+                reason=(
+                    "No active recipient rules resolved for configured recipient_rule_ids."
+                ),
+            )
             logger.warning(
                 f"ai_recipients_generator_node skipped thread_id={thread_id} — "
                 f"no active recipient rules resolved. warnings={load_warnings}"
@@ -402,18 +421,14 @@ async def execute_ai_recipients_generator_node(
                 users_by_id=users_by_id,
             )
 
-        to_address = _resolve_reply_to_address(context)
-        to_addresses = [to_address] if to_address else []
-
-        _apply_recipients_result(
+        resolved = _apply_inbound_preserving_recipients(
             context,
-            to_addresses=to_addresses,
+            rule_cc=cc_addresses,
+            rule_bcc=bcc_addresses,
             cc_user_ids=cc_user_ids,
             bcc_user_ids=bcc_user_ids,
             cc_users=cc_users,
             bcc_users=bcc_users,
-            cc_addresses=cc_addresses,
-            bcc_addresses=bcc_addresses,
             matched_rule_ids=matched_rule_ids,
             matched_recipient_rules=matched_recipient_rules,
             decision_source=decision_source,
@@ -423,7 +438,7 @@ async def execute_ai_recipients_generator_node(
         logger.info(
             f"ai_recipients_generator_node completed thread_id={thread_id} "
             f"decision_source={decision_source} matched_rules={len(matched_rule_ids)} "
-            f"to={len(to_addresses)} cc={len(cc_addresses)} bcc={len(bcc_addresses)}"
+            f"to={len(resolved['to'])} cc={len(resolved['cc'])} bcc={len(resolved['bcc'])}"
         )
 
         completed_at = _utc_now()

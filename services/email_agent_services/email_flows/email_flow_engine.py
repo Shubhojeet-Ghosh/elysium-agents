@@ -18,8 +18,15 @@ from services.email_agent_services.email_flows.email_flow_constants import (
     NODE_LOG_STATUS_OK,
     NODE_LOG_STATUS_SKIPPED,
     REPLY_ACTION_MODE_DRAFT,
+    REPLY_ACTION_MODE_AUTO_SEND,
     RUN_TYPE_PREVIEW,
     RUN_TYPE_REPROCESS,
+)
+from services.email_agent_services.email_flows.email_flow_mongo_services import (
+    get_flow_by_id,
+)
+from services.email_agent_services.email_flows.email_flow_validation_services import (
+    extract_call_external_tool_config,
 )
 from services.email_agent_services.email_flows.email_flow_context import (
     build_initial_flow_context,
@@ -52,11 +59,20 @@ from services.email_agent_services.email_flows.nodes.generate_email_node import 
 from services.email_agent_services.email_flows.nodes.read_tools_node import (
     execute_read_tools_node,
 )
+from services.email_agent_services.email_flows.nodes.call_external_tool_node import (
+    execute_call_external_tool_node,
+)
 from services.email_agent_services.email_flows.nodes.save_gmail_draft_node import (
     execute_save_gmail_draft_node,
 )
+from services.email_agent_services.email_flows.nodes.send_email_node import (
+    execute_send_email_node,
+)
 from services.email_agent_services.email_flows.nodes.stop_node import (
     execute_stop_node,
+)
+from services.email_agent_services.email_flows.email_flow_thread_data_services import (
+    finalize_thread_ai_status,
 )
 from services.email_agent_services.email_flows.nodes.start_node import (
     execute_start_node,
@@ -89,12 +105,18 @@ NODE_HANDLERS: Dict[str, NodeHandler] = {
     "ai_department_router": execute_ai_department_router_node,
     "ai_recipients_generator": execute_ai_recipients_generator_node,
     "generate_email": execute_generate_email_node,
+    "call_external_tool": execute_call_external_tool_node,
     "save_gmail_draft": execute_save_gmail_draft_node,
+    "send_email": execute_send_email_node,
     "stop": execute_stop_node,
 }
 
 
-def build_flow_pipeline(agent: Dict[str, Any]) -> List[Tuple[str, str, Dict[str, Any]]]:
+def build_flow_pipeline(
+    agent: Dict[str, Any],
+    *,
+    flow_nodes: List[Dict[str, Any]] | None = None,
+) -> List[Tuple[str, str, Dict[str, Any]]]:
     """Return the node pipeline for this agent, including the resolved tail nodes."""
     pipeline = list(MVP_FLOW_PIPELINE)
     reply_action = agent.get("reply_action") or {}
@@ -105,8 +127,34 @@ def build_flow_pipeline(agent: Dict[str, Any]) -> List[Tuple[str, str, Dict[str,
     )
     if (reply_mode or REPLY_ACTION_MODE_DRAFT).strip().lower() == REPLY_ACTION_MODE_DRAFT:
         pipeline.append(("save_gmail_draft", "save_gmail_draft", {}))
+    elif (reply_mode or "").strip().lower() == REPLY_ACTION_MODE_AUTO_SEND:
+        pipeline.append(("send_email", "send_email", {}))
+
+    external_tool_config = None
+    if flow_nodes:
+        external_tool_config = extract_call_external_tool_config(flow_nodes)
+    elif (agent.get("flow_id") or "").strip():
+        # flow_nodes not passed — caller should load flow when possible
+        pass
+
+    if external_tool_config is not None:
+        pipeline.append(("call_external_tool", "call_external_tool", external_tool_config))
+
     pipeline.append(("stop", "stop", {}))
     return pipeline
+
+
+async def build_flow_pipeline_for_agent(
+    agent: Dict[str, Any],
+) -> List[Tuple[str, str, Dict[str, Any]]]:
+    """Load linked workflow (if any) and build the runtime pipeline."""
+    flow_nodes: List[Dict[str, Any]] | None = None
+    flow_id = (agent.get("flow_id") or "").strip()
+    if flow_id:
+        flow = await get_flow_by_id(flow_id)
+        if flow:
+            flow_nodes = flow.get("nodes") or []
+    return build_flow_pipeline(agent, flow_nodes=flow_nodes)
 
 
 async def queue_reprocess_agent_thread(
@@ -226,6 +274,22 @@ async def run_reprocess_agent_thread_background(
             status=FLOW_RUN_STATUS_FAILED,
             error=str(exc),
         )
+        try:
+            agent = await get_email_ai_agent_by_id(agent_id)
+            if agent:
+                await finalize_thread_ai_status(
+                    thread_id=thread_id.strip(),
+                    team_id=(agent.get("team_id") or "").strip(),
+                    gmail_account_id=(agent.get("gmail_account_id") or "").strip(),
+                    flow_run_id=run_id,
+                    final_status=FLOW_RUN_STATUS_FAILED,
+                    error=str(exc),
+                )
+        except Exception as finalize_error:
+            logger.error(
+                f"Failed to finalize thread ai_status run_id={run_id}: {finalize_error}",
+                exc_info=True,
+            )
 
 
 async def run_agent_thread_flow(
@@ -312,7 +376,7 @@ async def run_agent_thread_flow(
     final_status = FLOW_RUN_STATUS_COMPLETED
     failed_node_id = ""
 
-    flow_pipeline = build_flow_pipeline(agent)
+    flow_pipeline = await build_flow_pipeline_for_agent(agent)
 
     for node_id, node_type, base_config in flow_pipeline:
         handler = NODE_HANDLERS.get(node_type)
@@ -332,6 +396,8 @@ async def run_agent_thread_flow(
         if node_type == "read_kb":
             node_config.setdefault("limit", 5)
         if node_type == "read_tools":
+            node_config.setdefault("max_tool_calls", EMAIL_TOOLS_DEFAULT_MAX_CALLS)
+        if node_type == "call_external_tool":
             node_config.setdefault("max_tool_calls", EMAIL_TOOLS_DEFAULT_MAX_CALLS)
 
         context, node_log = await handler(context, node_config, agent)
@@ -381,6 +447,23 @@ async def run_agent_thread_flow(
             processing_status=MESSAGE_PROCESSING_STATUS_FAILED,
         )
 
+    flow_error_message = ""
+    if final_status == FLOW_RUN_STATUS_FAILED:
+        flow_error_message = next(
+            (log.get("error") for log in reversed(node_logs) if log.get("error")),
+            "Flow run failed.",
+        )
+
+    gmail_account_id = (agent.get("gmail_account_id") or "").strip()
+    await finalize_thread_ai_status(
+        thread_id=normalized_thread_id,
+        team_id=team_id,
+        gmail_account_id=gmail_account_id,
+        flow_run_id=run_id,
+        final_status=final_status,
+        error=flow_error_message,
+    )
+
     await update_flow_run_context(
         run_id,
         context=context,
@@ -391,10 +474,7 @@ async def run_agent_thread_flow(
     serialized_logs = serialize_for_json(node_logs)
 
     if final_status == FLOW_RUN_STATUS_FAILED:
-        error_message = next(
-            (log.get("error") for log in reversed(node_logs) if log.get("error")),
-            "Flow run failed.",
-        )
+        error_message = flow_error_message or "Flow run failed."
         return {
             "success": False,
             "status_code": 400,

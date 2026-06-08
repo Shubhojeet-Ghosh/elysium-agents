@@ -454,5 +454,6 @@ controllers/email_agent_controller_files/email_tools_controllers.py
 
 - [email-tool-definitions-api.md](./email-tool-definitions-api.md) — register tools in Mongo `email-tools` for LLM
 - [email-knowledge-api.md](./email-knowledge-api.md) — team knowledge indexing in Qdrant
-- [email-ai-agent-setup.md](./email-ai-agent-setup.md) — Gmail agents and thread sync
+- [email-ai-agent-setup.md](./email-ai-agent-setup.md) — Gmail agents and sync
+- [email-threads-api.md](./email-threads-api.md) — inbox list and thread messages
 - [departments-api.md](./departments-api.md) — team departments

@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional
 from services.email_agent_services.email_ai_agent_services import _format_datetime
 from services.email_agent_services.email_flows.email_flow_constants import (
     AI_ACTION_STATUS_DRAFT_READY,
+    AI_THREAD_STATUS_PROCESSING,
 )
 from services.email_agent_services.email_flows.email_flow_context import serialize_for_json
 from services.email_agent_services.gmail_api_services import send_gmail_draft
@@ -130,6 +131,27 @@ def _format_ai_action(ai_action: Optional[Dict[str, Any]]) -> Optional[Dict[str,
     return formatted
 
 
+def _format_ai_status(ai_status: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not ai_status or not isinstance(ai_status, dict):
+        return None
+
+    current_status = (ai_status.get("current_status") or "").strip()
+    if not current_status:
+        return None
+
+    formatted = serialize_for_json(ai_status)
+    for field in ("started_at", "updated_at"):
+        if isinstance(formatted.get(field), datetime):
+            formatted[field] = _format_datetime(formatted.get(field))
+    return formatted
+
+
+def _is_ai_processing(ai_status: Optional[Dict[str, Any]]) -> bool:
+    if not ai_status or not isinstance(ai_status, dict):
+        return False
+    return (ai_status.get("current_status") or "").strip() == AI_THREAD_STATUS_PROCESSING
+
+
 def _action_required(ai_action: Optional[Dict[str, Any]]) -> bool:
     if not ai_action or not isinstance(ai_action, dict):
         return False
@@ -138,6 +160,7 @@ def _action_required(ai_action: Optional[Dict[str, Any]]) -> bool:
 
 def _format_thread_summary(thread: Dict[str, Any]) -> Dict[str, Any]:
     ai_action = _format_ai_action(thread.get("ai_action"))
+    ai_status = _format_ai_status(thread.get("ai_status"))
     return {
         "thread_id": thread.get("thread_id", ""),
         "agent_id": thread.get("agent_id", ""),
@@ -152,7 +175,9 @@ def _format_thread_summary(thread: Dict[str, Any]) -> Dict[str, Any]:
         "has_unread": thread.get("has_unread", False),
         "department_id": thread.get("department_id", DEFAULT_THREAD_DEPARTMENT_ID),
         "assigned_user_id": thread.get("assigned_user_id", DEFAULT_THREAD_ASSIGNED_USER_ID),
+        "is_ai_processing": _is_ai_processing(ai_status),
         "action_required": _action_required(ai_action),
+        "ai_status": ai_status,
         "ai_action": ai_action,
         "updated_at": _format_datetime(thread.get("updated_at")),
     }

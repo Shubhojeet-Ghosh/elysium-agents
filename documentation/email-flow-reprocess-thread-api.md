@@ -53,11 +53,17 @@ start → load_thread_context → read_kb → read_tools → ai_department_route
   → ai_recipients_generator → generate_email → save_gmail_draft → stop
 ```
 
-When `agent.reply_action.mode` is **`auto_send`**, the tail is **`send_email`** (not shipped yet) — today the pipeline ends at **`stop`** after `generate_email`.
+When `agent.reply_action.mode === "draft"` (default), **`save_gmail_draft`** creates a Gmail draft, sets `email-threads.ai_action`, and sets `ai_outcome` on the trigger inbound.
 
-When `reply_action.mode` is **`draft`** (default), **`save_gmail_draft`** creates a Gmail draft on the thread (To + CC + BCC from `ai_recipients_generator`), sets `email-threads.ai_action`, and sets `ai_outcome` on the trigger inbound message.
+When `agent.reply_action.mode === "auto_send"`, the tail is **`send_email`** instead of `save_gmail_draft`:
 
-Poll **`POST /email-flows/v1/get-run`** with the returned `run_id` to see progress and the final draft, routing, recipients, etc. For inbox UX, poll **`list-team-threads`** / **`get-thread`** — see [email-ai-agent-setup.md](./email-ai-agent-setup.md) (`ai_action`, `action_required`).
+```
+… → generate_email → send_email → stop
+```
+
+**`send_email`:** if `draft.confidence >= auto_send_min_confidence` → direct Gmail send + `ai_action.status: "sent"`; else draft fallback with `ai_action.type: "draft_fallback"`.
+
+Poll **`POST /email-flows/v1/get-run`** with the returned `run_id` to see progress and the final draft, routing, recipients, etc. For inbox UX, poll **`list-team-threads`** / **`get-thread`** — see [email-draft-review-ui.md](./email-draft-review-ui.md) and [email-threads-api.md](./email-threads-api.md) (`ai_action`, `action_required`, `is_ai_processing`).
 
 ---
 

@@ -166,6 +166,8 @@ async def plan_email_tools_with_llm(
     context: Dict[str, Any],
     tools: List[Dict[str, Any]],
     llm_model: str,
+    system_prompt: str | None = None,
+    user_message: str | None = None,
 ) -> Dict[str, Any]:
     """
     Ask the agent's reasoning LLM whether to call any registered tools.
@@ -192,21 +194,28 @@ async def plan_email_tools_with_llm(
 
     llm_tools = [build_llm_tool_definition(tool) for tool in tools]
     registered_summary = summarize_registered_tools(tools)
+    planning_label = "External Tools" if system_prompt else "Read Tools"
     logger.info(
-        f"Read Tools LLM planning started "
+        f"{planning_label} LLM planning started "
         f"(model={validated_model}, registered_tools={len(registered_summary)})"
     )
     for registered_tool in registered_summary:
         logger.info(
-            "Read Tools registered tool: "
+            f"{planning_label} registered tool: "
             f"id={registered_tool['tool_id']} "
             f"name={registered_tool['tool_name']} "
             f"display={registered_tool['display_name']}"
         )
 
     messages = [
-        {"role": "system", "content": EMAIL_TOOLS_PLANNING_SYSTEM_PROMPT},
-        {"role": "user", "content": build_tools_llm_user_message(context=context)},
+        {
+            "role": "system",
+            "content": system_prompt or EMAIL_TOOLS_PLANNING_SYSTEM_PROMPT,
+        },
+        {
+            "role": "user",
+            "content": user_message or build_tools_llm_user_message(context=context),
+        },
     ]
 
     last_error = ""

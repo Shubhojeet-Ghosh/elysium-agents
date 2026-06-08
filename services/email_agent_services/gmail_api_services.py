@@ -15,6 +15,7 @@ logger = get_logger()
 GMAIL_MESSAGES_LIST_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages"
 GMAIL_THREADS_LIST_URL = "https://gmail.googleapis.com/gmail/v1/users/me/threads"
 GMAIL_DRAFTS_URL = "https://gmail.googleapis.com/gmail/v1/users/me/drafts"
+GMAIL_MESSAGES_SEND_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send"
 SYNC_BATCH_SIZE = 20
 
 async def refresh_access_token(refresh_token: str) -> Dict[str, Any]:
@@ -336,6 +337,52 @@ async def send_gmail_draft(
         "data": {
             "gmail_message_id": data.get("id", ""),
             "thread_id": data.get("threadId", ""),
+            "label_ids": data.get("labelIds", []) or [],
+        },
+    }
+
+
+async def send_gmail_message(
+    access_token: str,
+    *,
+    thread_id: str,
+    raw_message: str,
+) -> Dict[str, Any]:
+    """Send a new message on an existing thread (users.messages.send)."""
+    normalized_thread_id = (thread_id or "").strip()
+    if not normalized_thread_id:
+        return {
+            "success": False,
+            "message": "thread_id is required.",
+        }
+
+    payload: Dict[str, Any] = {"raw": raw_message}
+    payload["threadId"] = normalized_thread_id
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(
+            GMAIL_MESSAGES_SEND_URL,
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+        )
+
+    if response.status_code != 200:
+        logger.error(f"Gmail send message failed: {response.status_code} {response.text}")
+        return {
+            "success": False,
+            "message": "Failed to send Gmail message.",
+            "details": response.text,
+        }
+
+    data = response.json()
+    return {
+        "success": True,
+        "data": {
+            "gmail_message_id": data.get("id", ""),
+            "thread_id": data.get("threadId", normalized_thread_id),
             "label_ids": data.get("labelIds", []) or [],
         },
     }

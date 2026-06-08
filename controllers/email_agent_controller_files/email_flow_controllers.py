@@ -2,15 +2,29 @@ from fastapi import BackgroundTasks
 from fastapi.responses import JSONResponse
 
 from config.email_flow_models import (
+    CreateEmailFlowRequest,
+    GetFlowForAgentRequest,
+    GetFlowRequest,
     GetFlowRunRequest,
+    ListTeamEmailFlowsRequest,
     ListThreadFlowRunsRequest,
     PreviewLoadThreadContextRequest,
     ReprocessAgentThreadRequest,
+    UpdateEmailFlowRequest,
 )
 from logging_config import get_logger
+from services.email_agent_services.email_flows.email_flow_edit_services import (
+    create_team_email_flow,
+    update_team_email_flow,
+)
 from services.email_agent_services.email_flows.email_flow_engine import (
     queue_reprocess_agent_thread,
     run_reprocess_agent_thread_background,
+)
+from services.email_agent_services.email_flows.email_flow_mongo_services import (
+    get_flow_detail,
+    get_flow_for_agent_detail,
+    list_team_email_flows,
 )
 from services.email_agent_services.email_flows.email_flow_preview_services import (
     get_flow_run_detail,
@@ -19,6 +33,30 @@ from services.email_agent_services.email_flows.email_flow_preview_services impor
 )
 
 logger = get_logger()
+
+
+def _unauthorized_response(user_data: dict) -> JSONResponse:
+    return JSONResponse(
+        status_code=401,
+        content={
+            "success": False,
+            "message": user_data.get("message", "Unauthorized"),
+        },
+    )
+
+
+def _get_authenticated_team(user_data: dict) -> dict | JSONResponse:
+    if not user_data or user_data.get("success") is False:
+        return _unauthorized_response(user_data)
+
+    team_id = user_data.get("team_id")
+    if not team_id:
+        return JSONResponse(
+            status_code=401,
+            content={"success": False, "message": "Invalid token: team_id missing."},
+        )
+
+    return {"team_id": team_id.strip()}
 
 
 async def preview_load_thread_context_controller(
@@ -179,4 +217,232 @@ async def list_thread_flow_runs_controller(request_data: ListThreadFlowRunsReque
         return JSONResponse(
             status_code=500,
             content={"success": False, "message": "An error occurred while listing flow runs."},
+        )
+
+
+async def list_team_email_flows_controller(
+    request_data: ListTeamEmailFlowsRequest,
+    user_data: dict,
+):
+    try:
+        auth = _get_authenticated_team(user_data)
+        if isinstance(auth, JSONResponse):
+            return auth
+
+        token_team_id = auth["team_id"]
+        if request_data.team_id.strip() != token_team_id:
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "success": False,
+                    "message": "team_id does not match your authenticated team.",
+                },
+            )
+
+        result = await list_team_email_flows(token_team_id)
+        status_code = result.get("status_code", 200 if result.get("success") else 400)
+
+        if not result.get("success"):
+            return JSONResponse(
+                status_code=status_code,
+                content={
+                    "success": False,
+                    "message": result.get("message", "Failed to list email flows."),
+                },
+            )
+
+        return JSONResponse(
+            status_code=status_code,
+            content={
+                "success": True,
+                "message": result.get("message"),
+                "data": result.get("data"),
+            },
+        )
+
+    except Exception as e:
+        logger.error(f"Error in list_team_email_flows_controller: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "message": "An error occurred while listing email flows."},
+        )
+
+
+async def get_flow_for_agent_controller(
+    request_data: GetFlowForAgentRequest,
+    user_data: dict,
+):
+    try:
+        auth = _get_authenticated_team(user_data)
+        if isinstance(auth, JSONResponse):
+            return auth
+
+        result = await get_flow_for_agent_detail(
+            agent_id=request_data.agent_id,
+            team_id=auth["team_id"],
+        )
+        status_code = result.get("status_code", 200 if result.get("success") else 404)
+
+        if not result.get("success"):
+            return JSONResponse(
+                status_code=status_code,
+                content={
+                    "success": False,
+                    "message": result.get("message", "Failed to fetch email flow."),
+                },
+            )
+
+        return JSONResponse(
+            status_code=status_code,
+            content={
+                "success": True,
+                "message": result.get("message"),
+                "data": result.get("data"),
+            },
+        )
+
+    except Exception as e:
+        logger.error(f"Error in get_flow_for_agent_controller: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "message": "An error occurred while fetching the email flow."},
+        )
+
+
+async def get_flow_controller(
+    request_data: GetFlowRequest,
+    user_data: dict,
+):
+    try:
+        auth = _get_authenticated_team(user_data)
+        if isinstance(auth, JSONResponse):
+            return auth
+
+        result = await get_flow_detail(
+            flow_id=request_data.flow_id,
+            team_id=auth["team_id"],
+        )
+        status_code = result.get("status_code", 200 if result.get("success") else 404)
+
+        if not result.get("success"):
+            return JSONResponse(
+                status_code=status_code,
+                content={
+                    "success": False,
+                    "message": result.get("message", "Failed to fetch email flow."),
+                },
+            )
+
+        return JSONResponse(
+            status_code=status_code,
+            content={
+                "success": True,
+                "message": result.get("message"),
+                "data": result.get("data"),
+            },
+        )
+
+    except Exception as e:
+        logger.error(f"Error in get_flow_controller: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "message": "An error occurred while fetching the email flow."},
+        )
+
+
+async def create_email_flow_controller(
+    request_data: CreateEmailFlowRequest,
+    user_data: dict,
+):
+    try:
+        auth = _get_authenticated_team(user_data)
+        if isinstance(auth, JSONResponse):
+            return auth
+
+        token_team_id = auth["team_id"]
+        if request_data.team_id.strip() != token_team_id:
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "success": False,
+                    "message": "team_id does not match your authenticated team.",
+                },
+            )
+
+        result = await create_team_email_flow(
+            team_id=token_team_id,
+            name=request_data.name,
+            description=request_data.description,
+        )
+        status_code = result.get("status_code", 201 if result.get("success") else 400)
+
+        if not result.get("success"):
+            body = {
+                "success": False,
+                "message": result.get("message", "Failed to create email workflow."),
+            }
+            if result.get("data") is not None:
+                body["data"] = result.get("data")
+            return JSONResponse(status_code=status_code, content=body)
+
+        return JSONResponse(
+            status_code=status_code,
+            content={
+                "success": True,
+                "message": result.get("message"),
+                "data": result.get("data"),
+            },
+        )
+
+    except Exception as e:
+        logger.error(f"Error in create_email_flow_controller: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "message": "An error occurred while creating the email workflow."},
+        )
+
+
+async def update_email_flow_controller(
+    request_data: UpdateEmailFlowRequest,
+    user_data: dict,
+):
+    try:
+        auth = _get_authenticated_team(user_data)
+        if isinstance(auth, JSONResponse):
+            return auth
+
+        nodes_payload = [node.model_dump() for node in request_data.nodes]
+
+        result = await update_team_email_flow(
+            team_id=auth["team_id"],
+            flow_id=request_data.flow_id,
+            name=request_data.name,
+            description=request_data.description,
+            nodes=nodes_payload,
+        )
+        status_code = result.get("status_code", 200 if result.get("success") else 400)
+
+        if not result.get("success"):
+            body = {
+                "success": False,
+                "message": result.get("message", "Failed to update email workflow."),
+            }
+            if result.get("data") is not None:
+                body["data"] = result.get("data")
+            return JSONResponse(status_code=status_code, content=body)
+
+        return JSONResponse(
+            status_code=status_code,
+            content={
+                "success": True,
+                "message": result.get("message"),
+                "data": result.get("data"),
+            },
+        )
+
+    except Exception as e:
+        logger.error(f"Error in update_email_flow_controller: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "message": "An error occurred while updating the email workflow."},
         )

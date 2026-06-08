@@ -110,18 +110,19 @@ async def create_email_ai_agent_controller(
             routing_rule_ids=request_data.routing_rule_ids,
             recipient_rule_ids=request_data.recipient_rule_ids,
             email_format_template=request_data.email_format_template,
+            flow_id=request_data.flow_id,
         )
 
         status_code = result.get("status_code", 200 if result.get("success") else 400)
 
         if not result.get("success"):
-            return JSONResponse(
-                status_code=status_code,
-                content={
-                    "success": False,
-                    "message": result.get("message", "Failed to create email AI agent."),
-                },
-            )
+            body = {
+                "success": False,
+                "message": result.get("message", "Failed to create email AI agent."),
+            }
+            if result.get("data") is not None:
+                body["data"] = result.get("data")
+            return JSONResponse(status_code=status_code, content=body)
 
         return JSONResponse(
             status_code=status_code,
@@ -205,18 +206,19 @@ async def update_email_ai_agent_controller(
             routing_rule_ids=request_data.routing_rule_ids,
             recipient_rule_ids=request_data.recipient_rule_ids,
             email_format_template=request_data.email_format_template,
+            flow_id=request_data.flow_id,
         )
 
         status_code = result.get("status_code", 200 if result.get("success") else 400)
 
         if not result.get("success"):
-            return JSONResponse(
-                status_code=status_code,
-                content={
-                    "success": False,
-                    "message": result.get("message", "Failed to update email AI agent."),
-                },
-            )
+            body = {
+                "success": False,
+                "message": result.get("message", "Failed to update email AI agent."),
+            }
+            if result.get("data") is not None:
+                body["data"] = result.get("data")
+            return JSONResponse(status_code=status_code, content=body)
 
         return JSONResponse(
             status_code=status_code,

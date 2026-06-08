@@ -2,7 +2,7 @@
 
 Define **when** to add team members to **CC** or **BCC** on AI-generated email replies, using natural-language conditions. Rules are scoped to **`team_id`**.
 
-At runtime (flow engine — not yet implemented), the **AI Recipients Generator** node loads these rules, the LLM checks which conditions match the thread, and resolves `cc_user_ids` / `bcc_user_ids` to email addresses from `email-users`.
+At runtime, the **AI Recipients Generator** flow node loads these rules, the LLM checks which conditions match the thread, and resolves `cc_user_ids` / `bcc_user_ids` to email addresses from `email-users`. Rule CC/BCC are **merged with inbound CC/BCC** on the trigger message (deduped) before draft or send — see [email-flow-nodes.md](./email-flow-nodes.md) § `ai_recipients_generator`.
 
 For listing team members (to pick `user_id`s), see [departments-api.md](./departments-api.md) or [email-auth-login-api.md](./email-auth-login-api.md).  
 For department routing (separate, independent feature), see [email-routing-rules-api.md](./email-routing-rules-api.md).
@@ -432,13 +432,13 @@ async function listRecipientRules(teamId) {
 
 > “I want a full refund of $800 or I will contact my lawyer.”
 
-**Later (flow engine):** LLM matches this rule → outgoing reply CCs manager, BCCs compliance (emails resolved from `user_id`s at runtime).
+**At runtime:** LLM matches this rule → outgoing reply CCs manager, BCCs compliance (emails resolved from `user_id`s at runtime), **plus** any CC/BCC already on the inbound message.
 
 **Another email:**
 
 > “Thanks, issue resolved!”
 
-No rule matches → only default **To** (customer); no extra CC/BCC from this rule.
+No rule matches → default **To** (customer) and **inbound CC/BCC preserved**; no extra CC/BCC from this rule.
 
 ---
 
@@ -447,9 +447,9 @@ No rule matches → only default **To** (customer); no extra CC/BCC from this ru
 | Layer | Status |
 | ----- | ------ |
 | Create / update / list APIs | **Implemented** |
-| LLM **AI Recipients Generator** flow node | **Not implemented yet** |
+| LLM **AI Recipients Generator** flow node | **Implemented** |
 
-Rules can be created and managed in the admin UI now; they will be consumed when the email flow engine ships ([email-flow-plan.md](./email-flow-plan.md)).
+Rules are consumed at flow runtime by `ai_recipients_generator` ([email-flow-nodes.md](./email-flow-nodes.md)).
 
 ---
 

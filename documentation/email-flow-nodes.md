@@ -7,7 +7,8 @@ Per-node guide for the **`@xyflow/react` flow builder** and backend **input/outp
 **Related:**
 - [email-flow-plan.md](./email-flow-plan.md) — full architecture, Mongo models, phases
 - [email-flow-reprocess-thread-api.md](./email-flow-reprocess-thread-api.md) — reprocess-thread test API
-- [email-ai-agent-setup.md](./email-ai-agent-setup.md) — agents, sync, threads
+- [email-ai-agent-setup.md](./email-ai-agent-setup.md) — agents, sync
+- [email-threads-api.md](./email-threads-api.md) — inbox list, get-thread, send draft
 
 **Library:** [`@xyflow/react`](https://reactflow.dev) v12 (`^12.11.0`)
 
@@ -47,9 +48,9 @@ const nodeTypes = {
 | `ai_department_router` | AI Department Router | **Implemented** (backend) |
 | `ai_recipients_generator` | AI Recipients Generator | **Implemented** (backend) |
 | `generate_email` | Generate Email | **Implemented** (backend) |
-| `call_external_tool` | Call External Tool | Planned |
+| `call_external_tool` | Call External Tool | **Implemented** (backend) |
 | `save_gmail_draft` | Save Gmail Draft | **Implemented** (backend, tail when `mode: draft`) |
-| `send_email` | Send Email | Planned (tail) |
+| `send_email` | Send Email | **Implemented** (backend, tail when `mode: auto_send`) |
 | `stop` | Stop | **Implemented** (backend) |
 
 **Not on canvas:** `system_prompt` — edited in **agent settings** only; backend copies it into context at **Start**.
@@ -60,8 +61,8 @@ const nodeTypes = {
 
 ```
 start → load_thread_context → read_kb → read_tools → ai_department_router
-  → ai_recipients_generator → generate_email → call_external_tool
-  → save_gmail_draft | send_email → stop
+  → ai_recipients_generator → generate_email
+  → save_gmail_draft | send_email → call_external_tool (optional) → stop
 ```
 
 MVP subset: `start → load_thread_context → read_kb → generate_email → tail → stop`
@@ -170,7 +171,7 @@ System default flow (`is_deletable: false`) → preview only.
 | `ai_department_router` | `DepartmentRouterNode` | e.g. `3 active rules` | — | No — link to routing rules admin |
 | `ai_recipients_generator` | `RecipientsNode` | e.g. `2 active rules` | — | No — link to recipient rules admin |
 | `generate_email` | `GenerateEmailNode` | Model badge | `format_prompt`, `llm_model` | Yes — `llm_model` syncs to agent |
-| `call_external_tool` | `ExternalToolNode` | Post-draft tool names | `tools[]` | Yes — flow-only |
+| `call_external_tool` | `ExternalToolNode` | Post-draft tool names | `external_tools[]` | Yes — flow-only |
 | `save_gmail_draft` | `SaveGmailDraftNode` | `Draft only` | `reply_action` | Tail — when `mode: draft` |
 | `send_email` | `SendEmailNode` | `Auto-send ≥ 0.8` | `reply_action` | Tail — when `mode: auto_send` |
 | `stop` | `StopNode` | — | — | No |
@@ -847,8 +848,8 @@ or explicit no-match:
 | Key | Description |
 | --- | ----------- |
 | `recipients.to` | Reply target (latest inbound sender, respecting `Reply-To`) |
-| `recipients.cc` | Merged CC email addresses from matched rules |
-| `recipients.bcc` | Merged BCC email addresses from matched rules |
+| `recipients.cc` | Inbound CC on the trigger message **plus** CC from matched rules (deduped) |
+| `recipients.bcc` | Inbound BCC on the trigger message **plus** BCC from matched rules (deduped) |
 | `recipients.cc_user_ids` | Merged `cc_user_ids` from matched rules |
 | `recipients.bcc_user_ids` | Merged `bcc_user_ids` from matched rules |
 | `recipients.cc_users` | CC users resolved from `email-users` (`user_id`, `email`, `name`) |
@@ -863,7 +864,7 @@ or explicit no-match:
 ```json
 {
   "to": ["customer@example.com"],
-  "cc": ["founder@company.com"],
+  "cc": ["manager@company.com", "founder@company.com"],
   "bcc": ["legal@company.com"],
   "cc_user_ids": ["6a23597fc25333c86ca81440"],
   "bcc_user_ids": ["6a2417869c2eb522db6c4818"],
@@ -932,7 +933,7 @@ Empty array when nothing matches:
 | `skipped` | No `recipient_rule_ids` or no active rules resolved |
 | `llm_matched` | LLM returned one or more valid matching rule `_id`s |
 | `llm_no_match` | LLM successfully returned `[]` — no rule clearly applies |
-| `safety_empty` | LLM/parsing failed after 3 retries — no CC/BCC from rules |
+| `safety_empty` | LLM/parsing failed after 3 retries — no CC/BCC from rules (inbound CC/BCC still preserved) |
 
 **How it works:**
 
@@ -944,6 +945,12 @@ Empty array when nothing matches:
 4. Validate each `_id` is in the allowed rule set; ignore `meets_requirements: false` entries
 5. Merge `cc_user_ids` / `bcc_user_ids` from matched rules → resolve emails from `email-users` (only when LLM matched at least one rule)
 6. Default **To:** trigger/latest inbound sender (`Reply-To` when present)
+7. **Preserve inbound CC/BCC** from the trigger message, then merge with rule CC/BCC:
+   - Dedupe case-insensitively (`person-a@example.com` = `Person-A <person-a@example.com>`)
+   - Drop the **To** address from CC
+   - Drop CC addresses from BCC when the same person appears in both lists
+
+**Recipient merge example:** inbound CC = `manager@company.com`, rule CC = `person-a@example.com` + `manager@company.com` → final CC = `manager@company.com`, `person-a@example.com` (one copy of manager).
 
 **Skip (not fail):**
 
@@ -974,7 +981,8 @@ Empty array when nothing matches:
 
 | File | Role |
 | ---- | ---- |
-| `nodes/ai_recipients_generator_node.py` | Node handler — load rules, call LLM, merge CC/BCC |
+| `nodes/ai_recipients_generator_node.py` | Node handler — load rules, call LLM, merge inbound + rule CC/BCC |
+| `email_gmail_reply_services.py` | Shared recipient merge + MIME build (`extract_inbound_cc_bcc`, `merge_reply_cc_bcc`) |
 | `email_recipient_rules_llm_services.py` | LLM evaluation + JSON array parsing + retries |
 | `email_recipient_rules/email_recipient_rules_mongo_services.py` | `get_recipient_rules_by_ids()` |
 | `email_user_auth_services.py` | `get_email_users_by_ids()` |
@@ -1109,7 +1117,7 @@ Create a **Gmail draft** on the linked inbox thread using:
 
 - `context.draft.body_text` (plain text) and `context.draft.subject`
 - **To** from `context.recipients.to` (fallback: trigger inbound `from` / `reply_to`)
-- **Cc** / **Bcc** from `context.recipients` (populated by `ai_recipients_generator` when recipient rules match)
+- **Cc** / **Bcc** from `context.recipients` — inbound CC/BCC on the trigger message **plus** any CC/BCC from matched recipient rules (merged and deduped in `ai_recipients_generator`; re-applied in `resolve_reply_recipients` at draft/send time)
 
 The draft appears in the user's **Gmail** inbox on that thread (open the conversation → draft reply is ready to review and send). Requires OAuth scope `gmail.compose` — reconnect the inbox if draft creation returns 403.
 
@@ -1166,7 +1174,7 @@ The draft appears in the user's **Gmail** inbox on that thread (open the convers
 - **`list-team-threads`:** each thread includes `action_required: true` when `ai_action.status === "draft_ready"`, plus full `ai_action`.
 - **`get-thread`:** thread summary includes `ai_action`; messages include `processing_status`, `ai_outcome` on the trigger inbound.
 
-See [email-ai-agent-setup.md](./email-ai-agent-setup.md) §6–8 and [email-draft-review-ui.md](./email-draft-review-ui.md).
+See [email-threads-api.md](./email-threads-api.md) and [email-draft-review-ui.md](./email-draft-review-ui.md).
 
 ### Source files
 
@@ -1181,7 +1189,119 @@ See [email-ai-agent-setup.md](./email-ai-agent-setup.md) §6–8 and [email-draf
 
 ---
 
-## 11. Node: `stop`
+## 11. Node: `send_email`
+
+### Flow builder — `SendEmailNode`
+
+| Item | Value |
+| ---- | ----- |
+| Position | After `generate_email`, before `stop` |
+| `data.label` | `Send Email` |
+| `data.binding` | `Auto-send ≥ {auto_send_min_confidence}` (from `agent.reply_action`) |
+| Shown when | `agent.reply_action.mode === "auto_send"` |
+
+### Purpose
+
+Tail node for **auto-send** agents. Compares `context.draft.confidence` to `agent.reply_action.auto_send_min_confidence`:
+
+| Condition | Action |
+| --------- | ------ |
+| `confidence >= auto_send_min_confidence` | Send reply directly via Gmail `users.messages.send` (requires `gmail.send`) |
+| `confidence < auto_send_min_confidence` | **Draft fallback** — same Gmail draft + Mongo writes as `save_gmail_draft`, with `type: "draft_fallback"` |
+
+Send failures **fail the run** — no draft fallback on API errors (MVP).
+
+Reply headers (**To** / **Cc** / **Bcc**) use the same merged recipient list as `save_gmail_draft` via `resolve_reply_recipients` in `email_gmail_reply_services.py`.
+
+### Writes
+
+| Target | Field(s) |
+| ------ | -------- |
+| Gmail API | Direct send (`gmail_message_id`) or fallback draft (`gmail_draft_id`) |
+| `context` | `final_action` — `{ type: "sent", ... }` or `{ type: "draft", fallback_reason, ... }` |
+| `email-threads` | `ai_action` — see shapes below |
+| `email-thread-messages` (trigger inbound) | `ai_outcome` — `auto_sent` or `draft_created` |
+| `email-thread-messages` (outbound, auto-send path) | `ai_reply.mode: "auto"` stub |
+
+**Auto-sent — `email-threads.ai_action`:**
+
+```json
+{
+  "status": "sent",
+  "type": "auto_send",
+  "flow_run_id": "...",
+  "trigger_message_id": "...",
+  "gmail_message_id": "18f3sent789",
+  "confidence": 0.92,
+  "auto_send_min_confidence": 0.8,
+  "threshold_met": true,
+  "subject": "Re: Refund request",
+  "body_text": "Hi John,...",
+  "recipients": { "to": [], "cc": [], "bcc": [] },
+  "created_at": "...",
+  "resolved_at": "..."
+}
+```
+
+Frontend: `action_required: false` — informational “AI replied” banner only.
+
+**Draft fallback — `email-threads.ai_action`:**
+
+```json
+{
+  "status": "draft_ready",
+  "type": "draft_fallback",
+  "fallback_reason": "confidence_below_threshold",
+  "confidence": 0.65,
+  "auto_send_min_confidence": 0.8,
+  "threshold_met": false,
+  "gmail_draft_id": "...",
+  "gmail_draft_message_id": "...",
+  "subject": "Re: ...",
+  "body_text": "...",
+  "recipients": { "to": [], "cc": [], "bcc": [] },
+  "created_at": "...",
+  "resolved_at": null
+}
+```
+
+Frontend: `action_required: true` — same draft panel + **Send** as draft-only mode; copy **“Auto-send skipped — review draft”**.
+
+**Trigger message `ai_outcome` (auto-sent):**
+
+```json
+{
+  "type": "auto_sent",
+  "flow_run_id": "...",
+  "gmail_message_id": "18f3sent789",
+  "confidence": 0.92,
+  "auto_send_min_confidence": 0.8,
+  "threshold_met": true,
+  "recipients": { "to": [], "cc": [], "bcc": [] }
+}
+```
+
+### Frontend (inbox APIs)
+
+- **`list-team-threads`:** `action_required: true` only for `draft_ready` (includes `draft_fallback`). `status: "sent"` → optional “AI replied” badge, not actionable.
+- **`get-thread`:** full `ai_action` including `body_text`; outbound auto-send rows have `ai_reply.mode: "auto"`.
+
+See [email-draft-review-ui.md](./email-draft-review-ui.md).
+
+### Source files
+
+| File | Role |
+| ---- | ---- |
+| `nodes/send_email_node.py` | Node handler — confidence gate + send / fallback |
+| `email_gmail_reply_services.py` | Shared MIME, recipients, draft persist |
+| `gmail_api_services.py` | `send_gmail_message` + `create_gmail_draft` |
+| `email_flow_thread_data_services.py` | `build_auto_sent_*` / draft builders |
+
+**Status:** implemented.
+
+---
+
+## 12. Node: `stop`
 
 Terminal node — no config. Marks pipeline end; `final_action` already set by tail node.
 
@@ -1193,29 +1313,66 @@ Terminal node — no config. Marks pipeline end; `final_action` already set by t
 
 ---
 
-## 12. Planned nodes (flow builder summary)
+## 13. Node: `call_external_tool`
 
-### `call_external_tool` — `ExternalToolNode`
+Post-draft external tool node — LLM decides whether to call flow-configured tools for side effects (CRM, tickets, etc.) after the reply is drafted/sent.
 
-- **Binding:** Post-draft tool allowlist
-- **Config panel:** Tool multi-select for post-draft only
-- **Flow-only** — does not sync to agent
+### Flow builder — `ExternalToolNode`
 
-### `send_email` — `SendEmailNode` (tail)
+| Item | Detail |
+| ---- | ------ |
+| Position | After tail (`save_gmail_draft` / `send_email`), immediately before `stop` |
+| `data.label` | `Call External Tool` |
+| `data.binding` | Tool display names (from `config.external_tools`) |
+| `data.config` | `external_tools[]` (canonical; backend also accepts `tool_ids[]` and normalizes on flow save) |
+| Preview mode | Label + tool name chips |
+| Editor mode | Tool multi-select (team tools) |
+| On save | **Flow-only** — does **not** sync to `agent.tool_ids` |
 
-- **Binding:** `Auto-send ≥ {threshold}`
-- **Shown when:** `agent.reply_action.mode === "auto_send"`
-- **Syncs to agent:** `reply_action`
+**Not accepted on agent create/update API.** Configure only via the workflow canvas.
+
+### Backend I/O
+
+**Reads from context:** `compressed_query`, `thread` (last 5 messages, trigger emphasized), `draft`
+
+**Reads from `config`:** `external_tools[]` — if empty/missing, backend falls back to `tool_ids[]` (legacy / Read Tools picker key). On **`POST /email-flows/v1/update`**, stored config is rewritten to `external_tools[]` only.
+
+**Reads from agent:** `llm_model` only (must be reasoning model — same as Read Tools)
+
+**Writes to context:**
+
+| Key | Description |
+| --- | ----------- |
+| `external_tools_registered` | Active tools available this run |
+| `external_tools_planned` | LLM-selected tool calls before execution |
+| `external_tool_results` | Full HTTP/API results per executed tool |
+
+Separate from Read Tools (`tool_results`) — post-draft side effects only.
+
+**Skip (not fail):** if `external_tools` is empty → node status `skipped`, pipeline continues.
+
+**Fail:** if `compressed_query` is empty, LLM planning fails after retries, or unexpected errors.
+
+### Source files
+
+| File | Role |
+| ---- | ---- |
+| `nodes/call_external_tool_node.py` | Node handler |
+| `email_flow_validation_services.py` | `resolve_external_tool_ids_from_config`, `normalize_call_external_tool_nodes` |
+| `email_external_tools_llm_services.py` | Post-draft LLM planning prompt + orchestration |
+| `email_read_tools_llm_services.py` | Shared HTTP execution (`execute_planned_email_tools`) |
+
+**Status:** implemented.
 
 ---
 
-## 13. Reprocess thread (test API)
+## 14. Reprocess thread (test API)
 
 Full API reference: **[email-flow-reprocess-thread-api.md](./email-flow-reprocess-thread-api.md)** (request/response, `force_reprocess`, polling, examples).
 
 Re-run the flow on an **existing** thread without sending a new email. Calls `run_agent_thread_flow()` in `email_flow_engine.py` — the same orchestrator sync will use later.
 
-**Current pipeline:** `start` → `load_thread_context` → `read_kb` → `read_tools` → `ai_department_router` → `ai_recipients_generator` → `generate_email` → `save_gmail_draft` → `stop` (when `reply_action.mode === "draft"`).
+**Current pipeline:** `start` → `load_thread_context` → `read_kb` → `read_tools` → `ai_department_router` → `ai_recipients_generator` → `generate_email` → **`save_gmail_draft`** → **`call_external_tool`** (when on saved workflow) → `stop` when `reply_action.mode === "draft"`, or → **`send_email`** → **`call_external_tool`** → `stop` when `mode === "auto_send"`.
 
 ```
 POST /elysium-agents/email-flows/v1/reprocess-thread
@@ -1304,7 +1461,7 @@ Run `status` values while polling: `queued` → `running` → `completed` | `fai
 
 ---
 
-## 12. Screens using the flow builder
+## 15. Screens using the flow builder
 
 | Screen | Canvas mode | What to show |
 | ------ | ----------- | ------------ |
@@ -1316,7 +1473,7 @@ On flow save, backend runs **flow → agent** sync for `knowledge_id`, `tool_ids
 
 ---
 
-## 13. Adding a new node (checklist)
+## 16. Adding a new node (checklist)
 
 **Backend**
 
@@ -1333,10 +1490,12 @@ On flow save, backend runs **flow → agent** sync for `knowledge_id`, `tool_ids
 
 ---
 
-## 14. Changelog
+## 17. Changelog
 
 | Date | Node | Notes |
 | ---- | ---- | ----- |
+| 2026-06-08 | `call_external_tool` | Post-draft LLM tool planning + HTTP execution; flow-only `external_tools[]`; runs after tail |
+| 2026-06-07 | `send_email` | Auto-send tail: confidence gate, direct Gmail send, draft fallback, Mongo `ai_action` / `ai_outcome` |
 | 2026-06-07 | `ai_department_router` | All registered rules sent to LLM; `is_fallback` only for parse-failure safety net |
 | 2026-06-07 | `ai_department_router` | LLM routing from `routing_rule_ids`; priority ties; fallback + safety nets |
 | 2026-06-07 | `read_tools` | Full node doc: context shapes, run-log audit, terminal logs, downstream usage |

@@ -2,7 +2,7 @@
 
 How to create, list, and delete team knowledge for the email AI agent. Knowledge text is chunked, embedded, and stored in **Qdrant**. Metadata only lives in **MongoDB** — full text is never stored in Mongo.
 
-For email agent setup (Gmail sync, threads), see [email-ai-agent-setup.md](./email-ai-agent-setup.md).
+For email agent setup (Gmail sync), see [email-ai-agent-setup.md](./email-ai-agent-setup.md). For inbox/threads, see [email-threads-api.md](./email-threads-api.md).
 
 ---
 
@@ -588,6 +588,7 @@ When the agent replies to an email, it will call this service with the attached 
 
 ## Related docs
 
-- [email-ai-agent-setup.md](./email-ai-agent-setup.md) — Gmail agents and thread sync
+- [email-ai-agent-setup.md](./email-ai-agent-setup.md) — Gmail agents and sync
+- [email-threads-api.md](./email-threads-api.md) — inbox list and thread messages
 - [email-tools-api.md](./email-tools-api.md) — agent tool APIs (ticket status lookup)
 - [departments-api.md](./departments-api.md) — team departments

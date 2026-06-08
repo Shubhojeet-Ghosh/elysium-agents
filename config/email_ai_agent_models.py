@@ -34,11 +34,19 @@ class CreateEmailAiAgentRequest(BaseModel):
         ),
     )
     knowledge_id: str = Field(..., min_length=1, max_length=128)
-    tool_ids: List[str] = Field(..., min_length=1, max_length=20)
+    tool_ids: List[str] = Field(default_factory=list, max_length=20)
     llm_model: str = Field(..., min_length=1, max_length=128)
     reply_action: AgentReplyActionConfig = Field(default_factory=AgentReplyActionConfig)
     routing_rule_ids: List[str] = Field(default_factory=list, max_length=50)
     recipient_rule_ids: List[str] = Field(default_factory=list, max_length=50)
+    flow_id: str = Field(
+        default="",
+        max_length=128,
+        description=(
+            "Optional existing team workflow to attach. "
+            "Leave empty to auto-create a new default workflow."
+        ),
+    )
 
 
 class GetEmailAiAgentRequest(BaseModel):
@@ -59,11 +67,19 @@ class UpdateEmailAiAgentRequest(BaseModel):
         ),
     )
     knowledge_id: str = Field(..., min_length=1, max_length=128)
-    tool_ids: List[str] = Field(..., min_length=1, max_length=20)
+    tool_ids: List[str] = Field(default_factory=list, max_length=20)
     llm_model: str = Field(..., min_length=1, max_length=128)
     reply_action: AgentReplyActionConfig = Field(default_factory=AgentReplyActionConfig)
     routing_rule_ids: List[str] = Field(default_factory=list, max_length=50)
     recipient_rule_ids: List[str] = Field(default_factory=list, max_length=50)
+    flow_id: str | None = Field(
+        default=None,
+        max_length=128,
+        description=(
+            "Attach a different team workflow to this agent. "
+            "Omit to keep the current link. Must not already be attached to another agent."
+        ),
+    )
 
 
 class ListTeamEmailAiAgentsRequest(BaseModel):

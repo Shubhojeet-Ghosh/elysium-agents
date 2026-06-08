@@ -337,4 +337,4 @@ await createRoutingRule(
 
 - [departments-api.md](./departments-api.md) — create departments first
 - [email-flow-plan.md](./email-flow-plan.md) — AI Department Router node
-- [email-ai-agent-setup.md](./email-ai-agent-setup.md) — thread `department_id` visibility
+- [email-threads-api.md](./email-threads-api.md) — thread `department_id` visibility

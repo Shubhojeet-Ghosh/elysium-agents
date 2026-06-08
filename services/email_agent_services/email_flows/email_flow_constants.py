@@ -1,4 +1,23 @@
+EMAIL_FLOWS_COLLECTION = "email-flows"
 EMAIL_FLOW_RUNS_COLLECTION = "email-flow-runs"
+
+DEFAULT_AGENT_FLOW_SLUG = "default_agent_flow"
+CUSTOM_FLOW_SLUG = "custom_flow"
+
+# Default linear pipeline layout (single horizontal row, left → right).
+# Node at pipeline index i: position { x: i * STEP_X, y: ROW_Y }
+# STEP_X must be >= node width + gap so 280px cards do not overlap (legacy STEP_X=200 caused overlap).
+DEFAULT_FLOW_ROW_Y = 80
+DEFAULT_FLOW_STEP_X = 320
+DEFAULT_FLOW_NODE_WIDTH = 280
+DEFAULT_FLOW_NODE_HEIGHT = 72
+DEFAULT_FLOW_EDGE_TYPE = "straight"
+DEFAULT_FLOW_LAYOUT_DIRECTION = "horizontal"
+DEFAULT_FLOW_NODE_ORIGIN = [0, 0]
+DEFAULT_FLOW_SOURCE_HANDLE = "right"
+DEFAULT_FLOW_TARGET_HANDLE = "left"
+
+FLOW_STATUS_ACTIVE = "active"
 
 NODE_TYPE_START = "start"
 NODE_TYPE_LOAD_THREAD_CONTEXT = "load_thread_context"
@@ -7,23 +26,55 @@ NODE_TYPE_READ_TOOLS = "read_tools"
 NODE_TYPE_AI_DEPARTMENT_ROUTER = "ai_department_router"
 NODE_TYPE_AI_RECIPIENTS_GENERATOR = "ai_recipients_generator"
 NODE_TYPE_GENERATE_EMAIL = "generate_email"
+NODE_TYPE_CALL_EXTERNAL_TOOL = "call_external_tool"
 NODE_TYPE_SAVE_GMAIL_DRAFT = "save_gmail_draft"
+NODE_TYPE_SEND_EMAIL = "send_email"
 NODE_TYPE_STOP = "stop"
+
+# All node types shown in the flow-builder palette (includes types not in persisted graph).
+FLOW_PALETTE_NODE_TYPES = (
+    NODE_TYPE_START,
+    NODE_TYPE_LOAD_THREAD_CONTEXT,
+    NODE_TYPE_READ_KB,
+    NODE_TYPE_READ_TOOLS,
+    NODE_TYPE_AI_DEPARTMENT_ROUTER,
+    NODE_TYPE_AI_RECIPIENTS_GENERATOR,
+    NODE_TYPE_GENERATE_EMAIL,
+    NODE_TYPE_CALL_EXTERNAL_TOOL,
+    NODE_TYPE_SAVE_GMAIL_DRAFT,
+    NODE_TYPE_SEND_EMAIL,
+    NODE_TYPE_STOP,
+)
+
+DEFAULT_GENERATE_EMAIL_FORMAT_PROMPT = (
+    "Write a clear, professional email reply. Address the customer's latest question "
+    "directly. Keep it concise."
+)
 
 REPLY_ACTION_MODE_DRAFT = "draft"
 REPLY_ACTION_MODE_AUTO_SEND = "auto_send"
 
 AI_ACTION_STATUS_DRAFT_READY = "draft_ready"
+AI_ACTION_STATUS_SENT = "sent"
 AI_ACTION_STATUS_NONE = "none"
 AI_ACTION_STATUS_RESOLVED = "resolved"
 AI_ACTION_STATUS_FAILED = "failed"
 AI_ACTION_STATUS_SUPERSEDED = "superseded"
 
+AI_THREAD_STATUS_PROCESSING = "processing"
+AI_THREAD_STATUS_IDLE = "idle"
+AI_THREAD_STATUS_FAILED = "failed"
+
 AI_ACTION_TYPE_DRAFT = "draft"
 AI_ACTION_TYPE_DRAFT_FALLBACK = "draft_fallback"
+AI_ACTION_TYPE_AUTO_SEND = "auto_send"
 
 AI_OUTCOME_DRAFT_CREATED = "draft_created"
+AI_OUTCOME_AUTO_SENT = "auto_sent"
 FINAL_ACTION_TYPE_DRAFT = "draft"
+FINAL_ACTION_TYPE_SENT = "sent"
+
+FALLBACK_REASON_CONFIDENCE_BELOW_THRESHOLD = "confidence_below_threshold"
 
 AI_REPLY_MODE_REVIEWED = "reviewed"
 AI_REPLY_MODE_AUTO = "auto"

@@ -23,6 +23,7 @@ from services.email_agent_services.email_flows.email_flow_context import (
 )
 from services.email_agent_services.email_flows.email_flow_thread_data_services import (
     load_thread_messages_for_flow,
+    mark_thread_ai_processing,
 )
 from services.email_agent_services.email_thread_services import EMAIL_THREAD_MESSAGES_COLLECTION
 from services.mongo_services import get_collection
@@ -189,6 +190,14 @@ async def execute_start_node(
             resolved_trigger_id,
             flow_run_id=run_id,
             processing_status=MESSAGE_PROCESSING_STATUS_PROCESSING,
+        )
+
+        await mark_thread_ai_processing(
+            thread_id=thread_id,
+            team_id=team_id,
+            gmail_account_id=gmail_account_id,
+            flow_run_id=run_id,
+            trigger_message_id=resolved_trigger_id,
         )
 
         completed_at = _utc_now()
