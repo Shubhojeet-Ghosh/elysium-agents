@@ -1,6 +1,7 @@
 from fastapi import APIRouter, BackgroundTasks, Depends
 
 from config.email_ai_agent_models import (
+    AssignEmailThreadRequest,
     CreateEmailAiAgentRequest,
     GetEmailAiAgentRequest,
     GetEmailThreadRequest,
@@ -11,6 +12,7 @@ from config.email_ai_agent_models import (
     UpdateEmailAiAgentRequest,
 )
 from controllers.email_agent_controller_files.email_ai_agent_controllers import (
+    assign_email_thread_controller,
     create_email_ai_agent_controller,
     get_email_ai_agent_controller,
     get_email_thread_controller,
@@ -84,6 +86,15 @@ async def get_email_thread_route(
 ):
     """Get a full email thread with complete message bodies."""
     return await get_email_thread_controller(request_data, user)
+
+
+@email_ai_agent_router.post("/v1/assign-thread")
+async def assign_email_thread_route(
+    request_data: AssignEmailThreadRequest,
+    user: dict = Depends(authorize_user),
+):
+    """Assign an email thread to a team user."""
+    return await assign_email_thread_controller(request_data, user)
 
 
 @email_ai_agent_router.post("/v1/send-thread-draft")

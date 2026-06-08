@@ -2,6 +2,7 @@ from fastapi import BackgroundTasks
 from fastapi.responses import JSONResponse
 
 from config.email_ai_agent_models import (
+    AssignEmailThreadRequest,
     CreateEmailAiAgentRequest,
     GetEmailAiAgentRequest,
     GetEmailThreadRequest,
@@ -23,6 +24,7 @@ from services.email_agent_services.email_ai_agent_services import (
     update_email_ai_agent,
 )
 from services.email_agent_services.email_thread_services import (
+    assign_email_thread,
     get_email_thread_detail,
     list_team_email_threads,
     send_thread_ai_draft,
@@ -446,6 +448,57 @@ async def get_email_thread_controller(
         )
 
 
+async def assign_email_thread_controller(
+    request_data: AssignEmailThreadRequest,
+    user_data: dict,
+):
+    try:
+        auth_user = _get_authenticated_email_user(user_data)
+        if isinstance(auth_user, JSONResponse):
+            return auth_user
+
+        if request_data.team_id.strip() != auth_user["team_id"].strip():
+            return _forbidden_response("team_id does not match authenticated user.")
+
+        result = await assign_email_thread(
+            team_id=request_data.team_id,
+            thread_id=request_data.thread_id,
+            assignee_user_id=request_data.user_id,
+            role=auth_user["role"],
+            user_id=auth_user["user_id"],
+            user_department_id=auth_user["department_id"],
+        )
+        status_code = result.get("status_code", 200 if result.get("success") else 400)
+
+        if not result.get("success"):
+            return JSONResponse(
+                status_code=status_code,
+                content={
+                    "success": False,
+                    "message": result.get("message", "Failed to assign email thread."),
+                },
+            )
+
+        return JSONResponse(
+            status_code=status_code,
+            content={
+                "success": True,
+                "message": result.get("message"),
+                "data": result["data"],
+            },
+        )
+
+    except Exception as e:
+        logger.error(f"Error in assign_email_thread_controller: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "success": False,
+                "message": "An error occurred while assigning the email thread.",
+            },
+        )
+
+
 async def send_thread_ai_draft_controller(
     request_data: SendThreadAiDraftRequest,
     user_data: dict,
@@ -464,6 +517,10 @@ async def send_thread_ai_draft_controller(
             role=auth_user["role"],
             user_id=auth_user["user_id"],
             user_department_id=auth_user["department_id"],
+            is_edited=request_data.is_edited,
+            body_text=request_data.body_text,
+            cc=request_data.cc,
+            bcc=request_data.bcc,
         )
         status_code = result.get("status_code", 200 if result.get("success") else 400)
 

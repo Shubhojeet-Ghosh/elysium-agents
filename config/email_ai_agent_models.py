@@ -1,6 +1,6 @@
-from typing import List, Literal
+from typing import List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class AgentReplyActionConfig(BaseModel):
@@ -106,3 +106,46 @@ class GetEmailThreadRequest(BaseModel):
 class SendThreadAiDraftRequest(BaseModel):
     team_id: str = Field(..., min_length=1, max_length=128)
     thread_id: str = Field(..., min_length=1, max_length=256)
+    is_edited: bool = Field(
+        default=False,
+        description=(
+            "When false (default), send the existing Gmail draft unchanged. "
+            "When true, apply body_text and optional cc/bcc from this request before sending."
+        ),
+    )
+    body_text: Optional[str] = Field(
+        default=None,
+        max_length=100_000,
+        description="Edited plain-text reply body. Required when is_edited is true.",
+    )
+    cc: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "Full Cc address list from the review form when is_edited is true. "
+            "Omit to keep ai_action.recipients.cc."
+        ),
+    )
+    bcc: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "Full Bcc address list from the review form when is_edited is true. "
+            "Omit to keep ai_action.recipients.bcc."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def validate_edited_payload(self):
+        if self.is_edited and not (self.body_text or "").strip():
+            raise ValueError("body_text is required when is_edited is true.")
+        return self
+
+
+class AssignEmailThreadRequest(BaseModel):
+    team_id: str = Field(..., min_length=1, max_length=128)
+    thread_id: str = Field(..., min_length=1, max_length=256)
+    user_id: str = Field(
+        ...,
+        min_length=1,
+        max_length=128,
+        description="Team user to assign. Members may only pass their own user_id.",
+    )

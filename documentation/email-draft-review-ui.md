@@ -241,6 +241,8 @@ In the `messages` array, find the inbound where `message_id === thread.ai_action
 
 ### Suggested layout (draft / fallback)
 
+Make the draft panel **editable** before send: plain-text `body_text`, and editable **Cc** / **Bcc** chips (To comes from `ai_action.recipients.to` and is read-only today).
+
 ```
 ┌─────────────────────────────────────────────┐
 │ Thread: Re: Refund request                  │
@@ -249,10 +251,11 @@ In the `messages` array, find the inbound where `message_id === thread.ai_action
 │   — or —                                    │
 │ ⚠ Auto-send skipped (65% < 80%) — review    │
 │ To: customer@example.com                    │
+│ Cc: [manager@example.com]  (+ add)          │
+│ Bcc: (optional)                             │
 │ Subject: Re: Refund request                 │
 │ ─────────────────────────────────────────── │
-│ Hi John,                                    │
-│ Thank you for reaching out...               │
+│ [ editable textarea — body_text ]           │
 │ ─────────────────────────────────────────── │
 │ [ Send reply ]  [ Open in Gmail ] (optional)│
 ├─────────────────────────────────────────────┤
@@ -315,9 +318,18 @@ Set on **`send-thread-draft`** success (`mode: "reviewed"`) or immediately after
 
 **API:** `POST /elysium-agents/email-ai-agents/v1/send-thread-draft`
 
-Sends the **existing Gmail draft** via Gmail `users.drafts.send` (uses `gmail.compose` / `gmail.send` on the linked inbox). Marks `ai_action.status` as **`resolved`**.
+Sends the pending **Gmail draft** via Gmail `users.drafts.send` (uses `gmail.compose` / `gmail.send` on the linked inbox). Marks `ai_action.status` as **`resolved`**.
 
-### Request
+Two modes:
+
+| Mode | Request | Backend behaviour |
+| ---- | ------- | ----------------- |
+| **Unchanged** | `is_edited: false` (default) | Send the Gmail draft as created by the flow |
+| **Edited** | `is_edited: true` + `body_text` (+ optional `cc` / `bcc`) | Update the Gmail draft with your edits, then send |
+
+When `is_edited: true`, the backend rebuilds the draft MIME (same thread, subject, To, and reply headers) with your `body_text` and recipient overrides, calls Gmail `drafts.update`, then `drafts.send`. The outbound stub in `email-thread-messages` uses the **edited** body and recipients.
+
+### Request — send unchanged
 
 ```http
 POST /elysium-agents/email-ai-agents/v1/send-thread-draft
@@ -332,10 +344,31 @@ Authorization: Bearer <jwt>
 }
 ```
 
+### Request — send after user edits
+
+```json
+{
+  "team_id": "callbotics",
+  "thread_id": "19ea2eb87b3aaf4a",
+  "is_edited": true,
+  "body_text": "Hi John,\n\nThanks — I've approved your refund.\n\nBest,\nSupport",
+  "cc": ["manager@example.com"],
+  "bcc": []
+}
+```
+
 | Field | Required | Description |
 | ----- | -------- | ----------- |
 | `team_id` | Yes | Must match JWT `team_id` |
 | `thread_id` | Yes | Gmail thread id from list/get-thread |
+| `is_edited` | No | Default `false`. Set `true` when the user changed the draft in your UI |
+| `body_text` | When `is_edited: true` | Full plain-text body from the review textarea (required if edited) |
+| `cc` | No | Full Cc list from the form when edited. **Omit** to keep `ai_action.recipients.cc`. Send `[]` to clear Cc |
+| `bcc` | No | Full Bcc list from the form when edited. **Omit** to keep `ai_action.recipients.bcc`. Send `[]` to clear Bcc |
+
+**Frontend contract (recommended):** seed the form from `thread.ai_action` (`body_text`, `recipients.cc`, `recipients.bcc`). On Send, if the user changed anything set `is_edited: true` and POST the **current** form values (`body_text`, `cc`, `bcc`). If nothing changed, omit `is_edited` or send `is_edited: false` with only `team_id` + `thread_id`.
+
+**To recipients** are not editable in this API — they always come from `ai_action.recipients.to`.
 
 Same **thread visibility rules** as `get-thread` (department / assigned user). Returns `403` if the user cannot access the thread.
 
@@ -352,6 +385,7 @@ Same **thread visibility rules** as `get-thread` (department / assigned user). R
     "gmail_thread_id": "19ea2eb87b3aaf4a",
     "label_ids": ["SENT"],
     "ai_action_status": "resolved",
+    "is_edited": true,
     "ai_reply": {
       "assisted": true,
       "mode": "reviewed",
@@ -375,19 +409,36 @@ Also tags the outbound message in **`email-thread-messages`** with the same `ai_
 | `403` | User cannot access thread |
 | `404` | Thread not found |
 | `409` | No pending draft (`ai_action.status !== "draft_ready"`) |
-| `400` | Missing `gmail_draft_id`, Gmail token/draft send failure |
+| `400` | Missing `gmail_draft_id`, empty `body_text` when `is_edited`, Gmail token/draft update or send failure |
+| `422` | Invalid request body (e.g. `is_edited: true` without `body_text`) |
 
 ### Frontend flow after Send
 
 ```javascript
-async function sendAiDraft({ teamId, threadId, token }) {
+async function sendAiDraft({
+  teamId,
+  threadId,
+  token,
+  isEdited = false,
+  bodyText = "",
+  cc = null,
+  bcc = null,
+}) {
+  const payload = { team_id: teamId, thread_id: threadId };
+  if (isEdited) {
+    payload.is_edited = true;
+    payload.body_text = bodyText;
+    if (cc !== null) payload.cc = cc;
+    if (bcc !== null) payload.bcc = bcc;
+  }
+
   const res = await fetch(`${BASE}/email-ai-agents/v1/send-thread-draft`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${token}`,
     },
-    body: JSON.stringify({ team_id: teamId, thread_id: threadId }),
+    body: JSON.stringify(payload),
   });
   const data = await res.json();
   if (!data.success) throw new Error(data.message);
@@ -452,10 +503,12 @@ If you use **`reprocess-thread`** for testing, poll `get-thread` until `action_r
 - [ ] Different copy for `ai_action.type === "draft_fallback"` vs `"draft"`
 - [ ] Thread page: draft panel when `ai_action.status === "draft_ready"`
 - [ ] Thread page: info banner when `ai_action.status === "sent"` (no Send button)
-- [ ] Display `body_text`, `subject`, To/Cc/Bcc from `ai_action.recipients`
+- [ ] Editable draft textarea seeded from `ai_action.body_text`
+- [ ] Editable Cc / Bcc from `ai_action.recipients` (To read-only)
+- [ ] Display `subject` from `ai_action`
 - [ ] Show confidence vs `auto_send_min_confidence` on fallback rows
 - [ ] Highlight message where `message_id === ai_action.trigger_message_id`
-- [ ] **Send reply** button → `POST /send-thread-draft` (only when `draft_ready`)
+- [ ] **Send reply** → `POST /send-thread-draft` with `is_edited` + edited fields when user changed the draft
 - [ ] After send: refresh `get-thread`; clear badge on list
 - [ ] Outbound bubbles: **AI · reviewed** when `ai_reply.mode === "reviewed"`
 - [ ] Outbound bubbles: **AI · auto** when `ai_reply.mode === "auto"`

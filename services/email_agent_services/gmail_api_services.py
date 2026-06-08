@@ -300,6 +300,68 @@ def build_plain_text_reply_mime(
     return base64.urlsafe_b64encode(message.as_bytes()).decode("ascii")
 
 
+async def update_gmail_draft(
+    access_token: str,
+    *,
+    gmail_draft_id: str,
+    thread_id: str,
+    raw_message: str,
+) -> Dict[str, Any]:
+    """Replace an existing Gmail draft message (users.drafts.update)."""
+    normalized_draft_id = (gmail_draft_id or "").strip()
+    normalized_thread_id = (thread_id or "").strip()
+    if not normalized_draft_id:
+        return {
+            "success": False,
+            "message": "gmail_draft_id is required.",
+        }
+    if not normalized_thread_id:
+        return {
+            "success": False,
+            "message": "thread_id is required.",
+        }
+    if not (raw_message or "").strip():
+        return {
+            "success": False,
+            "message": "raw_message is required.",
+        }
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.put(
+            f"{GMAIL_DRAFTS_URL}/{normalized_draft_id}",
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "id": normalized_draft_id,
+                "message": {
+                    "raw": raw_message,
+                    "threadId": normalized_thread_id,
+                },
+            },
+        )
+
+    if response.status_code != 200:
+        logger.error(f"Gmail update draft failed: {response.status_code} {response.text}")
+        return {
+            "success": False,
+            "message": "Failed to update Gmail draft.",
+            "details": response.text,
+        }
+
+    data = response.json()
+    draft_message = data.get("message", {}) or {}
+    return {
+        "success": True,
+        "data": {
+            "gmail_draft_id": data.get("id", normalized_draft_id),
+            "gmail_draft_message_id": draft_message.get("id", ""),
+            "thread_id": draft_message.get("threadId", normalized_thread_id),
+        },
+    }
+
+
 async def send_gmail_draft(
     access_token: str,
     *,
