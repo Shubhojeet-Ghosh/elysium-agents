@@ -25,6 +25,7 @@ from services.email_agent_services.email_thread_services import (
 )
 from services.email_agent_services.gmail_api_services import (
     SYNC_BATCH_SIZE,
+    filter_sync_messages,
     get_gmail_thread,
     is_message_after_cutoff,
     list_thread_ids,
@@ -271,7 +272,9 @@ async def run_agent_inbox_sync(agent_id: str) -> None:
                 )
                 return
 
-            raw_messages = thread_result["data"].get("messages", []) or []
+            raw_messages = filter_sync_messages(
+                thread_result["data"].get("messages", []) or []
+            )
             thread_inserted = 0
 
             for raw_message in raw_messages:

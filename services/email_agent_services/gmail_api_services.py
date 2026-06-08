@@ -18,6 +18,12 @@ GMAIL_DRAFTS_URL = "https://gmail.googleapis.com/gmail/v1/users/me/drafts"
 GMAIL_MESSAGES_SEND_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send"
 SYNC_BATCH_SIZE = 20
 
+# Gmail category labels excluded from inbox sync (API label IDs).
+SYNC_EXCLUDED_CATEGORY_LABELS = frozenset({
+    "CATEGORY_PROMOTIONS",
+    "CATEGORY_SOCIAL",
+})
+
 async def refresh_access_token(refresh_token: str) -> Dict[str, Any]:
     """Exchange a refresh token for a new access token."""
     payload = {
@@ -49,8 +55,23 @@ def _gmail_after_date(cutoff: datetime) -> str:
 
 
 def _build_sync_thread_query(cutoff: datetime) -> str:
-    """Gmail search query for inbox sync — Primary tab only (excludes Promotions, Social, etc.)."""
-    return f"after:{_gmail_after_date(cutoff)} category:primary"
+    """Inbox sync query: all inbox tabs except Promotions and Social."""
+    after_date = _gmail_after_date(cutoff)
+    return (
+        f"after:{after_date} in:inbox "
+        f"-category:promotions -category:social"
+    )
+
+
+def is_sync_excluded_message(message: Dict[str, Any]) -> bool:
+    """True when a Gmail message belongs to an excluded inbox category."""
+    label_ids = message.get("labelIds", []) or []
+    return bool(SYNC_EXCLUDED_CATEGORY_LABELS.intersection(label_ids))
+
+
+def filter_sync_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Drop Promotions/Social messages before sync storage."""
+    return [message for message in messages if not is_sync_excluded_message(message)]
 
 
 def _header_map(headers: List[Dict[str, str]]) -> Dict[str, str]:
@@ -182,7 +203,7 @@ async def list_thread_ids(
     cutoff: datetime,
     max_results: int = SYNC_BATCH_SIZE,
 ) -> Dict[str, Any]:
-    """List Primary-tab Gmail thread IDs with activity after the cutoff date."""
+    """List inbox Gmail thread IDs (excluding Promotions/Social) with activity after the cutoff."""
     query = _build_sync_thread_query(cutoff)
     params = {
         "q": query,
