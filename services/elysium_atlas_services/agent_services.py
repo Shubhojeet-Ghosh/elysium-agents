@@ -146,12 +146,12 @@ async def initialize_agent_build_update(requestData: Dict[str, Any]) -> bool:
         logger.error(f"Error storing agent URLs: {e}")
         return False
 
-async def list_agents_for_user(user_id: str) -> list[dict]:
+async def list_agents_for_team(team_id: str) -> list[dict]:
     """
-    List all agents for a given user_id, including their basic data and progress.
+    List all agents for a given team_id, including their basic data and progress.
 
     Args:
-        user_id: The ID of the user whose agents are to be listed.
+        team_id: The ID of the team whose agents are to be listed.
 
     Returns:
         list[dict]: A list of dictionaries containing agent details.
@@ -161,8 +161,7 @@ async def list_agents_for_user(user_id: str) -> list[dict]:
 
         agent_task_progress = ELYSIUM_ATLAS_AGENT_CONFIG_DATA.get("agent_task_progress", {})
 
-        # Query to find agents for the given user_id, sorted by updated_at in descending order
-        agents_cursor = collection.find({"owner_user_id": user_id}).sort("updated_at", -1)
+        agents_cursor = collection.find({"team_id": team_id}).sort("updated_at", -1)
 
         agents = []
         async for agent in agents_cursor:
@@ -188,11 +187,11 @@ async def list_agents_for_user(user_id: str) -> list[dict]:
                 "updated_at": updated_at
             })
 
-        logger.info(f"Listed {len(agents)} agents for user_id: {user_id}")
+        logger.info(f"Listed {len(agents)} agents for team_id: {team_id}")
         return agents
 
     except Exception as e:
-        logger.error(f"Error listing agents for user_id {user_id}: {e}")
+        logger.error(f"Error listing agents for team_id {team_id}: {e}")
         return []
 
 async def remove_agent_by_id(agent_id: str) -> bool:

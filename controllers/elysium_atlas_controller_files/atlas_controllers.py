@@ -2,9 +2,15 @@ import asyncio
 from typing import Dict, Any
 from fastapi.responses import JSONResponse
 from logging_config import get_logger
-from services.elysium_atlas_services.agent_services import initialize_agent_build_update, create_agent_document, list_agents_for_user, remove_agent_by_id,fetch_agent_details_by_id,initialize_agent_update, fetch_agent_fields_by_id, fetch_agent_urls, fetch_agent_files, fetch_agent_custom_knowledge, remove_agent_links, remove_agent_files, update_agent_basic_attributes, normalize_lead_collection_config_for_update
+from services.elysium_atlas_services.agent_services import initialize_agent_build_update, create_agent_document, list_agents_for_team, remove_agent_by_id,fetch_agent_details_by_id,initialize_agent_update, fetch_agent_fields_by_id, fetch_agent_urls, fetch_agent_files, fetch_agent_custom_knowledge, remove_agent_links, remove_agent_files, update_agent_basic_attributes, normalize_lead_collection_config_for_update
 from services.elysium_atlas_services.atlas_custom_knowledge_services import remove_custom_data, get_custom_text_from_qdrant, get_qa_pair_from_qdrant
-from services.elysium_atlas_services.agent_auth_services import is_user_owner_of_agent
+from services.elysium_atlas_services.team_auth_services import (
+    can_user_modify_agent,
+    can_user_modify_team_agents,
+    can_user_read_agent,
+    is_user_member_of_team,
+    parse_session_team_context,
+)
 from services.elysium_atlas_services.atlas_chat_session_services import get_chat_session_data
 from config.atlas_agent_config_data import ELYSIUM_ATLAS_AGENT_CONFIG_DATA
 from config.elysium_atlas_s3_config import ELYSIUM_ATLAS_BUCKET_NAME, ELYSIUM_CDN_BASE_URL, ELYSIUM_GLOBAL_BUCKET_NAME
@@ -18,15 +24,120 @@ from config.lead_collection_config import build_lead_collection_config_for_creat
 
 logger = get_logger()
 
+
+def _unauthenticated_response(user_data: dict | None) -> JSONResponse | None:
+    if user_data is None or user_data.get("success") is False:
+        return JSONResponse(
+            status_code=401,
+            content={"success": False, "message": (user_data or {}).get("message", "Unauthorized")},
+        )
+    return None
+
+
+def _no_team_context_response(user_data: dict) -> JSONResponse:
+    if not user_data.get("user_id"):
+        return JSONResponse(status_code=400, content={"success": False, "message": "user_id is required."})
+    return JSONResponse(
+        status_code=403,
+        content={"success": False, "message": "No team context. Select a team to continue."},
+    )
+
+
+def _forbidden_agent_read_response() -> JSONResponse:
+    return JSONResponse(
+        status_code=403,
+        content={"success": False, "message": "You are not authorized to access this agent."},
+    )
+
+
+def _forbidden_agent_modify_response() -> JSONResponse:
+    return JSONResponse(
+        status_code=403,
+        content={"success": False, "message": "You are not authorized to modify this agent."},
+    )
+
+
+def _forbidden_team_modify_response() -> JSONResponse:
+    return JSONResponse(
+        status_code=403,
+        content={"success": False, "message": "You are not authorized to create or modify agents for this team."},
+    )
+
+
+async def _require_team_member(user_data: dict) -> tuple[str, str] | JSONResponse:
+    auth_error = _unauthenticated_response(user_data)
+    if auth_error:
+        return auth_error
+
+    session_context = parse_session_team_context(user_data)
+    if session_context is None:
+        return _no_team_context_response(user_data)
+
+    user_id, team_id = session_context
+    if not await is_user_member_of_team(user_id, team_id):
+        return JSONResponse(
+            status_code=403,
+            content={"success": False, "message": "You are not a member of this team."},
+        )
+    return user_id, team_id
+
+
+async def _require_team_admin(user_data: dict) -> tuple[str, str] | JSONResponse:
+    auth_error = _unauthenticated_response(user_data)
+    if auth_error:
+        return auth_error
+
+    session_context = parse_session_team_context(user_data)
+    if session_context is None:
+        return _no_team_context_response(user_data)
+
+    user_id, team_id = session_context
+    if not await can_user_modify_team_agents(user_id, team_id):
+        return _forbidden_team_modify_response()
+    return user_id, team_id
+
+
+async def _require_agent_read(user_data: dict, agent_id: str | None) -> str | JSONResponse:
+    auth_error = _unauthenticated_response(user_data)
+    if auth_error:
+        return auth_error
+
+    user_id = user_data.get("user_id")
+    if not user_id:
+        return JSONResponse(status_code=400, content={"success": False, "message": "user_id is required."})
+    if not agent_id:
+        return JSONResponse(status_code=400, content={"success": False, "message": "agent_id is required."})
+    if not await can_user_read_agent(user_id, agent_id):
+        return _forbidden_agent_read_response()
+    return str(user_id)
+
+
+async def _require_agent_modify(user_data: dict, agent_id: str | None) -> str | JSONResponse:
+    auth_error = _unauthenticated_response(user_data)
+    if auth_error:
+        return auth_error
+
+    user_id = user_data.get("user_id")
+    if not user_id:
+        return JSONResponse(status_code=400, content={"success": False, "message": "user_id is required."})
+
+    if agent_id:
+        if not await can_user_modify_agent(user_id, agent_id):
+            return _forbidden_agent_modify_response()
+        return str(user_id)
+
+    team_admin = await _require_team_admin(user_data)
+    if isinstance(team_admin, JSONResponse):
+        return team_admin
+    return team_admin[0]
+
 async def pre_build_agent_operations_controller(requestData: Dict[str, Any],userData: dict):
     try:
-        if userData is None or userData.get("success") == False:
-            return JSONResponse(status_code=401, content={"success": False, "message": userData.get("message")})
-        
-        # logger.info(f"User data: {userData}")
+        team_admin = await _require_team_admin(userData)
+        if isinstance(team_admin, JSONResponse):
+            return team_admin
 
-        user_id = userData.get("user_id")
-        team_id = userData.get("team_id")
+        user_id, team_id = team_admin
 
         plan_check = await can_user_build_agent(user_id, requestData)
         if not plan_check.get("success"):
@@ -74,14 +185,21 @@ async def pre_build_agent_operations_controller(requestData: Dict[str, Any],user
 
 async def build_update_agent_controller_v1(requestData,userData,background_tasks):
     try:
-        if userData is None or userData.get("success") == False:
-            return JSONResponse(status_code=401, content={"success": False, "message": userData.get("message")})
-        
-        logger.info(f"User data: {userData}")
-        
         agent_id = requestData.get("agent_id")
+        auth_result = await _require_agent_modify(userData, agent_id)
+        if isinstance(auth_result, JSONResponse):
+            return auth_result
+
+        user_id = auth_result
+        logger.info(f"Build/update agent requested by user_id: {user_id}")
+
         if not agent_id:
-            agent_id = await create_agent_document()
+            session_context = parse_session_team_context(userData)
+            initial_data = {}
+            if session_context:
+                initial_data["owner_user_id"] = session_context[0]
+                initial_data["team_id"] = session_context[1]
+            agent_id = await create_agent_document(initial_data)
             requestData["agent_id"] = agent_id
             if not agent_id:
                 logger.error("Failed to create agent document")
@@ -102,10 +220,12 @@ async def build_update_agent_controller_v1(requestData,userData,background_tasks
 
 async def generate_presigned_url_controller(requestData,userData):
     try:
-        if userData is None or userData.get("success") == False:
-            return JSONResponse(status_code=401, content={"success": False, "message": userData.get("message")})
-        
-        logger.info(f"User data: {userData}")
+        team_admin = await _require_team_admin(userData)
+        if isinstance(team_admin, JSONResponse):
+            return team_admin
+
+        user_id, _team_id = team_admin
+        logger.info(f"Generating presigned URLs for user_id: {user_id}")
         
         presigned_urls = dict[Any, Any]()
 
@@ -137,22 +257,19 @@ async def generate_presigned_url_controller(requestData,userData):
 
 async def list_agents_controller(userData: dict):
     """
-    Controller to handle the logic for listing all agents for a given user_id.
+    Controller to handle the logic for listing all agents for the user's active team.
 
     Returns:
         JSONResponse: A response containing the list of agents or an error message.
     """
     try:
-        if userData is None or userData.get("success") == False:
-            return JSONResponse(status_code=401, content={"success": False, "message": userData.get("message")})
-        
-        user_id = userData.get("user_id")
+        team_member = await _require_team_member(userData)
+        if isinstance(team_member, JSONResponse):
+            return team_member
 
-        if not user_id:
-            return JSONResponse(status_code=400, content={"success": False, "message": "user_id is required to list agents."})
-        
-        logger.info(f"Listing agents for user_id: {user_id}")
-        agents = await list_agents_for_user(user_id)
+        user_id, team_id = team_member
+        logger.info(f"Listing agents for team_id: {team_id}, requested by user_id: {user_id}")
+        agents = await list_agents_for_team(team_id)
         return JSONResponse(status_code=200, content={"success": True, "agents": agents})
 
     except Exception as e:
@@ -170,26 +287,17 @@ async def delete_agent_controller(requestData: dict, userData: dict):
         JSONResponse: A response indicating the success or failure of the operation.
     """
     try:
-        if userData is None or userData.get("success") == False:
-            return JSONResponse(status_code=401, content={"success": False, "message": userData.get("message")})
-        
-        logger.info(f"User data: {userData}")
-
-        user_id = userData.get("user_id")
-
-        if not user_id:
-            return JSONResponse(status_code=400, content={"success": False, "message": "user_id is required."})
-        
         agent_id = requestData.get("agent_id")
+        if not agent_id:
+            return JSONResponse(status_code=400, content={"success": False, "message": "agent_id is required."})
+
+        auth_result = await _require_agent_modify(userData, agent_id)
+        if isinstance(auth_result, JSONResponse):
+            return auth_result
+
+        user_id = auth_result
         logger.info(f"Request to delete agent_id: {agent_id} by user_id: {user_id}")
 
-        # Check if the user is the owner of the agent
-        is_owner = await is_user_owner_of_agent(user_id, agent_id)
-
-        if not is_owner:
-            return JSONResponse(status_code=403, content={"success": False, "message": "You are not authorized to delete this agent."})
-
-        # Proceed to delete the agent
         deletion_success = await remove_agent_by_id(agent_id)
 
         if deletion_success:
@@ -203,16 +311,12 @@ async def delete_agent_controller(requestData: dict, userData: dict):
     
 async def get_agent_details_controller(requestData: dict, userData: dict):
     try:
-        
-        if userData is None or userData.get("success") == False:
-            return JSONResponse(status_code=401, content={"success": False, "message": userData.get("message")})
-        
-        user_id = userData.get("user_id")
         agent_id = requestData.get("agent_id")
+        auth_result = await _require_agent_read(userData, agent_id)
+        if isinstance(auth_result, JSONResponse):
+            return auth_result
 
-        if not agent_id:
-            return JSONResponse(status_code=400, content={"success": False, "message": "agent_id is required."})
-        
+        user_id = auth_result
         logger.info(f"Request to get details for agent_id: {agent_id} by user_id: {user_id}")
         
         agent_data = await fetch_agent_details_by_id(agent_id)
@@ -262,17 +366,14 @@ async def get_agent_fields_controller(requestData: dict):
     
 async def update_agent_controller_v1(requestData,userData,background_tasks):
     try:
-        if userData is None or userData.get("success") == False:
-            return JSONResponse(status_code=401, content={"success": False, "message": userData.get("message")})
-        
-        # logger.info(f"User data: {userData}")
-        
-        # logger.info(f"buil/update agent with request data: {requestData}")
-        
         agent_id = requestData.get("agent_id")
         if not agent_id:
             logger.error("agent_id is required for update operation")
             return JSONResponse(status_code=400, content={"success": False, "message": "You can't perform update without agent."})
+
+        auth_result = await _require_agent_modify(userData, agent_id)
+        if isinstance(auth_result, JSONResponse):
+            return auth_result
 
         retrieval_strategy_error = normalize_retrieval_strategy_in_request(requestData)
         if retrieval_strategy_error:
@@ -311,17 +412,15 @@ async def get_agent_urls_controller(requestData: dict, userData: dict):
     Controller to fetch paginated URLs for an agent.
     """
     try:
-        if userData is None or userData.get("success") == False:
-            return JSONResponse(status_code=401, content={"success": False, "message": userData.get("message")})
-        
-        user_id = userData.get("user_id")
         agent_id = requestData.get("agent_id")
+        auth_result = await _require_agent_read(userData, agent_id)
+        if isinstance(auth_result, JSONResponse):
+            return auth_result
+
+        user_id = auth_result
         limit = requestData.get("limit", 50)
         cursor = requestData.get("cursor")
         include_count = requestData.get("include_count", False)
-
-        if not agent_id:
-            return JSONResponse(status_code=400, content={"success": False, "message": "agent_id is required."})
         
         logger.info(f"Fetching URLs for agent_id: {agent_id}, limit: {limit}, cursor: {cursor}, include_count: {include_count}")
         
@@ -338,17 +437,15 @@ async def get_agent_files_controller(requestData: dict, userData: dict):
     Controller to fetch paginated files for an agent.
     """
     try:
-        if userData is None or userData.get("success") == False:
-            return JSONResponse(status_code=401, content={"success": False, "message": userData.get("message")})
-        
-        user_id = userData.get("user_id")
         agent_id = requestData.get("agent_id")
+        auth_result = await _require_agent_read(userData, agent_id)
+        if isinstance(auth_result, JSONResponse):
+            return auth_result
+
+        user_id = auth_result
         limit = requestData.get("limit", 50)
         cursor = requestData.get("cursor")
         include_count = requestData.get("include_count", False)
-
-        if not agent_id:
-            return JSONResponse(status_code=400, content={"success": False, "message": "agent_id is required."})
         
         logger.info(f"Fetching files for agent_id: {agent_id}, limit: {limit}, cursor: {cursor}, include_count: {include_count}")
         
@@ -365,17 +462,15 @@ async def get_agent_custom_texts_controller(requestData: dict, userData: dict):
     Controller to fetch paginated custom texts for an agent.
     """
     try:
-        if userData is None or userData.get("success") == False:
-            return JSONResponse(status_code=401, content={"success": False, "message": userData.get("message")})
-        
-        user_id = userData.get("user_id")
         agent_id = requestData.get("agent_id")
+        auth_result = await _require_agent_read(userData, agent_id)
+        if isinstance(auth_result, JSONResponse):
+            return auth_result
+
+        user_id = auth_result
         limit = requestData.get("limit", 50)
         cursor = requestData.get("cursor")
         include_count = requestData.get("include_count", False)
-
-        if not agent_id:
-            return JSONResponse(status_code=400, content={"success": False, "message": "agent_id is required."})
         
         logger.info(f"Fetching custom texts for agent_id: {agent_id}, limit: {limit}, cursor: {cursor}, include_count: {include_count}")
         
@@ -392,17 +487,15 @@ async def get_agent_qa_pairs_controller(requestData: dict, userData: dict):
     Controller to fetch paginated QA pairs for an agent.
     """
     try:
-        if userData is None or userData.get("success") == False:
-            return JSONResponse(status_code=401, content={"success": False, "message": userData.get("message")})
-        
-        user_id = userData.get("user_id")
         agent_id = requestData.get("agent_id")
+        auth_result = await _require_agent_read(userData, agent_id)
+        if isinstance(auth_result, JSONResponse):
+            return auth_result
+
+        user_id = auth_result
         limit = requestData.get("limit", 50)
         cursor = requestData.get("cursor")
         include_count = requestData.get("include_count", False)
-
-        if not agent_id:
-            return JSONResponse(status_code=400, content={"success": False, "message": "agent_id is required."})
         
         logger.info(f"Fetching QA pairs for agent_id: {agent_id}, limit: {limit}, cursor: {cursor}, include_count: {include_count}")
         
@@ -419,23 +512,16 @@ async def remove_agent_links_controller(requestData: dict, userData: dict):
     Controller to remove specific links from an agent (MongoDB and Qdrant).
     """
     try:
-        if userData is None or userData.get("success") == False:
-            return JSONResponse(status_code=401, content={"success": False, "message": userData.get("message")})
-        
-        user_id = userData.get("user_id")
         agent_id = requestData.get("agent_id")
+        auth_result = await _require_agent_modify(userData, agent_id)
+        if isinstance(auth_result, JSONResponse):
+            return auth_result
+
+        user_id = auth_result
         links = requestData.get("links")
 
-        if not agent_id:
-            return JSONResponse(status_code=400, content={"success": False, "message": "agent_id is required."})
-        
         if not links or not isinstance(links, list) or len(links) == 0:
             return JSONResponse(status_code=400, content={"success": False, "message": "links must be a non-empty list."})
-        
-        # Check if the user is the owner of the agent
-        is_owner = await is_user_owner_of_agent(user_id, agent_id)
-        if not is_owner:
-            return JSONResponse(status_code=403, content={"success": False, "message": "You are not authorized to modify this agent."})
         
         logger.info(f"Removing {len(links)} links for agent_id: {agent_id} by user_id: {user_id}")
         
@@ -463,23 +549,16 @@ async def delete_agent_files_controller(requestData: dict, userData: dict):
     Controller to delete specific files from an agent.
     """
     try:
-        if userData is None or userData.get("success") == False:
-            return JSONResponse(status_code=401, content={"success": False, "message": userData.get("message")})
-        
-        user_id = userData.get("user_id")
         agent_id = requestData.get("agent_id")
+        auth_result = await _require_agent_modify(userData, agent_id)
+        if isinstance(auth_result, JSONResponse):
+            return auth_result
+
+        user_id = auth_result
         files = requestData.get("files")
 
-        if not agent_id:
-            return JSONResponse(status_code=400, content={"success": False, "message": "agent_id is required."})
-        
         if not files or not isinstance(files, list) or len(files) == 0:
             return JSONResponse(status_code=400, content={"success": False, "message": "files must be a non-empty list."})
-        
-        # Check if the user is the owner of the agent
-        is_owner = await is_user_owner_of_agent(user_id, agent_id)
-        if not is_owner:
-            return JSONResponse(status_code=403, content={"success": False, "message": "You are not authorized to modify this agent."})
         
         logger.info(f"Deleting {len(files)} files for agent_id: {agent_id} by user_id: {user_id}")
         
@@ -499,17 +578,15 @@ async def delete_agent_custom_data_controller(requestData: dict, userData: dict)
     Controller to delete custom data (custom_texts and qa_pairs) from an agent.
     """
     try:
-        if userData is None or userData.get("success") == False:
-            return JSONResponse(status_code=401, content={"success": False, "message": userData.get("message")})
-        
-        user_id = userData.get("user_id")
         agent_id = requestData.get("agent_id")
+        auth_result = await _require_agent_modify(userData, agent_id)
+        if isinstance(auth_result, JSONResponse):
+            return auth_result
+
+        user_id = auth_result
         custom_texts = requestData.get("custom_texts")
         qa_pairs = requestData.get("qa_pairs")
 
-        if not agent_id:
-            return JSONResponse(status_code=400, content={"success": False, "message": "agent_id is required."})
-        
         # Validate that at least one of custom_texts or qa_pairs is present
         if not custom_texts and not qa_pairs:
             return JSONResponse(status_code=400, content={"success": False, "message": "At least one of custom_texts or qa_pairs must be provided."})
@@ -523,11 +600,6 @@ async def delete_agent_custom_data_controller(requestData: dict, userData: dict)
         if qa_pairs is not None:
             if not isinstance(qa_pairs, list):
                 return JSONResponse(status_code=400, content={"success": False, "message": "qa_pairs must be a list."})
-        
-        # Check if the user is the owner of the agent
-        is_owner = await is_user_owner_of_agent(user_id, agent_id)
-        if not is_owner:
-            return JSONResponse(status_code=403, content={"success": False, "message": "You are not authorized to modify this agent."})
         
         logger.info(f"Deleting custom data for agent_id: {agent_id} by user_id: {user_id} - "
                    f"custom_texts: {len(custom_texts) if custom_texts else 0}, "
@@ -556,23 +628,16 @@ async def get_custom_text_content_controller(requestData: dict, userData: dict):
     Controller to retrieve and reconstruct custom text content from Qdrant chunks.
     """
     try:
-        if userData is None or userData.get("success") == False:
-            return JSONResponse(status_code=401, content={"success": False, "message": userData.get("message")})
-        
-        user_id = userData.get("user_id")
         agent_id = requestData.get("agent_id")
+        auth_result = await _require_agent_read(userData, agent_id)
+        if isinstance(auth_result, JSONResponse):
+            return auth_result
+
+        user_id = auth_result
         custom_text_alias = requestData.get("custom_text_alias")
 
-        if not agent_id:
-            return JSONResponse(status_code=400, content={"success": False, "message": "agent_id is required."})
-        
         if not custom_text_alias:
             return JSONResponse(status_code=400, content={"success": False, "message": "custom_text_alias is required."})
-        
-        # Check if the user is the owner of the agent
-        is_owner = await is_user_owner_of_agent(user_id, agent_id)
-        if not is_owner:
-            return JSONResponse(status_code=403, content={"success": False, "message": "You are not authorized to access this agent."})
         
         logger.info(f"Retrieving custom text for agent_id: {agent_id}, custom_text_alias: {custom_text_alias} by user_id: {user_id}")
         
@@ -601,23 +666,16 @@ async def get_qa_pair_content_controller(requestData: dict, userData: dict):
     Controller to retrieve QA pair content from Qdrant.
     """
     try:
-        if userData is None or userData.get("success") == False:
-            return JSONResponse(status_code=401, content={"success": False, "message": userData.get("message")})
-        
-        user_id = userData.get("user_id")
         agent_id = requestData.get("agent_id")
+        auth_result = await _require_agent_read(userData, agent_id)
+        if isinstance(auth_result, JSONResponse):
+            return auth_result
+
+        user_id = auth_result
         qna_alias = requestData.get("qna_alias")
 
-        if not agent_id:
-            return JSONResponse(status_code=400, content={"success": False, "message": "agent_id is required."})
-        
         if not qna_alias:
             return JSONResponse(status_code=400, content={"success": False, "message": "qna_alias is required."})
-        
-        # Check if the user is the owner of the agent
-        is_owner = await is_user_owner_of_agent(user_id, agent_id)
-        if not is_owner:
-            return JSONResponse(status_code=403, content={"success": False, "message": "You are not authorized to access this agent."})
         
         logger.info(f"Retrieving QA pair for agent_id: {agent_id}, qna_alias: {qna_alias} by user_id: {user_id}")
         

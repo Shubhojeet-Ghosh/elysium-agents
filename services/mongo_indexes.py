@@ -18,6 +18,16 @@ async def create_mongo_indexes():
         atlas_agents_collection = get_collection("atlas_agents")
         await atlas_agents_collection.create_index("owner_user_id", name="owner_user_id_1")
         logger.info("Index created on atlas_agents.owner_user_id")
+        await atlas_agents_collection.create_index("team_id", name="team_id_1")
+        logger.info("Index created on atlas_agents.team_id")
+
+        # Team RBAC lookup indexes (shared with Express Atlas API)
+        atlas_team_members_collection = get_collection("atlas_team_members")
+        await atlas_team_members_collection.create_index(
+            [("team_id", 1), ("user_id", 1), ("status", 1)],
+            name="team_id_user_id_status_1",
+        )
+        logger.info("Compound index created on atlas_team_members.team_id, user_id, status")
 
         # Create indexes for atlas_agent_urls collection
         atlas_agent_urls_collection = get_collection("atlas_agent_urls")
