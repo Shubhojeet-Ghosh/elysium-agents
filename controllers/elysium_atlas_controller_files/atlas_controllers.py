@@ -2,7 +2,7 @@ import asyncio
 from typing import Dict, Any
 from fastapi.responses import JSONResponse
 from logging_config import get_logger
-from services.elysium_atlas_services.agent_services import initialize_agent_build_update, create_agent_document, list_agents_for_team, remove_agent_by_id,fetch_agent_details_by_id,initialize_agent_update, fetch_agent_fields_by_id, fetch_agent_urls, fetch_agent_files, fetch_agent_custom_knowledge, remove_agent_links, remove_agent_files, update_agent_basic_attributes, normalize_lead_collection_config_for_update
+from services.elysium_atlas_services.agent_services import initialize_agent_build_update, create_agent_document, list_agents_for_team, remove_agent_by_id,fetch_agent_details_by_id,initialize_agent_update, fetch_agent_fields_by_id, fetch_agent_urls, fetch_agent_files, fetch_agent_custom_texts, fetch_agent_qa_pairs, remove_agent_links, remove_agent_files, update_agent_basic_attributes, normalize_lead_collection_config_for_update, validate_user_agent_status, requires_agent_reindex, capture_pre_update_agent_status
 from services.elysium_atlas_services.atlas_custom_knowledge_services import remove_custom_data, get_custom_text_from_qdrant, get_qa_pair_from_qdrant
 from services.elysium_atlas_services.team_auth_services import (
     can_user_modify_agent,
@@ -23,6 +23,23 @@ from config.retrieval_strategy_config import normalize_retrieval_strategy_in_req
 from config.lead_collection_config import build_lead_collection_config_for_create
 
 logger = get_logger()
+
+
+def _datasource_list_response(message: str, items_key: str, result: dict) -> JSONResponse:
+    return JSONResponse(
+        status_code=200,
+        content={
+            "success": True,
+            "message": message,
+            items_key: result["data"],
+            "total": result["total"],
+            "page": result["page"],
+            "limit": result["limit"],
+            "total_pages": result["total_pages"],
+            "has_next": result["has_next"],
+            "has_prev": result["has_prev"],
+        },
+    )
 
 
 def _unauthenticated_response(user_data: dict | None) -> JSONResponse | None:
@@ -391,16 +408,35 @@ async def update_agent_controller_v1(requestData,userData,background_tasks):
                 status_code=400,
                 content={"success": False, "message": lead_collection_error},
             )
-        
+
+        agent_status_error = validate_user_agent_status(requestData)
+        if agent_status_error:
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "message": agent_status_error},
+            )
+
         await update_agent_basic_attributes(agent_id, requestData)
 
-        await set_data_materials_status(requestData)
-    
-        # Set agent status to 'indexing' after creation/update
-        await update_agent_status(agent_id, "updating")
+        if not requires_agent_reindex(requestData):
+            if "agent_status" in requestData:
+                await update_agent_status(agent_id, requestData["agent_status"])
 
-        # Store links in MongoDB
-        background_tasks.add_task(initialize_agent_update,requestData)
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "success": True,
+                    "message": "Agent updated successfully.",
+                    "agent_id": agent_id,
+                    "agent_status": requestData.get("agent_status"),
+                },
+            )
+
+        await capture_pre_update_agent_status(agent_id, requestData)
+
+        await set_data_materials_status(requestData)
+        await update_agent_status(agent_id, "updating")
+        background_tasks.add_task(initialize_agent_update, requestData)
         
         return JSONResponse(status_code=200, content={"success": True, "message": "Your agent is being updated.", "agent_id": requestData.get("agent_id")})
 
@@ -417,16 +453,14 @@ async def get_agent_urls_controller(requestData: dict, userData: dict):
         if isinstance(auth_result, JSONResponse):
             return auth_result
 
-        user_id = auth_result
-        limit = requestData.get("limit", 50)
-        cursor = requestData.get("cursor")
-        include_count = requestData.get("include_count", False)
-        
-        logger.info(f"Fetching URLs for agent_id: {agent_id}, limit: {limit}, cursor: {cursor}, include_count: {include_count}")
-        
-        result = await fetch_agent_urls(agent_id, limit=limit, cursor=cursor, include_count=include_count)
-        
-        return JSONResponse(status_code=200, content={"success": True, "message": "URLs fetched successfully.", "urls": result})
+        page = requestData.get("page", 1)
+        limit = requestData.get("limit", 10)
+
+        logger.info(f"Fetching URLs for agent_id: {agent_id}, page: {page}, limit: {limit}")
+
+        result = await fetch_agent_urls(agent_id, page=page, limit=limit)
+
+        return _datasource_list_response("URLs fetched successfully.", "urls", result)
     
     except Exception as e:
         logger.error(f"Error in get_agent_urls_controller: {e}")
@@ -442,16 +476,14 @@ async def get_agent_files_controller(requestData: dict, userData: dict):
         if isinstance(auth_result, JSONResponse):
             return auth_result
 
-        user_id = auth_result
-        limit = requestData.get("limit", 50)
-        cursor = requestData.get("cursor")
-        include_count = requestData.get("include_count", False)
-        
-        logger.info(f"Fetching files for agent_id: {agent_id}, limit: {limit}, cursor: {cursor}, include_count: {include_count}")
-        
-        result = await fetch_agent_files(agent_id, limit=limit, cursor=cursor, include_count=include_count)
-        
-        return JSONResponse(status_code=200, content={"success": True, "message": "Files fetched successfully.", "files": result})
+        page = requestData.get("page", 1)
+        limit = requestData.get("limit", 10)
+
+        logger.info(f"Fetching files for agent_id: {agent_id}, page: {page}, limit: {limit}")
+
+        result = await fetch_agent_files(agent_id, page=page, limit=limit)
+
+        return _datasource_list_response("Files fetched successfully.", "files", result)
     
     except Exception as e:
         logger.error(f"Error in get_agent_files_controller: {e}")
@@ -467,16 +499,14 @@ async def get_agent_custom_texts_controller(requestData: dict, userData: dict):
         if isinstance(auth_result, JSONResponse):
             return auth_result
 
-        user_id = auth_result
-        limit = requestData.get("limit", 50)
-        cursor = requestData.get("cursor")
-        include_count = requestData.get("include_count", False)
-        
-        logger.info(f"Fetching custom texts for agent_id: {agent_id}, limit: {limit}, cursor: {cursor}, include_count: {include_count}")
-        
-        result = await fetch_agent_custom_knowledge(agent_id, limit=limit, cursor=cursor, include_count=include_count)
-        
-        return JSONResponse(status_code=200, content={"success": True, "message": "Custom texts fetched successfully.", "custom_texts": result["custom_texts"]})
+        page = requestData.get("page", 1)
+        limit = requestData.get("limit", 10)
+
+        logger.info(f"Fetching custom texts for agent_id: {agent_id}, page: {page}, limit: {limit}")
+
+        result = await fetch_agent_custom_texts(agent_id, page=page, limit=limit)
+
+        return _datasource_list_response("Custom texts fetched successfully.", "custom_texts", result)
     
     except Exception as e:
         logger.error(f"Error in get_agent_custom_texts_controller: {e}")
@@ -492,16 +522,14 @@ async def get_agent_qa_pairs_controller(requestData: dict, userData: dict):
         if isinstance(auth_result, JSONResponse):
             return auth_result
 
-        user_id = auth_result
-        limit = requestData.get("limit", 50)
-        cursor = requestData.get("cursor")
-        include_count = requestData.get("include_count", False)
-        
-        logger.info(f"Fetching QA pairs for agent_id: {agent_id}, limit: {limit}, cursor: {cursor}, include_count: {include_count}")
-        
-        result = await fetch_agent_custom_knowledge(agent_id, limit=limit, cursor=cursor, include_count=include_count)
-        
-        return JSONResponse(status_code=200, content={"success": True, "message": "QA pairs fetched successfully.", "qa_pairs": result["qa_pairs"]})
+        page = requestData.get("page", 1)
+        limit = requestData.get("limit", 10)
+
+        logger.info(f"Fetching QA pairs for agent_id: {agent_id}, page: {page}, limit: {limit}")
+
+        result = await fetch_agent_qa_pairs(agent_id, page=page, limit=limit)
+
+        return _datasource_list_response("QA pairs fetched successfully.", "qa_pairs", result)
     
     except Exception as e:
         logger.error(f"Error in get_agent_qa_pairs_controller: {e}")

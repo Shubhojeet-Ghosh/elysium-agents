@@ -5,7 +5,7 @@ from services.elysium_atlas_services.atlas_url_index_services import index_agent
 from services.elysium_atlas_services.atlas_qdrant_services import remove_all_qdrant_agent_points
 from services.mongo_services import get_collection
 from datetime import datetime, timezone
-from config.atlas_agent_config_data import ELYSIUM_ATLAS_AGENT_CONFIG_DATA
+from config.atlas_agent_config_data import ELYSIUM_ATLAS_AGENT_CONFIG_DATA, USER_SETTABLE_AGENT_STATUSES
 from config.retrieval_strategy_config import DEFAULT_RETRIEVAL_STRATEGY
 from config.lead_collection_config import (
     get_default_lead_collection_config,
@@ -25,6 +25,81 @@ from services.elysium_atlas_services.qdrant_collection_helpers import (
 )
 
 logger = get_logger()
+
+AGENT_UPDATE_REINDEX_FIELDS = (
+    "links",
+    "files",
+    "custom_texts",
+    "qa_pairs",
+    "base_url",
+    "agent_name",
+    "system_prompt",
+    "llm_model",
+    "temperature",
+)
+
+
+def validate_user_agent_status(request_data: Dict[str, Any]) -> str | None:
+    """Validate and normalize agent_status when present on an update request."""
+    if "agent_status" not in request_data:
+        return None
+
+    agent_status = request_data.get("agent_status")
+    if not isinstance(agent_status, str) or not agent_status.strip():
+        return "agent_status must be a non-empty string."
+
+    normalized = agent_status.strip().lower()
+    if normalized not in USER_SETTABLE_AGENT_STATUSES:
+        allowed = ", ".join(sorted(USER_SETTABLE_AGENT_STATUSES))
+        return f"agent_status must be one of: {allowed}."
+
+    request_data["agent_status"] = normalized
+    return None
+
+
+def requires_agent_reindex(request_data: Dict[str, Any]) -> bool:
+    """Return True when the update payload includes fields that trigger re-indexing."""
+    for field in AGENT_UPDATE_REINDEX_FIELDS:
+        value = request_data.get(field)
+        if value is None:
+            continue
+        if field in ("links", "files", "custom_texts", "qa_pairs"):
+            if isinstance(value, list) and len(value) == 0:
+                continue
+        return True
+    return False
+
+
+def resolve_post_update_agent_status(request_data: Dict[str, Any]) -> str:
+    """
+    Determine the agent_status to apply after a re-index update completes.
+
+    Priority:
+    1. Explicit agent_status in the update request
+    2. Pre-update user-settable status (e.g. disabled before indexing started)
+    3. active
+    """
+    requested_status = request_data.get("agent_status")
+    if requested_status in USER_SETTABLE_AGENT_STATUSES:
+        return requested_status
+
+    pre_update_status = request_data.get("_pre_update_agent_status")
+    if isinstance(pre_update_status, str):
+        pre_update_status = pre_update_status.strip().lower()
+    if pre_update_status in USER_SETTABLE_AGENT_STATUSES:
+        return pre_update_status
+
+    return "active"
+
+
+async def capture_pre_update_agent_status(agent_id: str, request_data: Dict[str, Any]) -> None:
+    """Store the agent's current status so it can be restored after re-indexing."""
+    agent = await get_agent_by_id(agent_id)
+    pre_update_status = (agent or {}).get("agent_status")
+    if isinstance(pre_update_status, str):
+        pre_update_status = pre_update_status.strip().lower()
+    request_data["_pre_update_agent_status"] = pre_update_status
+
 
 async def create_agent_document(initial_data: Optional[Dict[str, Any]] = None) -> Optional[str]:
     """
@@ -342,365 +417,159 @@ async def fetch_agent_document(agent_id: str) -> Optional[Dict[str, Any]]:
         logger.error(f"Error fetching agent document for agent_id {agent_id}: {e}")
         return None
 
+DEFAULT_DATASOURCE_PAGE_SIZE = 10
+MAX_DATASOURCE_PAGE_SIZE = 100
+
+
+def _normalize_datasource_pagination(page: int, limit: int) -> tuple[int, int]:
+    return max(1, page), max(1, min(limit, MAX_DATASOURCE_PAGE_SIZE))
+
+
+def _build_datasource_pagination_meta(total: int, page: int, limit: int) -> Dict[str, Any]:
+    if total == 0:
+        return {
+            "total": 0,
+            "page": 1,
+            "limit": limit,
+            "total_pages": 0,
+            "has_next": False,
+            "has_prev": False,
+        }
+
+    total_pages = (total + limit - 1) // limit
+    page = min(page, total_pages)
+    return {
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "total_pages": total_pages,
+        "has_next": page < total_pages,
+        "has_prev": page > 1,
+    }
+
+
+def _empty_datasource_page(limit: int = DEFAULT_DATASOURCE_PAGE_SIZE) -> Dict[str, Any]:
+    _, normalized_limit = _normalize_datasource_pagination(1, limit)
+    return {
+        "data": [],
+        "total": 0,
+        "page": 1,
+        "limit": normalized_limit,
+        "total_pages": 0,
+        "has_next": False,
+        "has_prev": False,
+    }
+
+
+def _serialize_agent_datasource_doc(doc: Dict[str, Any]) -> Dict[str, Any]:
+    serialized = dict(doc)
+    serialized.pop("_id", None)
+
+    if "created_at" in serialized and serialized["created_at"] and isinstance(serialized["created_at"], datetime):
+        serialized["created_at"] = serialized["created_at"].isoformat()
+    if "updated_at" in serialized and serialized["updated_at"] and isinstance(serialized["updated_at"], datetime):
+        serialized["updated_at"] = serialized["updated_at"].isoformat()
+
+    return serialized
+
+
+async def _fetch_paginated_agent_datasource(
+    collection_name: str,
+    agent_id: str,
+    page: int = 1,
+    limit: int = DEFAULT_DATASOURCE_PAGE_SIZE,
+) -> Dict[str, Any]:
+    page, limit = _normalize_datasource_pagination(page, limit)
+    collection = get_collection(collection_name)
+    query: Dict[str, Any] = {"agent_id": agent_id}
+
+    total = await collection.count_documents(query)
+    meta = _build_datasource_pagination_meta(total, page, limit)
+    page = meta["page"]
+
+    if total == 0:
+        return {"data": [], **meta}
+
+    skip = (page - 1) * limit
+    cursor = (
+        collection.find(query)
+        .sort([("updated_at", -1), ("_id", -1)])
+        .skip(skip)
+        .limit(limit)
+    )
+
+    items = [_serialize_agent_datasource_doc(doc) async for doc in cursor]
+    logger.info(
+        f"Fetched {len(items)} items from {collection_name} for agent_id {agent_id} "
+        f"(page {page}, limit {limit}, total {total})"
+    )
+    return {"data": items, **meta}
+
+
 async def fetch_agent_urls(
     agent_id: str,
-    limit: int = 50,
-    cursor: Optional[str] = None,
-    include_count: bool = False
+    page: int = 1,
+    limit: int = DEFAULT_DATASOURCE_PAGE_SIZE,
 ) -> Dict[str, Any]:
-    """
-    Fetch URLs for an agent with cursor-based pagination.
-    
-    Args:
-        agent_id: The agent ID to fetch URLs for
-        limit: Number of items per page (default 50, max 100)
-        cursor: Pagination cursor (the _id of the last item from previous page)
-        include_count: Whether to include total count (expensive, only use on first request)
-    
-    Returns:
-        Dict with keys: data, next_cursor, has_more, total_count (if include_count=True)
-    """
+    """Fetch indexed URLs for an agent with page-based pagination."""
     try:
-        urls_collection = get_collection("atlas_agent_urls")
-        
-        # Enforce max limit
-        limit = min(limit, 100)
-        
-        # Build query
-        query: Dict[str, Any] = {"agent_id": agent_id}
-        
-        # Parse cursor for pagination
-        if cursor:
-            try:
-                # Fetch the cursor document to get its updated_at value
-                cursor_doc = await urls_collection.find_one({"_id": ObjectId(cursor)})
-                if cursor_doc:
-                    cursor_updated_at = cursor_doc.get("updated_at")
-                    
-                    # Compound condition: items with earlier updated_at OR same updated_at but earlier _id
-                    query["$or"] = [
-                        {"updated_at": {"$lt": cursor_updated_at}},
-                        {
-                            "updated_at": cursor_updated_at,
-                            "_id": {"$lt": ObjectId(cursor)}
-                        }
-                    ]
-            except Exception as e:
-                logger.warning(f"Invalid cursor format: {cursor}, error: {e}")
-        
-        # Fetch limit + 1 to determine if there are more items
-        urls_cursor = urls_collection.find(query).sort([("updated_at", -1), ("_id", -1)]).limit(limit + 1)
-        
-        urls = []
-        last_id = None
-        async for url_doc in urls_cursor:
-            # Store _id before converting
-            doc_id = str(url_doc["_id"])
-            last_id = doc_id
-            url_doc.pop("_id", None)
-            
-            if "created_at" in url_doc and url_doc["created_at"] and isinstance(url_doc["created_at"], datetime):
-                url_doc["created_at"] = url_doc["created_at"].isoformat()
-            if "updated_at" in url_doc and url_doc["updated_at"] and isinstance(url_doc["updated_at"], datetime):
-                url_doc["updated_at"] = url_doc["updated_at"].isoformat()
-            
-            urls.append(url_doc)
-        
-        # Check if there are more items
-        has_more = len(urls) > limit
-        if has_more:
-            urls = urls[:limit]  # Remove the extra item
-            # Update last_id to be the last item in the trimmed list
-            if urls:
-                # Re-fetch the _id from the collection since we already popped it
-                last_item_updated_at = urls[-1].get("updated_at")
-                last_item_doc = await urls_collection.find_one(
-                    {"agent_id": agent_id, "updated_at": datetime.fromisoformat(last_item_updated_at.replace('Z', '+00:00'))},
-                    sort=[("updated_at", -1), ("_id", -1)]
-                )
-                if last_item_doc:
-                    last_id = str(last_item_doc["_id"])
-        
-        # Generate next cursor from last item (just the _id)
-        next_cursor = last_id if (urls and has_more) else None
-        
-        # Get total count only if requested (expensive operation)
-        result: Dict[str, Any] = {
-            "data": urls,
-            "next_cursor": next_cursor,
-            "has_more": has_more
-        }
-        
-        if include_count:
-            total_count = await urls_collection.count_documents({"agent_id": agent_id})
-            result["total_count"] = total_count
-        
-        logger.info(f"Fetched {len(urls)} URLs for agent_id {agent_id}, has_more: {has_more}")
-        return result
-        
+        return await _fetch_paginated_agent_datasource("atlas_agent_urls", agent_id, page, limit)
     except Exception as e:
         logger.error(f"Error fetching URLs for agent_id {agent_id}: {e}")
-        return {"data": [], "next_cursor": None, "has_more": False}
+        return _empty_datasource_page(limit)
+
 
 async def fetch_agent_files(
     agent_id: str,
-    limit: int = 50,
-    cursor: Optional[str] = None,
-    include_count: bool = False
+    page: int = 1,
+    limit: int = DEFAULT_DATASOURCE_PAGE_SIZE,
 ) -> Dict[str, Any]:
-    """
-    Fetch files for an agent with cursor-based pagination.
-    
-    Args:
-        agent_id: The agent ID to fetch files for
-        limit: Number of items per page (default 50, max 100)
-        cursor: Pagination cursor (the _id of the last item from previous page)
-        include_count: Whether to include total count (expensive, only use on first request)
-    
-    Returns:
-        Dict with keys: data, next_cursor, has_more, total_count (if include_count=True)
-    """
+    """Fetch uploaded files for an agent with page-based pagination."""
     try:
-        files_collection = get_collection("atlas_agent_files")
-        
-        # Enforce max limit
-        limit = min(limit, 100)
-        
-        # Build query
-        query: Dict[str, Any] = {"agent_id": agent_id}
-        
-        # Parse cursor for pagination
-        if cursor:
-            try:
-                # Fetch the cursor document to get its updated_at value
-                cursor_doc = await files_collection.find_one({"_id": ObjectId(cursor)})
-                if cursor_doc:
-                    cursor_updated_at = cursor_doc.get("updated_at")
-                    
-                    query["$or"] = [
-                        {"updated_at": {"$lt": cursor_updated_at}},
-                        {
-                            "updated_at": cursor_updated_at,
-                            "_id": {"$lt": ObjectId(cursor)}
-                        }
-                    ]
-            except Exception as e:
-                logger.warning(f"Invalid cursor format: {cursor}, error: {e}")
-        
-        files_cursor = files_collection.find(query).sort([("updated_at", -1), ("_id", -1)]).limit(limit + 1)
-        
-        files = []
-        last_id = None
-        async for file_doc in files_cursor:
-            doc_id = str(file_doc["_id"])
-            last_id = doc_id
-            file_doc.pop("_id", None)
-            
-            if "created_at" in file_doc and file_doc["created_at"] and isinstance(file_doc["created_at"], datetime):
-                file_doc["created_at"] = file_doc["created_at"].isoformat()
-            if "updated_at" in file_doc and file_doc["updated_at"] and isinstance(file_doc["updated_at"], datetime):
-                file_doc["updated_at"] = file_doc["updated_at"].isoformat()
-            
-            files.append(file_doc)
-        
-        has_more = len(files) > limit
-        if has_more:
-            files = files[:limit]
-            if files:
-                last_item_updated_at = files[-1].get("updated_at")
-                last_item_doc = await files_collection.find_one(
-                    {"agent_id": agent_id, "updated_at": datetime.fromisoformat(last_item_updated_at.replace('Z', '+00:00'))},
-                    sort=[("updated_at", -1), ("_id", -1)]
-                )
-                if last_item_doc:
-                    last_id = str(last_item_doc["_id"])
-        
-        next_cursor = last_id if (files and has_more) else None
-        
-        result: Dict[str, Any] = {
-            "data": files,
-            "next_cursor": next_cursor,
-            "has_more": has_more
-        }
-        
-        if include_count:
-            total_count = await files_collection.count_documents({"agent_id": agent_id})
-            result["total_count"] = total_count
-        
-        logger.info(f"Fetched {len(files)} files for agent_id {agent_id}, has_more: {has_more}")
-        return result
-        
+        return await _fetch_paginated_agent_datasource("atlas_agent_files", agent_id, page, limit)
     except Exception as e:
         logger.error(f"Error fetching files for agent_id {agent_id}: {e}")
-        return {"data": [], "next_cursor": None, "has_more": False}
+        return _empty_datasource_page(limit)
 
-async def fetch_agent_custom_knowledge(
+
+async def fetch_agent_custom_texts(
     agent_id: str,
-    limit: int = 50,
-    cursor: Optional[str] = None,
-    include_count: bool = False
+    page: int = 1,
+    limit: int = DEFAULT_DATASOURCE_PAGE_SIZE,
 ) -> Dict[str, Any]:
-    """
-    Fetch custom knowledge (texts and QA pairs) for an agent with cursor-based pagination.
-    
-    Args:
-        agent_id: The agent ID to fetch custom knowledge for
-        limit: Number of items per page (default 50, max 100)
-        cursor: Pagination cursor (the _id of the last item from previous page)
-        include_count: Whether to include total counts (expensive, only use on first request)
-    
-    Returns:
-        Dict with keys: custom_texts, qa_pairs, each containing {data, next_cursor, has_more, total_count}
-    """
+    """Fetch custom texts for an agent with page-based pagination."""
     try:
-        limit = min(limit, 100)
-        
-        # Fetch custom texts
-        custom_texts_collection = get_collection("atlas_custom_texts")
-        ct_query: Dict[str, Any] = {"agent_id": agent_id}
-        
-        if cursor:
-            try:
-                cursor_doc = await custom_texts_collection.find_one({"_id": ObjectId(cursor)})
-                if cursor_doc:
-                    cursor_updated_at = cursor_doc.get("updated_at")
-                    
-                    ct_query["$or"] = [
-                        {"updated_at": {"$lt": cursor_updated_at}},
-                        {"updated_at": cursor_updated_at, "_id": {"$lt": ObjectId(cursor)}}
-                    ]
-            except Exception as e:
-                logger.warning(f"Invalid cursor format: {cursor}, error: {e}")
-        
-        ct_cursor = custom_texts_collection.find(ct_query).sort([("updated_at", -1), ("_id", -1)]).limit(limit + 1)
-        custom_texts = []
-        ct_last_id = None
-        async for ct_doc in ct_cursor:
-            doc_id = str(ct_doc["_id"])
-            ct_last_id = doc_id
-            ct_doc.pop("_id", None)
-            
-            if "created_at" in ct_doc and ct_doc["created_at"] and isinstance(ct_doc["created_at"], datetime):
-                ct_doc["created_at"] = ct_doc["created_at"].isoformat()
-            if "updated_at" in ct_doc and ct_doc["updated_at"] and isinstance(ct_doc["updated_at"], datetime):
-                ct_doc["updated_at"] = ct_doc["updated_at"].isoformat()
-            
-            custom_texts.append(ct_doc)
-        
-        ct_has_more = len(custom_texts) > limit
-        if ct_has_more:
-            custom_texts = custom_texts[:limit]
-            if custom_texts:
-                last_item_updated_at = custom_texts[-1].get("updated_at")
-                last_item_doc = await custom_texts_collection.find_one(
-                    {"agent_id": agent_id, "updated_at": datetime.fromisoformat(last_item_updated_at.replace('Z', '+00:00'))},
-                    sort=[("updated_at", -1), ("_id", -1)]
-                )
-                if last_item_doc:
-                    ct_last_id = str(last_item_doc["_id"])
-        
-        ct_next_cursor = ct_last_id if (custom_texts and ct_has_more) else None
-        
-        # Fetch QA pairs
-        qa_pairs_collection = get_collection("atlas_qa_pairs")
-        qa_query: Dict[str, Any] = {"agent_id": agent_id}
-        
-        if cursor:
-            try:
-                cursor_doc = await qa_pairs_collection.find_one({"_id": ObjectId(cursor)})
-                if cursor_doc:
-                    cursor_updated_at = cursor_doc.get("updated_at")
-                    
-                    qa_query["$or"] = [
-                        {"updated_at": {"$lt": cursor_updated_at}},
-                        {"updated_at": cursor_updated_at, "_id": {"$lt": ObjectId(cursor)}}
-                    ]
-            except Exception as e:
-                logger.warning(f"Invalid cursor format: {cursor}, error: {e}")
-        
-        qa_cursor = qa_pairs_collection.find(qa_query).sort([("updated_at", -1), ("_id", -1)]).limit(limit + 1)
-        qa_pairs = []
-        qa_last_id = None
-        async for qa_doc in qa_cursor:
-            doc_id = str(qa_doc["_id"])
-            qa_last_id = doc_id
-            qa_doc.pop("_id", None)
-            
-            if "created_at" in qa_doc and qa_doc["created_at"] and isinstance(qa_doc["created_at"], datetime):
-                qa_doc["created_at"] = qa_doc["created_at"].isoformat()
-            if "updated_at" in qa_doc and qa_doc["updated_at"] and isinstance(qa_doc["updated_at"], datetime):
-                qa_doc["updated_at"] = qa_doc["updated_at"].isoformat()
-            
-            qa_pairs.append(qa_doc)
-        
-        qa_has_more = len(qa_pairs) > limit
-        if qa_has_more:
-            qa_pairs = qa_pairs[:limit]
-            if qa_pairs:
-                last_item_updated_at = qa_pairs[-1].get("updated_at")
-                last_item_doc = await qa_pairs_collection.find_one(
-                    {"agent_id": agent_id, "updated_at": datetime.fromisoformat(last_item_updated_at.replace('Z', '+00:00'))},
-                    sort=[("updated_at", -1), ("_id", -1)]
-                )
-                if last_item_doc:
-                    qa_last_id = str(last_item_doc["_id"])
-        
-        qa_next_cursor = qa_last_id if (qa_pairs and qa_has_more) else None
-        
-        result: Dict[str, Any] = {
-            "custom_texts": {
-                "data": custom_texts,
-                "next_cursor": ct_next_cursor,
-                "has_more": ct_has_more
-            },
-            "qa_pairs": {
-                "data": qa_pairs,
-                "next_cursor": qa_next_cursor,
-                "has_more": qa_has_more
-            }
-        }
-        
-        if include_count:
-            ct_count = await custom_texts_collection.count_documents({"agent_id": agent_id})
-            qa_count = await qa_pairs_collection.count_documents({"agent_id": agent_id})
-            result["custom_texts"]["total_count"] = ct_count
-            result["qa_pairs"]["total_count"] = qa_count
-        
-        logger.info(f"Fetched {len(custom_texts)} custom texts and {len(qa_pairs)} QA pairs for agent_id {agent_id}")
-        return result
-        
+        return await _fetch_paginated_agent_datasource("atlas_custom_texts", agent_id, page, limit)
     except Exception as e:
-        logger.error(f"Error fetching custom knowledge for agent_id {agent_id}: {e}")
-        return {
-            "custom_texts": {"data": [], "next_cursor": None, "has_more": False},
-            "qa_pairs": {"data": [], "next_cursor": None, "has_more": False}
-        }
+        logger.error(f"Error fetching custom texts for agent_id {agent_id}: {e}")
+        return _empty_datasource_page(limit)
+
+
+async def fetch_agent_qa_pairs(
+    agent_id: str,
+    page: int = 1,
+    limit: int = DEFAULT_DATASOURCE_PAGE_SIZE,
+) -> Dict[str, Any]:
+    """Fetch QA pairs for an agent with page-based pagination."""
+    try:
+        return await _fetch_paginated_agent_datasource("atlas_qa_pairs", agent_id, page, limit)
+    except Exception as e:
+        logger.error(f"Error fetching QA pairs for agent_id {agent_id}: {e}")
+        return _empty_datasource_page(limit)
 
 async def fetch_agent_details_by_id(
     agent_id: str,
-    urls_limit: int = 50,
-    urls_cursor: Optional[str] = None,
-    files_limit: int = 50,
-    files_cursor: Optional[str] = None,
-    custom_limit: int = 50,
-    custom_cursor: Optional[str] = None,
-    include_counts: bool = False
+    urls_page: int = 1,
+    urls_limit: int = DEFAULT_DATASOURCE_PAGE_SIZE,
+    files_page: int = 1,
+    files_limit: int = DEFAULT_DATASOURCE_PAGE_SIZE,
+    custom_texts_page: int = 1,
+    custom_texts_limit: int = DEFAULT_DATASOURCE_PAGE_SIZE,
+    qa_pairs_page: int = 1,
+    qa_pairs_limit: int = DEFAULT_DATASOURCE_PAGE_SIZE,
 ) -> Optional[Dict[str, Any]]:
     """
-    Fetch complete agent details including paginated related data.
-    
-    Args:
-        agent_id: The agent ID
-        urls_limit: Limit for URLs pagination
-        urls_cursor: Cursor for URLs pagination
-        files_limit: Limit for files pagination
-        files_cursor: Cursor for files pagination
-        custom_limit: Limit for custom knowledge pagination
-        custom_cursor: Cursor for custom knowledge pagination
-        include_counts: Whether to include total counts (use True on first request)
-    
-    Returns:
-        Agent document with paginated links, files, custom_texts, and qa_pairs
+    Fetch complete agent details including the first page of related datasource lists.
     """
     try:
         agent_task_progress = ELYSIUM_ATLAS_AGENT_CONFIG_DATA.get("agent_task_progress", {})
@@ -712,18 +581,18 @@ async def fetch_agent_details_by_id(
         agent_current_task = document.get("agent_current_task", "initializing")
         task_progress = agent_task_progress.get(agent_current_task, 0)
 
-        # Fetch paginated data in parallel
-        urls_result, files_result, custom_knowledge_result = await asyncio.gather(
-            fetch_agent_urls(agent_id, limit=urls_limit, cursor=urls_cursor, include_count=include_counts),
-            fetch_agent_files(agent_id, limit=files_limit, cursor=files_cursor, include_count=include_counts),
-            fetch_agent_custom_knowledge(agent_id, limit=custom_limit, cursor=custom_cursor, include_count=include_counts)
+        urls_result, files_result, custom_texts_result, qa_pairs_result = await asyncio.gather(
+            fetch_agent_urls(agent_id, page=urls_page, limit=urls_limit),
+            fetch_agent_files(agent_id, page=files_page, limit=files_limit),
+            fetch_agent_custom_texts(agent_id, page=custom_texts_page, limit=custom_texts_limit),
+            fetch_agent_qa_pairs(agent_id, page=qa_pairs_page, limit=qa_pairs_limit),
         )
         
         document["progress"] = task_progress
         document["links"] = urls_result
         document["files"] = files_result
-        document["custom_texts"] = custom_knowledge_result["custom_texts"]
-        document["qa_pairs"] = custom_knowledge_result["qa_pairs"]
+        document["custom_texts"] = custom_texts_result
+        document["qa_pairs"] = qa_pairs_result
         
         return document
     except Exception as e:
@@ -817,10 +686,13 @@ async def initialize_agent_update(requestData: Dict[str, Any]) -> bool:
 
         await update_agent_current_task(agent_id, "running")
 
-        # Set agent status to 'active' just before returning True
-        await update_agent_status(agent_id, "active")
+        final_status = resolve_post_update_agent_status(requestData)
+        await update_agent_status(agent_id, final_status)
         
-        logger.info(f"Successfully updated agent with ID: {agent_id}")
+        logger.info(
+            f"Successfully updated agent with ID: {agent_id}; "
+            f"restored agent_status to '{final_status}'"
+        )
         return True
     
     except Exception as e:

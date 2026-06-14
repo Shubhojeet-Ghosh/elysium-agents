@@ -1,5 +1,7 @@
 from config.lead_collection_config import get_default_lead_collection_config
 
+USER_SETTABLE_AGENT_STATUSES = frozenset({"active", "inactive", "disabled"})
+
 ELYSIUM_ATLAS_AGENT_CONFIG_DATA = {
     "agent_init_config": {
         "agent_name": "my-agent",
