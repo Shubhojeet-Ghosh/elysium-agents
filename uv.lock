@@ -404,7 +404,7 @@ wheels = [
 
 [[package]]
 name = "elysium-agents"
-version = "0.2.82"
+version = "0.2.91"
 source = { virtual = "." }
 dependencies = [
     { name = "anthropic" },

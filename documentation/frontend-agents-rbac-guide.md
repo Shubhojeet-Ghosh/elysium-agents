@@ -62,6 +62,8 @@ User must be an active member of the **agent’s team** (resolved from the agent
 | `POST /v1/delete-agent-files` | Remove uploaded files |
 | `POST /v1/delete-agent-custom-data` | Remove custom texts / QA pairs |
 
+**Tool linking:** `pre-build-agent-operations`, `build-agent`, and `update-agent` accept optional `tool_ids: string[]` — Mongo `_id` values from team tools in `atlas_tools`. See [frontend-tools-api-guide.md](./frontend-tools-api-guide.md#agent-linking-tool_ids).
+
 ### Unchanged (not part of team RBAC)
 
 | Endpoint | Notes |
@@ -117,3 +119,5 @@ admin   → READ + WRITE
 ```
 
 For related team-member management (invite/remove), see the Express Atlas API docs referenced in [backend-team-rbac-guide.md](./backend-team-rbac-guide.md).
+
+For **create/update request body parameters** (fields, validation, sync vs async), see [frontend-agent-create-update-api-guide.md](./frontend-agent-create-update-api-guide.md).

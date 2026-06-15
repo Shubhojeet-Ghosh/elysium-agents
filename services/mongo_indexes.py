@@ -94,6 +94,45 @@ async def create_mongo_indexes():
         await atlas_chat_mesages_collection.create_index([("agent_id", 1), ("chat_session_id", 1)], name="agent_id_chat_session_id_index_messages")
         logger.info("Compound index created on atlas_chat_mesages.agent_id and chat_session_id")
 
+        atlas_tools_collection = get_collection("atlas_tools")
+        await atlas_tools_collection.create_index("team_id", name="team_id_1")
+        logger.info("Index created on atlas_tools.team_id")
+        await atlas_tools_collection.create_index(
+            [("team_id", 1), ("name", 1)],
+            name="team_id_name_1",
+            unique=True,
+        )
+        logger.info("Unique compound index created on atlas_tools.team_id, name")
+        await atlas_tools_collection.create_index(
+            [("team_id", 1), ("updated_at", -1), ("_id", -1)],
+            name="team_id_updated_at_id_1",
+        )
+        logger.info("Compound index created on atlas_tools.team_id, updated_at, _id")
+
+        atlas_support_tickets_collection = get_collection("atlas_support_tickets")
+        await atlas_support_tickets_collection.create_index(
+            "ticket_number",
+            name="ticket_number_1",
+            unique=True,
+        )
+        logger.info("Unique index created on atlas_support_tickets.ticket_number")
+        await atlas_support_tickets_collection.create_index(
+            [("team_id", 1), ("created_by_user_id", 1), ("last_activity_at", -1)],
+            name="team_id_created_by_user_id_last_activity_at_1",
+        )
+        logger.info(
+            "Compound index created on atlas_support_tickets.team_id, "
+            "created_by_user_id, last_activity_at"
+        )
+        await atlas_support_tickets_collection.create_index(
+            [("team_id", 1), ("created_by_user_id", 1), ("status", 1)],
+            name="team_id_created_by_user_id_status_1",
+        )
+        logger.info(
+            "Compound index created on atlas_support_tickets.team_id, "
+            "created_by_user_id, status"
+        )
+
         logger.info("MongoDB indexes created / verified successfully.")
 
     except Exception as e:

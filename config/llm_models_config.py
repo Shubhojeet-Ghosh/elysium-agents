@@ -11,6 +11,7 @@ from services.open_ai_services import (
 from services.groq_services import groq_chat_completions
 from services.grok_services import grok_chat_completion
 from services.claude_services import claude_chat_completion_non_reasoning
+from services.deepseek_services import deepseek_chat_completion
 
 # Default model if none provided or lookup fails
 DEFAULT_MODEL = "gpt-4o-mini"
@@ -84,7 +85,20 @@ MODEL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "mode": "non-reasoning",
         "handler": grok_chat_completion,
     },
+    # DeepSeek chat (OpenAI-compatible API — https://api.deepseek.com)
+    "deepseek-v4-flash": {
+        "family": "deepseek",
+        "mode": "non-reasoning",
+        "handler": deepseek_chat_completion,
+    },
+    "deepseek-v4-pro": {
+        "family": "deepseek",
+        "mode": "non-reasoning",
+        "handler": deepseek_chat_completion,
+    },
 }
+
+SUPPORTED_LLM_MODELS = frozenset(MODEL_REGISTRY.keys())
 
 
 def get_model_config(model_name: str) -> Dict[str, Any]:
@@ -103,4 +117,48 @@ def resolve_model_handler(model_name: str) -> Tuple[Callable[..., Any], Dict[str
     config = get_model_config(model_name)
     handler = config["handler"]
     return handler, config
+
+
+def validate_llm_model(value) -> tuple[bool, str | None, str | None]:
+    """
+    Validate an llm_model value for atlas agents.
+
+    Returns:
+        (is_valid, normalized_value, error_message)
+    """
+    if value is None:
+        return True, None, None
+
+    if not isinstance(value, str):
+        return False, None, "llm_model must be a string."
+
+    normalized = value.strip()
+    if not normalized:
+        return False, None, "llm_model must be a non-empty string."
+
+    if normalized not in SUPPORTED_LLM_MODELS:
+        allowed = ", ".join(sorted(SUPPORTED_LLM_MODELS))
+        return False, None, f"Invalid llm_model '{value}'. Allowed values: {allowed}."
+
+    return True, normalized, None
+
+
+def normalize_llm_model_in_request(request_data: dict) -> str | None:
+    """
+    If llm_model is present in request_data, validate in place.
+
+    Returns:
+        Error message when invalid, otherwise None.
+    """
+    if "llm_model" not in request_data:
+        return None
+
+    is_valid, normalized, error_message = validate_llm_model(request_data.get("llm_model"))
+    if not is_valid:
+        return error_message
+
+    if normalized is not None:
+        request_data["llm_model"] = normalized
+
+    return None
 

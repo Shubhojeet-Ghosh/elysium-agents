@@ -12,7 +12,9 @@ from services.elysium_atlas_services.atlas_chat_session_services import (
 )
 
 from config.llm_models_config import resolve_model_handler, DEFAULT_MODEL
+from config.atlas_tool_config import get_tool_result_message_role
 from config.retrieval_strategy_config import DEFAULT_RETRIEVAL_STRATEGY
+from services.elysium_atlas_services.atlas_tool_execution_services import run_agent_tool_calling_round
 
 import asyncio
 import time
@@ -120,9 +122,17 @@ def format_knowledge_base_string(final_results: list) -> str:
     return "\n\n###\n\n".join(knowledge_sections)
 
 
-def build_messages_list(agent_data: dict, message: str, knowledge_base_string: str, chat_history: list = None) -> list:
+def build_messages_list(
+    agent_data: dict,
+    message: str,
+    knowledge_base_string: str,
+    chat_history: list = None,
+    tool_turn_messages: list | None = None,
+    tool_result_role: str = "assistant",
+) -> list:
     """
-    Build an OpenAI-style messages list with system prompt, chat history, knowledge base, and user message.
+    Build an OpenAI-style messages list with system prompt, chat history, knowledge base,
+    optional tool-call messages, and the current user message last.
     """
     messages = []
 
@@ -189,13 +199,22 @@ def build_messages_list(agent_data: dict, message: str, knowledge_base_string: s
             )
         })
 
-    # --- User message (ALWAYS LAST) ---
+    # --- Tool result messages (before current user message; role varies by final model) ---
+    if tool_turn_messages:
+        for tool_msg in tool_turn_messages:
+            messages.append({
+                "role": tool_result_role,
+                "content": tool_msg.get("content", ""),
+            })
+
+    # --- Current user message (always last) ---
     messages.append({
         "role": "user",
         "content": message
     })
 
     return messages
+
 
 async def chat_with_agent_v1(agent_id, message, sid=None, chat_session_id=None, additional_params: dict = {}):
     chat_log = f"[chat agent_id={agent_id}]"
@@ -240,20 +259,51 @@ async def chat_with_agent_v1(agent_id, message, sid=None, chat_session_id=None, 
 
         logger.info(f"{chat_log} Building LLM prompt with knowledge and chat history")
         knowledge_base_string = format_knowledge_base_string(final_results)
+        model = agent_data.get("llm_model") or DEFAULT_MODEL
+        handler, _ = resolve_model_handler(model)
+        tool_result_role = get_tool_result_message_role(model)
         messages = build_messages_list(agent_data, message, knowledge_base_string, chat_history)
+
+        tool_ids = (agent_data or {}).get("tool_ids") or []
+        tool_turn_messages = None
+        if tool_ids:
+            logger.info(f"{chat_log} Checking registered tools for this turn (count={len(tool_ids)})")
+            tool_temperature = agent_data.get("temperature", 0.5) if agent_data else 0.5
+            try:
+                tool_turn_messages = await run_agent_tool_calling_round(
+                    messages,
+                    tool_ids,
+                    temperature=tool_temperature,
+                )
+            except Exception as tool_error:
+                logger.error(f"{chat_log} Tool calling round failed: {tool_error}", exc_info=True)
+                tool_turn_messages = None
+
+            if tool_turn_messages:
+                logger.info(
+                    f"{chat_log} Tool(s) invoked; rebuilding messages with tool results "
+                    f"(tool_messages={len(tool_turn_messages)})"
+                )
+                messages = build_messages_list(
+                    agent_data,
+                    message,
+                    knowledge_base_string,
+                    chat_history,
+                    tool_turn_messages=tool_turn_messages,
+                    tool_result_role=tool_result_role,
+                )
+            else:
+                logger.info(f"{chat_log} No tools invoked for this turn")
         # logger.info(
         #     f"{chat_log} prepare_llm_messages done in "
         #     f"{(time.perf_counter() - step_start) * 1000:.0f}ms"
         # )
         
-        model = agent_data.get("llm_model") or DEFAULT_MODEL
-        handler, config = resolve_model_handler(model)
-        
         chat_payload = {
             "model": model,
             "messages": messages,
         }
-
+        logger.info(f"Chat payload: {chat_payload}")
         if "temperature" in agent_data:
             chat_payload["temperature"] = agent_data.get("temperature",0.5)
         

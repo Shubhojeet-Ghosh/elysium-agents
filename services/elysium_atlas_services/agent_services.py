@@ -92,6 +92,23 @@ def resolve_post_update_agent_status(request_data: Dict[str, Any]) -> str:
     return "active"
 
 
+async def normalize_agent_tool_ids_in_request(
+    request_data: Dict[str, Any],
+    team_id: str,
+) -> str | None:
+    """Validate tool_ids when present on an agent request. Mutates request_data in place."""
+    if "tool_ids" not in request_data:
+        return None
+
+    from services.elysium_atlas_services.atlas_tool_services import validate_agent_tool_ids
+
+    normalized, error = await validate_agent_tool_ids(team_id, request_data["tool_ids"])
+    if error:
+        return error
+    request_data["tool_ids"] = normalized
+    return None
+
+
 async def capture_pre_update_agent_status(agent_id: str, request_data: Dict[str, Any]) -> None:
     """Store the agent's current status so it can be restored after re-indexing."""
     agent = await get_agent_by_id(agent_id)
@@ -137,6 +154,9 @@ async def create_agent_document(initial_data: Optional[Dict[str, Any]] = None) -
         if "lead_collection_config" not in document:
             document["lead_collection_config"] = get_default_lead_collection_config()
 
+        if "tool_ids" not in document:
+            document["tool_ids"] = []
+
         result = await collection.insert_one(document)
         agent_id = str(result.inserted_id)
 
@@ -174,6 +194,9 @@ async def initialize_agent_build_update(requestData: Dict[str, Any]) -> bool:
             base_url = normalize_url(base_url)
             requestData["base_url"] = base_url
             update_result = await update_agent_fields(agent_id, {"base_url": base_url})
+
+        if "tool_ids" in requestData:
+            await update_agent_fields(agent_id, {"tool_ids": requestData["tool_ids"]})
 
         ### Process the links for the agent
         links = requestData.get("links")
@@ -408,6 +431,9 @@ async def fetch_agent_document(agent_id: str) -> Optional[Dict[str, Any]]:
                 document["created_at"] = document["created_at"].isoformat()
             if "updated_at" in document and document["updated_at"] and isinstance(document["updated_at"], datetime):
                 document["updated_at"] = document["updated_at"].isoformat()
+
+            if "tool_ids" not in document:
+                document["tool_ids"] = []
             
             return document
         else:
@@ -646,6 +672,9 @@ async def initialize_agent_update(requestData: Dict[str, Any]) -> bool:
         temperature = requestData.get("temperature")
         if isinstance(temperature, (int, float)):
             updates["temperature"] = temperature
+
+        if "tool_ids" in requestData:
+            updates["tool_ids"] = requestData["tool_ids"]
         
         if updates:
             metadata_update_result = await update_agent_fields(agent_id, updates)
@@ -771,6 +800,7 @@ async def update_agent_basic_attributes(agent_id: str, requestData: Dict[str, An
             "placeholder_text",
             "retrieval_strategy",
             "lead_collection_config",
+            "tool_ids",
         ]
         
         updates = {}

@@ -2,12 +2,13 @@ import asyncio
 from typing import Dict, Any
 from fastapi.responses import JSONResponse
 from logging_config import get_logger
-from services.elysium_atlas_services.agent_services import initialize_agent_build_update, create_agent_document, list_agents_for_team, remove_agent_by_id,fetch_agent_details_by_id,initialize_agent_update, fetch_agent_fields_by_id, fetch_agent_urls, fetch_agent_files, fetch_agent_custom_texts, fetch_agent_qa_pairs, remove_agent_links, remove_agent_files, update_agent_basic_attributes, normalize_lead_collection_config_for_update, validate_user_agent_status, requires_agent_reindex, capture_pre_update_agent_status
+from services.elysium_atlas_services.agent_services import initialize_agent_build_update, create_agent_document, list_agents_for_team, remove_agent_by_id,fetch_agent_details_by_id,initialize_agent_update, fetch_agent_fields_by_id, fetch_agent_urls, fetch_agent_files, fetch_agent_custom_texts, fetch_agent_qa_pairs, remove_agent_links, remove_agent_files, update_agent_basic_attributes, normalize_lead_collection_config_for_update, validate_user_agent_status, requires_agent_reindex, capture_pre_update_agent_status, normalize_agent_tool_ids_in_request
 from services.elysium_atlas_services.atlas_custom_knowledge_services import remove_custom_data, get_custom_text_from_qdrant, get_qa_pair_from_qdrant
 from services.elysium_atlas_services.team_auth_services import (
     can_user_modify_agent,
     can_user_modify_team_agents,
     can_user_read_agent,
+    get_agent_team_id,
     is_user_member_of_team,
     parse_session_team_context,
 )
@@ -20,6 +21,7 @@ from services.elysium_atlas_services.agent_db_operations import update_agent_sta
 from services.elysium_atlas_services.agent_db_operations import set_data_materials_status
 from services.elysium_atlas_services.elysium_atlas_user_plan_services import can_user_build_agent
 from config.retrieval_strategy_config import normalize_retrieval_strategy_in_request
+from config.llm_models_config import normalize_llm_model_in_request
 from config.lead_collection_config import build_lead_collection_config_for_create
 
 logger = get_logger()
@@ -148,6 +150,24 @@ async def _require_agent_modify(user_data: dict, agent_id: str | None) -> str | 
         return team_admin
     return team_admin[0]
 
+
+async def _validate_agent_tool_ids_for_request(
+    request_data: dict,
+    team_id: str | None,
+) -> JSONResponse | None:
+    if "tool_ids" not in request_data:
+        return None
+    if not team_id:
+        return JSONResponse(
+            status_code=400,
+            content={"success": False, "message": "Cannot validate tool_ids without team context."},
+        )
+    error = await normalize_agent_tool_ids_in_request(request_data, team_id)
+    if error:
+        return JSONResponse(status_code=400, content={"success": False, "message": error})
+    return None
+
+
 async def pre_build_agent_operations_controller(requestData: Dict[str, Any],userData: dict):
     try:
         team_admin = await _require_team_admin(userData)
@@ -181,6 +201,15 @@ async def pre_build_agent_operations_controller(requestData: Dict[str, Any],user
         if "retrieval_strategy" in requestData:
             initial_data["retrieval_strategy"] = requestData["retrieval_strategy"]
 
+        llm_model_error = normalize_llm_model_in_request(requestData)
+        if llm_model_error:
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "message": llm_model_error},
+            )
+        if "llm_model" in requestData:
+            initial_data["llm_model"] = requestData["llm_model"]
+
         lead_collection_config, lead_collection_error = build_lead_collection_config_for_create(
             requestData.get("lead_collection_config"),
         )
@@ -190,6 +219,11 @@ async def pre_build_agent_operations_controller(requestData: Dict[str, Any],user
                 content={"success": False, "message": lead_collection_error},
             )
         initial_data["lead_collection_config"] = lead_collection_config
+
+        tool_ids_error = await _validate_agent_tool_ids_for_request(requestData, team_id)
+        if tool_ids_error:
+            return tool_ids_error
+        initial_data["tool_ids"] = requestData.get("tool_ids", [])
 
         agent_id = await create_agent_document(initial_data)
         if agent_id is None:
@@ -209,6 +243,15 @@ async def build_update_agent_controller_v1(requestData,userData,background_tasks
 
         user_id = auth_result
         logger.info(f"Build/update agent requested by user_id: {user_id}")
+
+        team_id = await get_agent_team_id(agent_id) if agent_id else None
+        if not team_id:
+            session_context = parse_session_team_context(userData)
+            team_id = session_context[1] if session_context else None
+
+        tool_ids_error = await _validate_agent_tool_ids_for_request(requestData, team_id)
+        if tool_ids_error:
+            return tool_ids_error
 
         if not agent_id:
             session_context = parse_session_team_context(userData)
@@ -392,11 +435,23 @@ async def update_agent_controller_v1(requestData,userData,background_tasks):
         if isinstance(auth_result, JSONResponse):
             return auth_result
 
+        team_id = await get_agent_team_id(agent_id)
+        tool_ids_error = await _validate_agent_tool_ids_for_request(requestData, team_id)
+        if tool_ids_error:
+            return tool_ids_error
+
         retrieval_strategy_error = normalize_retrieval_strategy_in_request(requestData)
         if retrieval_strategy_error:
             return JSONResponse(
                 status_code=400,
                 content={"success": False, "message": retrieval_strategy_error},
+            )
+
+        llm_model_error = normalize_llm_model_in_request(requestData)
+        if llm_model_error:
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "message": llm_model_error},
             )
 
         lead_collection_error = await normalize_lead_collection_config_for_update(
