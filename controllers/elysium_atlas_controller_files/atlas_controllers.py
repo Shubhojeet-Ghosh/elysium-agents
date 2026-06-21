@@ -2,6 +2,7 @@ import asyncio
 from typing import Dict, Any
 from fastapi.responses import JSONResponse
 from logging_config import get_logger
+from config.atlas_agent_models import ListAgentsRequest
 from services.elysium_atlas_services.agent_services import initialize_agent_build_update, create_agent_document, list_agents_for_team, remove_agent_by_id,fetch_agent_details_by_id,initialize_agent_update, fetch_agent_fields_by_id, fetch_agent_urls, fetch_agent_files, fetch_agent_custom_texts, fetch_agent_qa_pairs, remove_agent_links, remove_agent_files, update_agent_basic_attributes, normalize_lead_collection_config_for_update, validate_user_agent_status, requires_agent_reindex, capture_pre_update_agent_status, normalize_agent_tool_ids_in_request
 from services.elysium_atlas_services.atlas_custom_knowledge_services import remove_custom_data, get_custom_text_from_qdrant, get_qa_pair_from_qdrant
 from services.elysium_atlas_services.team_auth_services import (
@@ -315,9 +316,9 @@ async def generate_presigned_url_controller(requestData,userData):
     except Exception as e:
         return JSONResponse(status_code=500, content={"success": False, "message": f"An error occurred while generating presigned urls.", "error": str(e)})
 
-async def list_agents_controller(userData: dict):
+async def list_agents_controller(body: ListAgentsRequest, userData: dict):
     """
-    Controller to handle the logic for listing all agents for the user's active team.
+    Controller to handle the logic for listing paginated agents for the user's active team.
 
     Returns:
         JSONResponse: A response containing the list of agents or an error message.
@@ -328,9 +329,12 @@ async def list_agents_controller(userData: dict):
             return team_member
 
         user_id, team_id = team_member
-        logger.info(f"Listing agents for team_id: {team_id}, requested by user_id: {user_id}")
-        agents = await list_agents_for_team(team_id)
-        return JSONResponse(status_code=200, content={"success": True, "agents": agents})
+        logger.info(
+            f"Listing agents for team_id: {team_id}, requested by user_id: {user_id}, "
+            f"page: {body.page}, limit: {body.limit}"
+        )
+        result = await list_agents_for_team(team_id, page=body.page, limit=body.limit)
+        return JSONResponse(status_code=200, content={"success": True, **result})
 
     except Exception as e:
         return JSONResponse(status_code=500, content={"success": False, "message": "An error occurred while listing agents.", "error": str(e)})

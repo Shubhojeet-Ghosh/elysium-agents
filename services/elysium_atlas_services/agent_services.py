@@ -244,53 +244,77 @@ async def initialize_agent_build_update(requestData: Dict[str, Any]) -> bool:
         logger.error(f"Error storing agent URLs: {e}")
         return False
 
-async def list_agents_for_team(team_id: str) -> list[dict]:
+def _serialize_agent_list_item(agent: dict, agent_task_progress: dict) -> dict:
+    agent_id = str(agent.get("_id"))
+    agent_current_task = agent.get("agent_current_task", "initializing")
+    created_at = agent.get("created_at")
+    updated_at = agent.get("updated_at")
+
+    return {
+        "agent_id": agent_id,
+        "agent_name": agent.get("agent_name", "Unknown"),
+        "agent_icon": agent.get("agent_icon"),
+        "agent_status": agent.get("agent_status", "inactive"),
+        "agent_current_task": agent_current_task,
+        "progress": agent_task_progress.get(agent_current_task),
+        "created_at": created_at.isoformat() if created_at else None,
+        "updated_at": updated_at.isoformat() if updated_at else None,
+    }
+
+
+async def list_agents_for_team(
+    team_id: str,
+    page: int = 1,
+    limit: int = 10,
+) -> dict[str, Any]:
     """
-    List all agents for a given team_id, including their basic data and progress.
+    List paginated agents for a given team_id, including basic data and progress.
 
     Args:
         team_id: The ID of the team whose agents are to be listed.
+        page: 1-based page number.
+        limit: Items per page (max 100).
 
     Returns:
-        list[dict]: A list of dictionaries containing agent details.
+        dict: Agents for the requested page plus pagination metadata.
     """
+    page, limit = _normalize_datasource_pagination(page, limit)
+    empty_result = {"agents": [], **_build_datasource_pagination_meta(0, page, limit)}
+
     try:
         collection = get_collection("atlas_agents")
-
         agent_task_progress = ELYSIUM_ATLAS_AGENT_CONFIG_DATA.get("agent_task_progress", {})
+        query = {"team_id": team_id}
 
-        agents_cursor = collection.find({"team_id": team_id}).sort("updated_at", -1)
+        total = await collection.count_documents(query)
+        meta = _build_datasource_pagination_meta(total, page, limit)
+        page = meta["page"]
 
-        agents = []
-        async for agent in agents_cursor:
-            agent_id = str(agent.get("_id"))
-            agent_name = agent.get("agent_name", "Unknown")
-            agent_icon = agent.get("agent_icon", None)
-            agent_status = agent.get("agent_status", "inactive")
-            agent_current_task = agent.get("agent_current_task", "initializing")
-            created_at = agent.get("created_at").isoformat() if agent.get("created_at") else None
-            updated_at = agent.get("updated_at").isoformat() if agent.get("updated_at") else None
+        if total == 0:
+            return empty_result
 
-            # Calculate progress based on agent_current_task and agent_task_progress
-            task_progress = agent_task_progress.get(agent_current_task)
+        skip = (page - 1) * limit
+        cursor = (
+            collection.find(query)
+            .sort([("updated_at", -1), ("_id", -1)])
+            .skip(skip)
+            .limit(limit)
+        )
 
-            agents.append({
-                "agent_id": agent_id,
-                "agent_name": agent_name,
-                "agent_icon": agent_icon,
-                "agent_status": agent_status,
-                "agent_current_task": agent_current_task,
-                "progress": task_progress,
-                "created_at": created_at,
-                "updated_at": updated_at
-            })
+        agents = [
+            _serialize_agent_list_item(agent, agent_task_progress)
+            async for agent in cursor
+        ]
 
-        logger.info(f"Listed {len(agents)} agents for team_id: {team_id}")
-        return agents
+        logger.info(
+            f"Listed {len(agents)} agents for team_id: {team_id} "
+            f"(page {page}, limit {limit}, total {total})"
+        )
+        return {"agents": agents, **meta}
 
     except Exception as e:
         logger.error(f"Error listing agents for team_id {team_id}: {e}")
-        return []
+        return empty_result
 
 async def remove_agent_by_id(agent_id: str) -> bool:
     """

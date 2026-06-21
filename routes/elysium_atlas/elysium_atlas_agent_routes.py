@@ -5,6 +5,7 @@ from middlewares.jwt_middleware import authorize_user
 from fastapi import BackgroundTasks
 from fastapi.responses import JSONResponse
 
+from config.atlas_agent_models import ListAgentsRequest
 from controllers.elysium_atlas_controller_files.atlas_controllers import build_update_agent_controller_v1, pre_build_agent_operations_controller,generate_presigned_url_controller, list_agents_controller, delete_agent_controller,get_agent_details_controller,update_agent_controller_v1, get_agent_fields_controller, get_agent_urls_controller, get_agent_files_controller, get_agent_custom_texts_controller, get_agent_qa_pairs_controller, remove_agent_links_controller, delete_agent_files_controller, delete_agent_custom_data_controller, get_custom_text_content_controller, get_qa_pair_content_controller
 from controllers.elysium_atlas_controller_files.atlas_chat_controllers import (
     chat_with_agent_controller_v1,
@@ -29,10 +30,10 @@ async def generate_presigned_urls_route_v1(requestData: Dict[str, Any],user: dic
 async def build_update_agent_route_v1(requestData: Dict[str, Any],user: dict = Depends(authorize_user),background_tasks: BackgroundTasks = BackgroundTasks()):
     return await build_update_agent_controller_v1(requestData,user,background_tasks)
 
-# Async POST method to list all agents for a user
+# Async POST method to list agents for a team (paginated)
 @elysium_atlas_agent_router.post("/v1/list-agents")
-async def list_agents_route_v1(user: dict = Depends(authorize_user)):
-    return await list_agents_controller(user)
+async def list_agents_route_v1(body: ListAgentsRequest, user: dict = Depends(authorize_user)):
+    return await list_agents_controller(body, user)
 
 # Async POST method to delete an agent
 @elysium_atlas_agent_router.post("/v1/delete-agent")
