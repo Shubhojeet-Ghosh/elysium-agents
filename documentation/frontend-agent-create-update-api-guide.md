@@ -167,7 +167,6 @@ If `agent_id` is omitted, a minimal agent document is created first (prefer `pre
 | Field | Type | Required | Notes |
 |-------|------|----------|-------|
 | `agent_id` | `string` | No* | From pre-build step. *Required in normal flow |
-| `base_url` | `string` | No | Normalized and stored on agent |
 | `tool_ids` | `string[]` | No | Replaces attached tools when sent |
 | `links` | `string[]` | No | URLs to crawl and index |
 | `files` | `array` | No | Uploaded files to index — see [Files](#files-array) |
@@ -224,7 +223,6 @@ Each item:
 ```json
 {
   "agent_id": "674a1b2c3d4e5f6789012345",
-  "base_url": "https://example.com",
   "tool_ids": ["674a1b2c3d4e5f6789012346"],
   "links": [
     "https://example.com/about",
@@ -293,7 +291,6 @@ Sending **any** of these (with a non-empty value, for arrays) triggers backgroun
 | `files` | `array` | Same format as build. Empty `[]` ignored |
 | `custom_texts` | `array` | Same format as build. Empty `[]` ignored |
 | `qa_pairs` | `array` | Same format as build. Empty `[]` ignored |
-| `base_url` | `string` | |
 | `agent_name` | `string` | |
 | `system_prompt` | `string` | |
 | `llm_model` | `string` | Supported model IDs only |
@@ -407,7 +404,6 @@ Object with allowed keys only:
 | `llm_model` | ✓ | — | ✓ (re-index) |
 | `lead_collection_config` | ✓ | — | ✓ (immediate) |
 | `tool_ids` | ✓ | ✓ | ✓ (immediate) |
-| `base_url` | — | ✓ | ✓ (re-index) |
 | `links` | — | ✓ | ✓ (re-index) |
 | `files` | — | ✓ | ✓ (re-index) |
 | `custom_texts` | — | ✓ | ✓ (re-index) |
@@ -496,7 +492,6 @@ interface QaPairInput {
 
 interface BuildAgentRequest {
   agent_id?: string;
-  base_url?: string;
   tool_ids?: string[];
   links?: string[];
   files?: AgentFileInput[];
@@ -511,7 +506,6 @@ interface UpdateAgentRequest {
   files?: AgentFileInput[];
   custom_texts?: CustomTextInput[];
   qa_pairs?: QaPairInput[];
-  base_url?: string;
   agent_name?: string;
   system_prompt?: string;
   llm_model?: string;

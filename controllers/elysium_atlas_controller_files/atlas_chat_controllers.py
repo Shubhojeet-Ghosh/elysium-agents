@@ -1,6 +1,7 @@
 import asyncio
 import uuid
 import datetime
+import time
 from fastapi.responses import JSONResponse
 from logging_config import get_logger
 
@@ -95,8 +96,19 @@ async def chat_with_agent_controller_v1(chatPayload,user_data, sid = None):
         chat_session_id = chatPayload.get("chat_session_id")
         in_conversation_with = chatPayload.get("in_conversation_with")
 
+        step_start = time.perf_counter()
         user_id = await get_agent_owner_user_id(agent_id) if agent_id else None
+        logger.info(
+            f"[chat agent_id={agent_id}] get_agent_owner_user_id done in "
+            f"{(time.perf_counter() - step_start) * 1000:.0f}ms"
+        )
+
+        step_start = time.perf_counter()
         chat_permission = await can_user_send_chat(user_id, chatPayload)
+        logger.info(
+            f"[chat agent_id={agent_id}] can_user_send_chat done in "
+            f"{(time.perf_counter() - step_start) * 1000:.0f}ms"
+        )
         if not chat_permission.get("success"):
             internal_message = chat_permission.get("message")
             client_message = chat_permission.get("client_message", internal_message)

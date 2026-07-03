@@ -8,6 +8,8 @@ from config.lead_collection_config import get_default_lead_collection_config
 
 USER_SETTABLE_AGENT_STATUSES = frozenset({"active", "inactive", "disabled"})
 
+DEPRECATED_AGENT_STORED_FIELDS = frozenset({"base_url"})
+
 ELYSIUM_ATLAS_AGENT_CONFIG_DATA = {
     "agent_init_config": {
         "agent_name": "my-agent",
@@ -15,7 +17,6 @@ ELYSIUM_ATLAS_AGENT_CONFIG_DATA = {
         "team_id": None,
         "agent_aliases":[],
         "agent_icon":None,
-        "base_url":None,
         "organization_name":None,
         "llm_model":"gpt-4o-mini",
         "welcome_message":"Hello, I am your AI assistant. How can I help you today?",

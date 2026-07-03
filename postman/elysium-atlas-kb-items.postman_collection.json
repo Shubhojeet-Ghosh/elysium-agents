@@ -1,0 +1,918 @@
+{
+  "info": {
+    "_postman_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "name": "Elysium Atlas — Team KB Items",
+    "description": "Team knowledge library APIs (`/elysium-agents/elysium-atlas/kb-items`).\n\n**Setup**\n1. Set collection variable `base_url` (default `http://localhost:7000`).\n2. Set `atlas_jwt_token` to a valid session JWT (`user_id`, `team_id`, `role`).\n3. Run create requests; `kb_id` / `file_kb_id` are auto-saved from responses when present.\n\nSee `documentation/frontend-kb-items-api-guide.md` for full API details.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{atlas_jwt_token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:7000",
+      "type": "string"
+    },
+    {
+      "key": "atlas_jwt_token",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "kb_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "file_kb_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "file_key",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "URLs",
+      "item": [
+        {
+          "name": "Create URLs (batch)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json.items && json.items[0] && json.items[0].kb_id) {",
+                  "  pm.collectionVariables.set('kb_id', json.items[0].kb_id);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"urls\": [\n    \"https://example.com/docs\",\n    \"https://example.com/pricing\"\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/elysium-agents/elysium-atlas/kb-items/v1/create-urls",
+              "host": ["{{base_url}}"],
+              "path": [
+                "elysium-agents",
+                "elysium-atlas",
+                "kb-items",
+                "v1",
+                "create-urls"
+              ]
+            },
+            "description": "Batch create URL items. One `kb_id` per URL. Indexing runs in background."
+          },
+          "response": []
+        },
+        {
+          "name": "List URLs",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"page\": 1,\n  \"limit\": 10\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/elysium-agents/elysium-atlas/kb-items/v1/list-urls",
+              "host": ["{{base_url}}"],
+              "path": [
+                "elysium-agents",
+                "elysium-atlas",
+                "kb-items",
+                "v1",
+                "list-urls"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get URL",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"kb_id\": \"{{kb_id}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/elysium-agents/elysium-atlas/kb-items/v1/get-url",
+              "host": ["{{base_url}}"],
+              "path": [
+                "elysium-agents",
+                "elysium-atlas",
+                "kb-items",
+                "v1",
+                "get-url"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Update URL",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"kb_id\": \"{{kb_id}}\",\n  \"url\": \"https://example.com/updated-page\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/elysium-agents/elysium-atlas/kb-items/v1/update-url",
+              "host": ["{{base_url}}"],
+              "path": [
+                "elysium-agents",
+                "elysium-atlas",
+                "kb-items",
+                "v1",
+                "update-url"
+              ]
+            },
+            "description": "Updates URL and triggers re-index in background."
+          },
+          "response": []
+        },
+        {
+          "name": "Delete URL",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"kb_id\": \"{{kb_id}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/elysium-agents/elysium-atlas/kb-items/v1/delete-url",
+              "host": ["{{base_url}}"],
+              "path": [
+                "elysium-agents",
+                "elysium-atlas",
+                "kb-items",
+                "v1",
+                "delete-url"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Files",
+      "item": [
+        {
+          "name": "Create File (draft shell)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json.kb_id) {",
+                  "  pm.collectionVariables.set('file_kb_id', json.kb_id);",
+                  "  pm.collectionVariables.set('kb_id', json.kb_id);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"file_name\": \"product-guide.pdf\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/elysium-agents/elysium-atlas/kb-items/v1/create-file",
+              "host": ["{{base_url}}"],
+              "path": [
+                "elysium-agents",
+                "elysium-atlas",
+                "kb-items",
+                "v1",
+                "create-file"
+              ]
+            },
+            "description": "Step 1 of file upload: creates a draft item and returns `kb_id`."
+          },
+          "response": []
+        },
+        {
+          "name": "Generate Presigned URLs",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json.presigned_urls && json.presigned_urls[0] && json.presigned_urls[0].s3_key) {",
+                  "  pm.collectionVariables.set('file_key', json.presigned_urls[0].s3_key);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"kb_id\": \"{{file_kb_id}}\",\n  \"files\": [\n    {\n      \"file_name\": \"product-guide.pdf\",\n      \"filetype\": \"application/pdf\"\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/elysium-agents/elysium-atlas/kb-items/v1/generate-presigned-urls",
+              "host": ["{{base_url}}"],
+              "path": [
+                "elysium-agents",
+                "elysium-atlas",
+                "kb-items",
+                "v1",
+                "generate-presigned-urls"
+              ]
+            },
+            "description": "Step 2: get S3 presigned upload URL(s). Upload file to S3 with PUT outside Postman (or use presigned URL in a separate request)."
+          },
+          "response": []
+        },
+        {
+          "name": "Finalize File",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"kb_id\": \"{{file_kb_id}}\",\n  \"file_key\": \"{{file_key}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/elysium-agents/elysium-atlas/kb-items/v1/finalize-file",
+              "host": ["{{base_url}}"],
+              "path": [
+                "elysium-agents",
+                "elysium-atlas",
+                "kb-items",
+                "v1",
+                "finalize-file"
+              ]
+            },
+            "description": "Step 3: after S3 upload, finalize same `kb_id` (Option A replace) and trigger indexing."
+          },
+          "response": []
+        },
+        {
+          "name": "List Files",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"page\": 1,\n  \"limit\": 10\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/elysium-agents/elysium-atlas/kb-items/v1/list-files",
+              "host": ["{{base_url}}"],
+              "path": [
+                "elysium-agents",
+                "elysium-atlas",
+                "kb-items",
+                "v1",
+                "list-files"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get File",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"kb_id\": \"{{file_kb_id}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/elysium-agents/elysium-atlas/kb-items/v1/get-file",
+              "host": ["{{base_url}}"],
+              "path": [
+                "elysium-agents",
+                "elysium-atlas",
+                "kb-items",
+                "v1",
+                "get-file"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Delete File",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"kb_id\": \"{{file_kb_id}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/elysium-agents/elysium-atlas/kb-items/v1/delete-file",
+              "host": ["{{base_url}}"],
+              "path": [
+                "elysium-agents",
+                "elysium-atlas",
+                "kb-items",
+                "v1",
+                "delete-file"
+              ]
+            }
+          },
+          "response": []
+        }
+      ],
+      "description": "File flow: create-file → generate-presigned-urls → PUT to S3 → finalize-file"
+    },
+    {
+      "name": "Custom Texts",
+      "item": [
+        {
+          "name": "Create Custom Text",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json.kb_id) {",
+                  "  pm.collectionVariables.set('kb_id', json.kb_id);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"custom_text_alias\": \"refund_policy\",\n  \"content\": \"Our refund policy allows returns within 30 days of purchase with proof of receipt.\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/elysium-agents/elysium-atlas/kb-items/v1/create-custom-text",
+              "host": ["{{base_url}}"],
+              "path": [
+                "elysium-agents",
+                "elysium-atlas",
+                "kb-items",
+                "v1",
+                "create-custom-text"
+              ]
+            },
+            "description": "`custom_text_alias` must match `^[a-z][a-z0-9_]{0,63}$` and be unique per team."
+          },
+          "response": []
+        },
+        {
+          "name": "List Custom Texts",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"page\": 1,\n  \"limit\": 10\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/elysium-agents/elysium-atlas/kb-items/v1/list-custom-texts",
+              "host": ["{{base_url}}"],
+              "path": [
+                "elysium-agents",
+                "elysium-atlas",
+                "kb-items",
+                "v1",
+                "list-custom-texts"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Custom Text",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"kb_id\": \"{{kb_id}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/elysium-agents/elysium-atlas/kb-items/v1/get-custom-text",
+              "host": ["{{base_url}}"],
+              "path": [
+                "elysium-agents",
+                "elysium-atlas",
+                "kb-items",
+                "v1",
+                "get-custom-text"
+              ]
+            },
+            "description": "Response includes full `content` from Mongo."
+          },
+          "response": []
+        },
+        {
+          "name": "Update Custom Text",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"kb_id\": \"{{kb_id}}\",\n  \"content\": \"Updated refund policy text. Returns accepted within 14 days.\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/elysium-agents/elysium-atlas/kb-items/v1/update-custom-text",
+              "host": ["{{base_url}}"],
+              "path": [
+                "elysium-agents",
+                "elysium-atlas",
+                "kb-items",
+                "v1",
+                "update-custom-text"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Delete Custom Text",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"kb_id\": \"{{kb_id}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/elysium-agents/elysium-atlas/kb-items/v1/delete-custom-text",
+              "host": ["{{base_url}}"],
+              "path": [
+                "elysium-agents",
+                "elysium-atlas",
+                "kb-items",
+                "v1",
+                "delete-custom-text"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Q&A Pairs",
+      "item": [
+        {
+          "name": "Create Q&A Pair",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json.kb_id) {",
+                  "  pm.collectionVariables.set('kb_id', json.kb_id);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"qna_alias\": \"shipping_time\",\n  \"question\": \"How long does shipping take?\",\n  \"answer\": \"Standard shipping takes 5-7 business days within the continental US.\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/elysium-agents/elysium-atlas/kb-items/v1/create-qa-pair",
+              "host": ["{{base_url}}"],
+              "path": [
+                "elysium-agents",
+                "elysium-atlas",
+                "kb-items",
+                "v1",
+                "create-qa-pair"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "List Q&A Pairs",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"page\": 1,\n  \"limit\": 10\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/elysium-agents/elysium-atlas/kb-items/v1/list-qa-pairs",
+              "host": ["{{base_url}}"],
+              "path": [
+                "elysium-agents",
+                "elysium-atlas",
+                "kb-items",
+                "v1",
+                "list-qa-pairs"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Q&A Pair",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"kb_id\": \"{{kb_id}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/elysium-agents/elysium-atlas/kb-items/v1/get-qa-pair",
+              "host": ["{{base_url}}"],
+              "path": [
+                "elysium-agents",
+                "elysium-atlas",
+                "kb-items",
+                "v1",
+                "get-qa-pair"
+              ]
+            },
+            "description": "Response includes `question` and `answer` from Mongo."
+          },
+          "response": []
+        },
+        {
+          "name": "Update Q&A Pair",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"kb_id\": \"{{kb_id}}\",\n  \"answer\": \"Express shipping is available for 2-day delivery.\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/elysium-agents/elysium-atlas/kb-items/v1/update-qa-pair",
+              "host": ["{{base_url}}"],
+              "path": [
+                "elysium-agents",
+                "elysium-atlas",
+                "kb-items",
+                "v1",
+                "update-qa-pair"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Delete Q&A Pair",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"kb_id\": \"{{kb_id}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/elysium-agents/elysium-atlas/kb-items/v1/delete-qa-pair",
+              "host": ["{{base_url}}"],
+              "path": [
+                "elysium-agents",
+                "elysium-atlas",
+                "kb-items",
+                "v1",
+                "delete-qa-pair"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Search",
+      "item": [
+        {
+          "name": "Search Items",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"source_type\": \"file\",\n  \"search_query\": \"abc.pdf\",\n  \"page\": 1,\n  \"limit\": 20\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/elysium-agents/elysium-atlas/kb-items/v1/search-items",
+              "host": ["{{base_url}}"],
+              "path": [
+                "elysium-agents",
+                "elysium-atlas",
+                "kb-items",
+                "v1",
+                "search-items"
+              ]
+            },
+            "description": "Case-insensitive substring search. `source_type`: url | file | custom_text | qa_pair"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Indexing",
+      "item": [
+        {
+          "name": "Reindex Item",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"kb_id\": \"{{kb_id}}\",\n  \"source_type\": \"url\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/elysium-agents/elysium-atlas/kb-items/v1/reindex-item",
+              "host": ["{{base_url}}"],
+              "path": [
+                "elysium-agents",
+                "elysium-atlas",
+                "kb-items",
+                "v1",
+                "reindex-item"
+              ]
+            },
+            "description": "`source_type`: `url` | `file` | `custom_text` | `qa_pair`. Use for retry after `failed` or to refresh URL content."
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}

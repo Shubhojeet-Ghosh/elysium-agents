@@ -2,6 +2,7 @@ from logging_config import get_logger
 from typing import Any, Dict
 from services.elysium_atlas_services.atlas_query_qdrant_services import search_and_merge_agent_knowledge
 from services.elysium_atlas_services.agent_db_operations import get_agent_by_id
+from services.elysium_atlas_services.kb_item.kb_attachment_service import list_ready_kb_ids_for_agent
 from services.socket_emit_services import emit_atlas_response_chunk
 from services.elysium_atlas_services.atlas_chat_session_services import (
     create_and_store_chat_messages,
@@ -17,6 +18,7 @@ from config.retrieval_strategy_config import DEFAULT_RETRIEVAL_STRATEGY
 from services.elysium_atlas_services.atlas_tool_execution_services import run_agent_tool_calling_round
 
 import asyncio
+import json
 import time
 import uuid
 import datetime
@@ -79,10 +81,12 @@ def format_knowledge_base_string(final_results: list) -> str:
         # Build metadata line with only non-falsy values
         metadata_parts = []
         
-        # Add knowledge_source only if page_type exists and knowledge_source is present
         knowledge_source = result.get("knowledge_source", "")
-        if result.get("page_type") and knowledge_source:
+        if knowledge_source:
             metadata_parts.append(f"[knowledge_source: {knowledge_source}]")
+
+        if result.get("source_type"):
+            metadata_parts.append(f'source_type: "{result["source_type"]}"')
         
         # Add optional fields only if they have non-falsy values
         if result.get("summary"):
@@ -218,6 +222,8 @@ def build_messages_list(
 
 async def chat_with_agent_v1(agent_id, message, sid=None, chat_session_id=None, additional_params: dict = {}):
     chat_log = f"[chat agent_id={agent_id}]"
+    request_started_at = additional_params.get("_request_started_at")
+    step_start = time.perf_counter()
     try:
         logger.info(f"{chat_log} Processing visitor message")
 
@@ -225,39 +231,40 @@ async def chat_with_agent_v1(agent_id, message, sid=None, chat_session_id=None, 
         agent_message_id = str(uuid.uuid4())
         user_message_created_at = _resolve_user_message_created_at(additional_params)
 
-        logger.info(f"{chat_log} Loading chat session and agent config")
-        chat_session_data, agent_data = await asyncio.gather(
+        logger.info(f"{chat_log} Loading chat session, agent config, and ready KB attachments")
+        chat_session_data, agent_data, ready_kb_ids = await asyncio.gather(
             get_chat_session_data({
                 "agent_id": agent_id,
                 "chat_session_id": chat_session_id,
                 "limit": 10
             }),
             get_agent_by_id(agent_id),
+            list_ready_kb_ids_for_agent(agent_id),
         )
         chat_history = chat_session_data.get("messages", []) if chat_session_data else []
-        # logger.info(
-        #     f"{chat_log} load_session_and_agent done in "
-        #     f"{(time.perf_counter() - step_start) * 1000:.0f}ms "
-        #     f"(history_messages={len(chat_history)})"
-        # )
+        logger.info(
+            f"{chat_log} load_session_agent_kb_ids done in {(time.perf_counter() - step_start) * 1000:.0f}ms "
+            f"(history_messages={len(chat_history)}, ready_kb_ids={len(ready_kb_ids)})"
+        )
 
         agent_name = chat_session_data.get("agent_name") if chat_session_data else None
 
         retrieval_strategy = (agent_data or {}).get("retrieval_strategy") or DEFAULT_RETRIEVAL_STRATEGY
         logger.info(f"{chat_log} Retrieving knowledge (strategy={retrieval_strategy})")
+        step_start = time.perf_counter()
         final_results = await search_and_merge_agent_knowledge(
-            agent_id, message, retrieval_strategy
+            agent_id, message, retrieval_strategy, ready_kb_ids=ready_kb_ids
         )
-        # logger.info(
-        #     f"{chat_log} knowledge_retrieval done in "
-        #     f"{(time.perf_counter() - step_start) * 1000:.0f}ms "
-        #     f"(strategy={retrieval_strategy}, sources={len(final_results)})"
-        # )
+        logger.info(
+            f"{chat_log} knowledge_retrieval done in {(time.perf_counter() - step_start) * 1000:.0f}ms "
+            f"(strategy={retrieval_strategy}, sources={len(final_results)})"
+        )
         
         if(agent_name):
             agent_data["agent_name"] = agent_name
 
         logger.info(f"{chat_log} Building LLM prompt with knowledge and chat history")
+        step_start = time.perf_counter()
         knowledge_base_string = format_knowledge_base_string(final_results)
         model = agent_data.get("llm_model") or DEFAULT_MODEL
         handler, _ = resolve_model_handler(model)
@@ -269,6 +276,7 @@ async def chat_with_agent_v1(agent_id, message, sid=None, chat_session_id=None, 
         if tool_ids:
             logger.info(f"{chat_log} Checking registered tools for this turn (count={len(tool_ids)})")
             tool_temperature = agent_data.get("temperature", 0.5) if agent_data else 0.5
+            tool_step_start = time.perf_counter()
             try:
                 tool_turn_messages = await run_agent_tool_calling_round(
                     messages,
@@ -278,6 +286,10 @@ async def chat_with_agent_v1(agent_id, message, sid=None, chat_session_id=None, 
             except Exception as tool_error:
                 logger.error(f"{chat_log} Tool calling round failed: {tool_error}", exc_info=True)
                 tool_turn_messages = None
+            logger.info(
+                f"{chat_log} tool_calling_round done in {(time.perf_counter() - tool_step_start) * 1000:.0f}ms "
+                f"(tools_invoked={bool(tool_turn_messages)})"
+            )
 
             if tool_turn_messages:
                 logger.info(
@@ -294,16 +306,15 @@ async def chat_with_agent_v1(agent_id, message, sid=None, chat_session_id=None, 
                 )
             else:
                 logger.info(f"{chat_log} No tools invoked for this turn")
-        # logger.info(
-        #     f"{chat_log} prepare_llm_messages done in "
-        #     f"{(time.perf_counter() - step_start) * 1000:.0f}ms"
-        # )
+        logger.info(
+            f"{chat_log} prepare_llm_messages done in {(time.perf_counter() - step_start) * 1000:.0f}ms "
+            f"(kb_chars={len(knowledge_base_string)}, message_count={len(messages)})"
+        )
         
         chat_payload = {
             "model": model,
             "messages": messages,
         }
-        logger.info(f"Chat payload: {chat_payload}")
         if "temperature" in agent_data:
             chat_payload["temperature"] = agent_data.get("temperature",0.5)
         
@@ -318,14 +329,19 @@ async def chat_with_agent_v1(agent_id, message, sid=None, chat_session_id=None, 
             chat_payload["stream"] = stream
 
         logger.info(f"{chat_log} Generating agent response (model={model}, stream={stream})")
+        logger.info(f"{chat_log} LLM messages: {json.dumps(messages, ensure_ascii=False)}")
+        llm_step_start = time.perf_counter()
         response_obj = await handler(chat_payload)
+        logger.info(
+            f"{chat_log} llm_handler_returned in {(time.perf_counter() - llm_step_start) * 1000:.0f}ms "
+            f"(stream={stream})"
+        )
 
         response_text = ""
         agent_message_created_at = _utc_now()
         stored_messages = None
         if stream and hasattr(response_obj, "__aiter__"):
             first_chunk_emitted = False
-            request_started_at = additional_params.get("_request_started_at")
             async for chunk in response_obj:
                 response_text += chunk
                 if sid:
@@ -333,7 +349,11 @@ async def chat_with_agent_v1(agent_id, message, sid=None, chat_session_id=None, 
                         first_chunk_emitted = True
                         if request_started_at is not None:
                             ttft_ms = (time.perf_counter() - request_started_at) * 1000
-                            logger.info(f"{chat_log} Time to first token: {ttft_ms:.0f}ms")
+                            pre_llm_ms = (llm_step_start - request_started_at) * 1000
+                            logger.info(
+                                f"{chat_log} Time to first token: {ttft_ms:.0f}ms "
+                                f"(pre_llm={pre_llm_ms:.0f}ms, llm_to_first_token={(ttft_ms - pre_llm_ms):.0f}ms)"
+                            )
                     await emit_atlas_response_chunk(chunk, done=False, sid=sid)
 
             agent_mongo_id = None
@@ -372,11 +392,10 @@ async def chat_with_agent_v1(agent_id, message, sid=None, chat_session_id=None, 
                     role="agent",
                 )
             
-            # logger.info(
-            #     f"{chat_log} llm_streaming done in "
-            #     f"{(time.perf_counter() - step_start) * 1000:.0f}ms "
-            #     f"(chars={len(response_text)})"
-            # )
+            logger.info(
+                f"{chat_log} llm_streaming done in {(time.perf_counter() - llm_step_start) * 1000:.0f}ms "
+                f"(chars={len(response_text)})"
+            )
         else:
             response_text = response_obj
 

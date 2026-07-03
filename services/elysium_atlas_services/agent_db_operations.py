@@ -4,6 +4,7 @@ from logging_config import get_logger
 from services.mongo_services import get_collection
 from services.redis_services import cache_get, cache_set
 from bson import ObjectId
+from config.atlas_agent_config_data import DEPRECATED_AGENT_STORED_FIELDS
 
 logger = get_logger()
 
@@ -151,6 +152,8 @@ async def get_agent_fields_by_id(agent_id: str, fields: list[str]) -> Dict[str, 
             # Create result with only requested fields, set missing ones to None
             result = {}
             for field in fields:
+                if field in DEPRECATED_AGENT_STORED_FIELDS:
+                    continue
                 result[field] = agent.get(field, None)
             
             logger.info(f"Retrieved agent fields for agent_id: {agent_id}")
@@ -282,8 +285,13 @@ async def update_agent_fields(agent_id: str, fields: Dict[str, Any]) -> bool:
         if isinstance(agent_id, str):
             agent_id = ObjectId(agent_id)
 
-        # Prepare the update dict
-        update_dict = {**fields, "updated_at": current_time}
+        # Prepare the update dict (never persist deprecated fields)
+        update_dict = {
+            key: value
+            for key, value in fields.items()
+            if key not in DEPRECATED_AGENT_STORED_FIELDS
+        }
+        update_dict["updated_at"] = current_time
 
         # Update the agent document
         result = await collection.update_one(

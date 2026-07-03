@@ -12,12 +12,12 @@
 
 Today, every knowledge source is owned by a single `agent_id`:
 
-| Layer | Collections / storage | Ownership key |
-|-------|----------------------|---------------|
-| Mongo metadata | `atlas_agent_urls`, `atlas_agent_files`, `atlas_custom_texts`, `atlas_qa_pairs` | `agent_id` |
-| Qdrant chunks | `agent_knowledge_base` | `agent_id` + `knowledge_source` |
-| Qdrant item summaries | `agent_web_catalog` | `agent_id` + `url` (URL-only; dropped in new model) |
-| S3 | Paths under `agents/{agent_id}/...` | `agent_id` |
+| Layer                 | Collections / storage                                                           | Ownership key                                       |
+| --------------------- | ------------------------------------------------------------------------------- | --------------------------------------------------- |
+| Mongo metadata        | `atlas_agent_urls`, `atlas_agent_files`, `atlas_custom_texts`, `atlas_qa_pairs` | `agent_id`                                          |
+| Qdrant chunks         | `agent_knowledge_base`                                                          | `agent_id` + `knowledge_source`                     |
+| Qdrant item summaries | `agent_web_catalog`                                                             | `agent_id` + `url` (URL-only; dropped in new model) |
+| S3                    | Paths under `agents/{agent_id}/...`                                             | `agent_id`                                          |
 
 Consequences:
 
@@ -71,13 +71,13 @@ flowchart LR
 
 **No `atlas_knowledge_bases`.** Five collections total: four item stores + one attachment junction.
 
-| Collection | Role |
-|------------|------|
-| `atlas_kb_urls` | One document per URL item; `_id` = `kb_id` |
-| `atlas_kb_files` | One document per file item; `_id` = `kb_id` |
-| `atlas_kb_custom_texts` | One document per custom text item; `_id` = `kb_id` |
-| `atlas_kb_qa_pairs` | One document per Q&A item; `_id` = `kb_id` |
-| `atlas_agent_kb_attachments` | Which `kb_id`s are attached to which agents |
+| Collection                   | Role                                               |
+| ---------------------------- | -------------------------------------------------- |
+| `atlas_kb_urls`              | One document per URL item; `_id` = `kb_id`         |
+| `atlas_kb_files`             | One document per file item; `_id` = `kb_id`        |
+| `atlas_kb_custom_texts`      | One document per custom text item; `_id` = `kb_id` |
+| `atlas_kb_qa_pairs`          | One document per Q&A item; `_id` = `kb_id`         |
+| `atlas_agent_kb_attachments` | Which `kb_id`s are attached to which agents        |
 
 Module-level constants:
 
@@ -93,24 +93,24 @@ AGENT_KB_ATTACHMENTS_COLLECTION = "atlas_agent_kb_attachments"
 
 Each document is a **standalone knowledge item**. Legacy agent-scoped collections map as follows:
 
-| Legacy (agent-scoped) | New (item-scoped) |
-|-----------------------|-------------------|
-| `atlas_agent_urls` | `atlas_kb_urls` |
-| `atlas_agent_files` | `atlas_kb_files` |
-| `atlas_custom_texts` | `atlas_kb_custom_texts` |
-| `atlas_qa_pairs` | `atlas_kb_qa_pairs` |
+| Legacy (agent-scoped) | New (item-scoped)       |
+| --------------------- | ----------------------- |
+| `atlas_agent_urls`    | `atlas_kb_urls`         |
+| `atlas_agent_files`   | `atlas_kb_files`        |
+| `atlas_custom_texts`  | `atlas_kb_custom_texts` |
+| `atlas_qa_pairs`      | `atlas_kb_qa_pairs`     |
 
 **Common fields on every item document:**
 
-| Field | Purpose |
-|-------|---------|
-| `_id` | `kb_id` (ObjectId string) |
-| `team_id` | Owning team — required for RBAC and team library APIs |
-| `status` | `draft` \| `indexing` \| `ready` \| `failed` — per-item indexing state |
-| `created_by_user_id` | Audit |
-| `created_at` / `updated_at` | Timestamps |
+| Field                       | Purpose                                                                |
+| --------------------------- | ---------------------------------------------------------------------- |
+| `_id`                       | `kb_id` (ObjectId string)                                              |
+| `team_id`                   | Owning team — required for RBAC and team library APIs                  |
+| `status`                    | `draft` \| `indexing` \| `ready` \| `failed` — per-item indexing state |
+| `created_by_user_id`        | Audit                                                                  |
+| `created_at` / `updated_at` | Timestamps                                                             |
 
-Plus type-specific fields (e.g. `url`, `file_key`, `custom_text_alias`, `qna_alias`, question/answer text, etc.) — largely the same as today, minus `agent_id`.
+Plus type-specific fields — e.g. `url`, `file_key`, `file_name`, `custom_text_alias`, **`content`** (custom text), `qna_alias`, **`question`**, **`answer`** (Q&A). Full text lives in **Mongo**; Qdrant stores chunks and catalog summary only. No `agent_id`.
 
 **Resolving a `kb_id`:** globally unique `_id`; use `source_type` on the attachment row (or a team index/registry later) to know which of the four collections to read.
 
@@ -132,13 +132,13 @@ Junction collection for many-to-many agent ↔ item links.
 }
 ```
 
-| Field | Purpose |
-|-------|---------|
-| `agent_id` | Agent receiving the knowledge item |
-| `kb_id` | Item `_id` in one of the `atlas_kb_*` collections |
-| `team_id` | Denormalized — must match both agent and item `team_id` |
-| `source_type` | `url` \| `file` \| `custom_text` \| `qa_pair` — avoids scanning all four collections on read |
-| `attached_by_user_id` / `attached_at` | Audit |
+| Field                                 | Purpose                                                                                      |
+| ------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `agent_id`                            | Agent receiving the knowledge item                                                           |
+| `kb_id`                               | Item `_id` in one of the `atlas_kb_*` collections                                            |
+| `team_id`                             | Denormalized — must match both agent and item `team_id`                                      |
+| `source_type`                         | `url` \| `file` \| `custom_text` \| `qa_pair` — avoids scanning all four collections on read |
+| `attached_by_user_id` / `attached_at` | Audit                                                                                        |
 
 **Indexes:**
 
@@ -164,10 +164,10 @@ Two team-wide collections. **No `agent_id` on any point** — agent scope is res
 
 Drop legacy collections: `agent_knowledge_base`, `agent_web_catalog` (no backfill).
 
-| Collection | Role | Granularity | Vector source |
-|------------|------|-------------|---------------|
-| `team_knowledge_base` | Chunk store (replaces `agent_knowledge_base`) | Many points per item | `text_content` |
-| `kb_item_catalog` | Item summaries for routing (replaces `agent_web_catalog`) | **Exactly 1 point per `kb_id`** | `summary` |
+| Collection            | Role                                                      | Granularity                     | Vector source  |
+| --------------------- | --------------------------------------------------------- | ------------------------------- | -------------- |
+| `team_knowledge_base` | Chunk store (replaces `agent_knowledge_base`)             | Many points per item            | `text_content` |
+| `kb_item_catalog`     | Item summaries for routing (replaces `agent_web_catalog`) | **Exactly 1 point per `kb_id`** | `summary`      |
 
 Embedding: `text-embedding-3-small`, dimension **1536**, distance **cosine** (same as today).
 
@@ -227,16 +227,16 @@ flowchart TB
 }
 ```
 
-| Payload field | Required | Notes |
-|---------------|----------|-------|
-| `kb_id` | yes | Primary filter key — matches Mongo item `_id` |
-| `team_id` | yes | Bulk delete / admin; not used in normal agent retrieval |
-| `source_type` | yes | `url` \| `file` \| `custom_text` \| `qa_pair` |
-| `knowledge_source` | yes | URL, S3 key, or alias — display and debug |
-| `text_index` | yes | `0, 1, 2, ...` within this item |
-| `text_content` | yes | Chunk text (embedding source) |
-| `knowledge_type` | no | e.g. `web_content`, `file_content`, `custom_text`, `qa_pair` |
-| `created_at` | no | ISO timestamp |
+| Payload field      | Required | Notes                                                        |
+| ------------------ | -------- | ------------------------------------------------------------ |
+| `kb_id`            | yes      | Primary filter key — matches Mongo item `_id`                |
+| `team_id`          | yes      | Bulk delete / admin; not used in normal agent retrieval      |
+| `source_type`      | yes      | `url` \| `file` \| `custom_text` \| `qa_pair`                |
+| `knowledge_source` | yes      | URL, S3 key, or alias — display and debug                    |
+| `text_index`       | yes      | `0, 1, 2, ...` within this item                              |
+| `text_content`     | yes      | Chunk text (embedding source)                                |
+| `knowledge_type`   | no       | e.g. `web_content`, `file_content`, `custom_text`, `qa_pair` |
+| `created_at`       | no       | ISO timestamp                                                |
 
 **Payload indexes:** `kb_id` (required), `team_id`, `source_type` (optional).
 
@@ -274,45 +274,45 @@ Replaces `agent_web_catalog` for **all** source types (not URL-only). With per-i
 }
 ```
 
-| Payload field | Required | Notes |
-|---------------|----------|-------|
-| `kb_id` | yes | Same as point ID |
-| `team_id` | yes | |
-| `source_type` | yes | |
-| `knowledge_source` | yes | Canonical key from Mongo |
-| `title` | no | File name, URL label, text alias, or question preview |
-| `summary` | yes | 2–3 dense sentences — **embedding source** |
-| `metadata` | no | Type-specific extras (see below) |
-| `chunk_count` | no | UI / debugging |
-| `created_at` / `updated_at` | no | |
+| Payload field               | Required | Notes                                                 |
+| --------------------------- | -------- | ----------------------------------------------------- |
+| `kb_id`                     | yes      | Same as point ID                                      |
+| `team_id`                   | yes      |                                                       |
+| `source_type`               | yes      |                                                       |
+| `knowledge_source`          | yes      | Canonical key from Mongo                              |
+| `title`                     | no       | File name, URL label, text alias, or question preview |
+| `summary`                   | yes      | 2–3 dense sentences — **embedding source**            |
+| `metadata`                  | no       | Type-specific extras (see below)                      |
+| `chunk_count`               | no       | UI / debugging                                        |
+| `created_at` / `updated_at` | no       |                                                       |
 
 **`metadata` by `source_type`:**
 
-| `source_type` | `metadata` fields |
-|---------------|-------------------|
-| `url` | `page_type`, `product_name`, `product_id`, `category`, `price`, `currency`, `is_available` (product pages; same idea as old web catalog) |
-| `file` | `file_name`, `mime_type`, `page_count` |
-| `custom_text` | `custom_text_alias` |
-| `qa_pair` | `qna_alias`, `question_preview` |
+| `source_type` | `metadata` fields                                                                                                                        |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `url`         | `page_type`, `product_name`, `product_id`, `category`, `price`, `currency`, `is_available` (product pages; same idea as old web catalog) |
+| `file`        | `file_name`, `mime_type`, `page_count`                                                                                                   |
+| `custom_text` | `custom_text_alias`                                                                                                                      |
+| `qa_pair`     | `qna_alias`, `question_preview`                                                                                                          |
 
 **Payload indexes:** `kb_id` (required), `team_id`, `source_type`.
 
 #### Qdrant lifecycle
 
-| Event | `kb_item_catalog` | `team_knowledge_base` |
-|-------|-------------------|----------------------|
-| Create / update item | Upsert 1 point (`id = kb_id`) | Delete all points for `kb_id`, re-upsert chunks |
-| Attach item to agent | nothing | nothing |
-| Detach item from agent | nothing | nothing |
-| Delete item | Delete by `kb_id` filter | Delete by `kb_id` filter |
+| Event                  | `kb_item_catalog`             | `team_knowledge_base`                           |
+| ---------------------- | ----------------------------- | ----------------------------------------------- |
+| Create / update item   | Upsert 1 point (`id = kb_id`) | Delete all points for `kb_id`, re-upsert chunks |
+| Attach item to agent   | nothing                       | nothing                                         |
+| Detach item from agent | nothing                       | nothing                                         |
+| Delete item            | Delete by `kb_id` filter      | Delete by `kb_id` filter                        |
 
 #### Legacy mapping
 
-| Old | New |
-|-----|-----|
-| `agent_knowledge_base` | `team_knowledge_base` |
-| `agent_web_catalog` | `kb_item_catalog` |
-| `agent_id` on every point | removed — scope via attachments |
+| Old                                        | New                                                        |
+| ------------------------------------------ | ---------------------------------------------------------- |
+| `agent_knowledge_base`                     | `team_knowledge_base`                                      |
+| `agent_web_catalog`                        | `kb_item_catalog`                                          |
+| `agent_id` on every point                  | removed — scope via attachments                            |
 | `knowledge_source` as primary grouping key | `kb_id` is sufficient; keep `knowledge_source` for display |
 
 ### 3. S3 — path convention
@@ -327,35 +327,71 @@ One upload per file item; all agents that attach that `kb_id` read the same obje
 
 ---
 
-## API & product flow (planned)
+## Phase 1 implementation decisions (locked)
 
-Split **team knowledge item management** from **agent attachment**.
+| Topic               | Decision                                                                                                         |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| Indexing transport  | FastAPI **BackgroundTasks** (not ARQ yet)                                                                        |
+| List APIs           | **Separate** per type: `list-urls`, `list-files`, `list-custom-texts`, `list-qa-pairs`                           |
+| URL create          | **Batch only** (`create-urls`) — one `kb_id` per URL                                                             |
+| Custom text / Q&A   | **Full content in Mongo**; Qdrant = chunks + catalog summary only                                                |
+| Alias uniqueness    | `custom_text_alias` / `qna_alias` unique per `team_id`                                                           |
+| Re-index            | `POST /v1/reindex-item` (`kb_id` + `source_type`) for retry and fresh URL scrape                                 |
+| Catalog summary     | **Per `source_type` LLM prompt**; embed **summary only**                                                         |
+| Agent build/update  | **Strip** `links`, `files`, `custom_texts`, `qa_pairs` immediately; remove legacy agent datasource/indexing code |
+| `query-agent` / RAG | **Deferred** — no retrieval wiring in phase 1                                                                    |
+| File replace        | Same `kb_id`: presigned upload + `finalize-file` → re-index (see frontend guide)                                 |
 
-### Knowledge item CRUD (team library)
+**Frontend guide:** [frontend-kb-items-api-guide.md](./frontend-kb-items-api-guide.md)
 
-| Operation | Intent |
-|-----------|--------|
-| Create item | Insert into the appropriate `atlas_kb_*` collection → returns `kb_id`; enqueue index job |
-| List team items | Paginated library (per type or unified); filter by `team_id` |
-| Get item | Metadata for one `kb_id` (use `source_type` or lookup helper) |
-| Update item | Mutate source content → re-index **that `kb_id` only** |
-| Delete item | Remove Mongo doc, Qdrant points, S3 object; delete all rows in `atlas_agent_kb_attachments` for that `kb_id` |
+### Reusable services (agent-inline create + attach — phase 2)
 
-Auth: team RBAC (same patterns as agents/tools — members read, owner/admin mutate).
+Users manage knowledge in a **dedicated team KB library** (phase 1 APIs). When creating or updating an agent (phase 2), two paths share the same service layer:
 
-### Agent attach / detach (changed)
+| Path                 | Flow                                                                                                                                                 |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Attach existing**  | Client sends `kb_ids` → `kb_attachment_service.attach_kb_items_to_agent(...)`                                                                        |
+| **Inline new items** | Client sends links/files/texts/qa in the agent form → call `kb_item_services.create_*_for_team(...)` first → receive `kb_id`s → attach same as above |
 
-| Today | Planned |
-|-------|---------|
-| `build-agent` sends `links`, `files`, `custom_texts`, `qa_pairs` | Create items in team library (or pick existing `kb_id`s) → write `atlas_agent_kb_attachments` |
-| Re-index on every agent update that touches sources | Attach/detach only changes junction rows — **no re-index** |
-| Datasource list APIs keyed by `agent_id` | List attachments for agent, join to `atlas_kb_*` for display |
+**Do not** embed knowledge indexing inside `build-agent` / `update-agent`. Agent controllers orchestrate; `kb_item_services` + `kb_index_service` own create/update/index; `kb_attachment_service` owns the junction table.
 
-Existing datasource docs ([agents-datasource.md](./agents-datasource.md)) will need a follow-up revision once endpoints are defined.
+Entry points in `services/elysium_atlas_services/kb_item/`:
 
-### Presigned URLs
+- `kb_item_services.py` — team-scoped CRUD (`create_url_items_for_team`, `create_file_item_for_team`, `finalize_file_item`, etc.)
+- `kb_index_service.py` — `index_kb_item(kb_id, source_type)` (BackgroundTasks today)
+- `kb_attachment_service.py` — stub for `attach_kb_items_to_agent` / `detach` / `list_kb_ids_for_agent`
 
-`generate-presigned-urls` (or equivalent) targets item `kb_id` + `team_id`, not `agent_id`.
+**File replace (Option A — locked):** keep the same `kb_id`; upload via `generate-presigned-urls` + `finalize-file` → re-index in place. Attachments and Qdrant point IDs stay stable.
+
+---
+
+## API surface (phase 1 — indexing & CRUD only)
+
+**Base path:** `/elysium-agents/elysium-atlas/kb-items`
+
+**In scope:** team library CRUD + indexing + re-index. **Out of scope:** `atlas_agent_kb_attachments`, `query-agent` retrieval.
+
+| Endpoint                                                                        | Purpose                                                      |
+| ------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| `POST /v1/search-items`                                                         | Paginated substring search per `source_type`                 |
+| `POST /v1/list-urls`                                                            | Paginated URL items                                          |
+| `POST /v1/list-files`                                                           | Paginated file items                                         |
+| `POST /v1/list-custom-texts`                                                    | Paginated custom text items                                  |
+| `POST /v1/list-qa-pairs`                                                        | Paginated Q&A items                                          |
+| `POST /v1/get-url` / `get-file` / `get-custom-text` / `get-qa-pair`             | Item detail (Mongo includes full text for custom text / Q&A) |
+| `POST /v1/delete-url` / `delete-file` / `delete-custom-text` / `delete-qa-pair` | Delete item + Qdrant (+ S3 for files)                        |
+| `POST /v1/create-urls`                                                          | Batch create URLs → one `kb_id` each → index                 |
+| `POST /v1/update-url`                                                           | Update URL → re-index                                        |
+| `POST /v1/create-file`                                                          | File shell (`draft`)                                         |
+| `POST /v1/generate-presigned-urls`                                              | S3 upload URLs                                               |
+| `POST /v1/finalize-file`                                                        | After S3 upload → index                                      |
+| `POST /v1/create-custom-text` / `update-custom-text`                            | Mongo `content` + index                                      |
+| `POST /v1/create-qa-pair` / `update-qa-pair`                                    | Mongo `question`/`answer` + index                            |
+| `POST /v1/reindex-item`                                                         | Retry or refresh index for any item                          |
+
+URL prep (`ping-url`, `scrape-urls`, `extract-url-links`) stays under `/elysium-atlas`.
+
+**Code removal (phase 1):** agent knowledge on `build-agent`/`update-agent`, agent datasource routes, `atlas_url_index_services`, `atlas_files_index_services`, `atlas_custom_knowledge_services`, agent-scoped Qdrant indexing, `agent_knowledge_base` / `agent_web_catalog`.
 
 ---
 
@@ -398,18 +434,18 @@ Stage 1 selects **which items** are relevant; stage 2 fetches **chunks** inside 
 sequenceDiagram
     participant User
     participant API
-    participant ARQ
+    participant BG as BackgroundTasks
     participant Mongo
     participant Qdrant
 
     User->>API: Create or update KB item
     API->>Mongo: Upsert atlas_kb_* document (kb_id)
-    API->>ARQ: Enqueue index_kb_item job
-    ARQ->>Qdrant: Upsert chunks + item catalog (kb_id)
-    ARQ->>Mongo: Set item status ready / failed
+    API->>BG: index_kb_item(kb_id, source_type)
+    BG->>Qdrant: Upsert chunks + item catalog (kb_id)
+    BG->>Mongo: Set item status ready / failed
 ```
 
-- Indexing jobs are **item-scoped** (`index_kb_item` keyed by `kb_id` + `source_type`).
+- Indexing runs via **FastAPI BackgroundTasks** (phase 1); ARQ optional later.
 - Attaching an item to an agent does **not** enqueue indexing.
 - Detaching does **not** delete Qdrant data.
 - Deleting an item removes its vectors and all attachment rows for that `kb_id`.
@@ -420,16 +456,16 @@ Reuse existing scraping, chunking, embedding, and summary logic; change ownershi
 
 ## What changes in the codebase (checklist for later)
 
-| Area | Change |
-|------|--------|
-| `routes/` / `controllers/` | Team item CRUD routes; agent attach/detach routes |
-| `services/elysium_atlas_services/` | KB item services; attachment service; refactor index/query |
-| `qdrant_collection_helpers.py` | `team_knowledge_base` + `kb_item_catalog` constants, ensure-collection, payload indexes |
-| `mongo_indexes.py` | Indexes on `atlas_kb_*.team_id`, `atlas_agent_kb_attachments` |
-| `jobs/` | Item-scoped indexing tasks |
-| `agent_services.py` | Build/update no longer index inline sources |
-| `atlas_query_qdrant_services.py` | Resolve `kb_id`s from attachments, then filter Qdrant |
-| Frontend guides | New team library + attach API guide; update create/update and datasource docs |
+| Area                               | Change                                                                                  |
+| ---------------------------------- | --------------------------------------------------------------------------------------- |
+| `routes/` / `controllers/`         | Team item CRUD routes; agent attach/detach routes                                       |
+| `services/elysium_atlas_services/` | KB item services; attachment service; refactor index/query                              |
+| `qdrant_collection_helpers.py`     | `team_knowledge_base` + `kb_item_catalog` constants, ensure-collection, payload indexes |
+| `mongo_indexes.py`                 | Indexes on `atlas_kb_*.team_id`, `atlas_agent_kb_attachments`                           |
+| `jobs/`                            | Item-scoped indexing tasks                                                              |
+| `agent_services.py`                | Build/update no longer index inline sources                                             |
+| `atlas_query_qdrant_services.py`   | Resolve `kb_id`s from attachments, then filter Qdrant                                   |
+| Frontend guides                    | New team library + attach API guide; update create/update and datasource docs           |
 
 ---
 
@@ -444,13 +480,12 @@ Reuse existing scraping, chunking, embedding, and summary logic; change ownershi
 
 ---
 
-## Open decisions (to resolve before implementation)
+## Open decisions (to resolve before / during implementation)
 
-1. **Team library UX** — list APIs per `source_type` vs unified paginated feed across all four collections.
-2. **Delete item policy** — block delete if attached to agents vs. auto-detach with warning.
-3. **`kb_id` lookup helper** — require `source_type` on every API call vs. maintain a lightweight `atlas_kb_items` index `{ kb_id, source_type, team_id }` for O(1) routing without scanning four collections.
-4. **Status model** — per-item `status` on each `atlas_kb_*` doc only (current plan), or additional job-level progress fields.
-5. **Retrieval defaults** — simple vs two-stage catalog routing as default strategy; limit tuning.
+1. **File replace UX** — **resolved:** same `kb_id` via presigned + `finalize-file` → re-index (Option A). Open: delete old S3 object on replace?
+2. **`kb_id` lookup helper** — require `source_type` on reindex vs lightweight `atlas_kb_items` index (optional).
+3. **Retrieval defaults** — simple vs two-stage catalog routing (when `query-agent` is wired).
+4. **List responses** — include `summary` on list rows or get-only.
 
 ---
 
@@ -469,3 +504,4 @@ Reuse existing scraping, chunking, embedding, and summary logic; change ownershi
 - [agents-datasource.md](./agents-datasource.md) — current agent-scoped list APIs (will change)
 - [frontend-agent-create-update-api-guide.md](./frontend-agent-create-update-api-guide.md) — current build/update flow (will change)
 - [frontend-agents-rbac-guide.md](./frontend-agents-rbac-guide.md) — team RBAC patterns to reuse for KB APIs
+- [team-kb-retrieval.md](./team-kb-retrieval.md) — chat-time RAG retrieval (simple mode)

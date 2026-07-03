@@ -37,9 +37,8 @@ async def lifespan(app: FastAPI):
     # Initialize Qdrant client connection
     await initialize_qdrant_client()
     
-    # Ensure agent knowledge base collection exists
-    from services.elysium_atlas_services.qdrant_collection_helpers import ensure_agent_knowledge_base_collection_exists
-    await ensure_agent_knowledge_base_collection_exists()
+    from services.elysium_atlas_services.qdrant_collection_helpers import ensure_kb_qdrant_collections_exist
+    await ensure_kb_qdrant_collections_exist()
     
     yield
     

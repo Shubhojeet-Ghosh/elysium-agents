@@ -29,41 +29,74 @@ async def create_mongo_indexes():
         )
         logger.info("Compound index created on atlas_team_members.team_id, user_id, status")
 
-        # Create indexes for atlas_agent_urls collection
-        atlas_agent_urls_collection = get_collection("atlas_agent_urls")
-        await atlas_agent_urls_collection.create_index("agent_id", name="agent_id_index")
-        logger.info("Index created on atlas_agent_urls.agent_id")
-        await atlas_agent_urls_collection.create_index("url", name="url_index")
-        logger.info("Index created on atlas_agent_urls.url")
-        await atlas_agent_urls_collection.create_index([("agent_id", 1), ("updated_at", -1), ("_id", -1)], name="agent_id_updated_at_id_index")
-        logger.info("Compound index created on atlas_agent_urls.agent_id, updated_at, _id for pagination")
+        from config.kb_item_constants import (
+            AGENT_KB_ATTACHMENTS_COLLECTION,
+            KB_CUSTOM_TEXTS_COLLECTION,
+            KB_FILES_COLLECTION,
+            KB_QA_PAIRS_COLLECTION,
+            KB_URLS_COLLECTION,
+        )
 
-        # Create indexes for atlas_agent_files collection
-        atlas_agent_files_collection = get_collection("atlas_agent_files")
-        await atlas_agent_files_collection.create_index("agent_id", name="agent_id_index_files")
-        logger.info("Index created on atlas_agent_files.agent_id")
-        await atlas_agent_files_collection.create_index("file_key", name="file_key_index")
-        logger.info("Index created on atlas_agent_files.file_key")
-        await atlas_agent_files_collection.create_index([("agent_id", 1), ("updated_at", -1), ("_id", -1)], name="agent_id_updated_at_id_index_files")
-        logger.info("Compound index created on atlas_agent_files.agent_id, updated_at, _id for pagination")
+        atlas_kb_urls = get_collection(KB_URLS_COLLECTION)
+        await atlas_kb_urls.create_index("team_id", name="team_id_1")
+        await atlas_kb_urls.create_index("url", name="url_1")
+        await atlas_kb_urls.create_index(
+            [("team_id", 1), ("updated_at", -1), ("_id", -1)],
+            name="team_id_updated_at_id_1",
+        )
+        logger.info(f"Indexes created on {KB_URLS_COLLECTION}")
 
-        # Create indexes for atlas_custom_texts collection
-        atlas_custom_texts_collection = get_collection("atlas_custom_texts")
-        await atlas_custom_texts_collection.create_index("agent_id", name="agent_id_index_texts")
-        logger.info("Index created on atlas_custom_texts.agent_id")
-        await atlas_custom_texts_collection.create_index("custom_text_alias", name="custom_text_alias_index")
-        logger.info("Index created on atlas_custom_texts.custom_text_alias")
-        await atlas_custom_texts_collection.create_index([("agent_id", 1), ("updated_at", -1), ("_id", -1)], name="agent_id_updated_at_id_index_texts")
-        logger.info("Compound index created on atlas_custom_texts.agent_id, updated_at, _id for pagination")
+        atlas_kb_files = get_collection(KB_FILES_COLLECTION)
+        await atlas_kb_files.create_index("team_id", name="team_id_1")
+        await atlas_kb_files.create_index("file_key", name="file_key_1")
+        await atlas_kb_files.create_index(
+            [("team_id", 1), ("updated_at", -1), ("_id", -1)],
+            name="team_id_updated_at_id_1",
+        )
+        logger.info(f"Indexes created on {KB_FILES_COLLECTION}")
 
-        # Create indexes for atlas_qa_pairs collection
-        atlas_qa_pairs_collection = get_collection("atlas_qa_pairs")
-        await atlas_qa_pairs_collection.create_index("agent_id", name="agent_id_index_qa")
-        logger.info("Index created on atlas_qa_pairs.agent_id")
-        await atlas_qa_pairs_collection.create_index("qna_alias", name="qna_alias_index")
-        logger.info("Index created on atlas_qa_pairs.qna_alias")
-        await atlas_qa_pairs_collection.create_index([("agent_id", 1), ("updated_at", -1), ("_id", -1)], name="agent_id_updated_at_id_index_qa")
-        logger.info("Compound index created on atlas_qa_pairs.agent_id, updated_at, _id for pagination")
+        atlas_kb_custom_texts = get_collection(KB_CUSTOM_TEXTS_COLLECTION)
+        await atlas_kb_custom_texts.create_index("team_id", name="team_id_1")
+        await atlas_kb_custom_texts.create_index(
+            [("team_id", 1), ("custom_text_alias", 1)],
+            name="team_id_custom_text_alias_1",
+            unique=True,
+        )
+        await atlas_kb_custom_texts.create_index(
+            [("team_id", 1), ("updated_at", -1), ("_id", -1)],
+            name="team_id_updated_at_id_1",
+        )
+        logger.info(f"Indexes created on {KB_CUSTOM_TEXTS_COLLECTION}")
+
+        atlas_kb_qa_pairs = get_collection(KB_QA_PAIRS_COLLECTION)
+        await atlas_kb_qa_pairs.create_index("team_id", name="team_id_1")
+        await atlas_kb_qa_pairs.create_index(
+            [("team_id", 1), ("qna_alias", 1)],
+            name="team_id_qna_alias_1",
+            unique=True,
+        )
+        await atlas_kb_qa_pairs.create_index(
+            [("team_id", 1), ("updated_at", -1), ("_id", -1)],
+            name="team_id_updated_at_id_1",
+        )
+        logger.info(f"Indexes created on {KB_QA_PAIRS_COLLECTION}")
+
+        atlas_agent_kb_attachments = get_collection(AGENT_KB_ATTACHMENTS_COLLECTION)
+        await atlas_agent_kb_attachments.create_index(
+            [("agent_id", 1), ("kb_id", 1)],
+            name="agent_id_kb_id_1",
+            unique=True,
+        )
+        await atlas_agent_kb_attachments.create_index("kb_id", name="kb_id_1")
+        await atlas_agent_kb_attachments.create_index(
+            [("agent_id", 1), ("attached_at", -1)],
+            name="agent_id_attached_at_1",
+        )
+        await atlas_agent_kb_attachments.create_index(
+            [("team_id", 1), ("agent_id", 1)],
+            name="team_id_agent_id_1",
+        )
+        logger.info(f"Indexes created on {AGENT_KB_ATTACHMENTS_COLLECTION}")
 
         # Create indexes for elysium_atlas_users collection
         elysium_atlas_users_collection = get_collection("elysium_atlas_users")

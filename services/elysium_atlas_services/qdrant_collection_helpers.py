@@ -1,293 +1,96 @@
 from qdrant_client.models import Distance, VectorParams
 from logging_config import get_logger
 from services.qdrant_services import get_qdrant_client_instance
+from config.kb_item_constants import (
+    TEAM_KNOWLEDGE_BASE_COLLECTION,
+    KB_ITEM_CATALOG_COLLECTION,
+)
 
 logger = get_logger()
 
-# Collection constants
-AGENT_KNOWLEDGE_BASE_COLLECTION_NAME = "agent_knowledge_base"
-AGENT_WEB_CATALOG_COLLECTION_NAME = "agent_web_catalog"
-# Embedding dimension for text-embedding-3-small
 EMBEDDING_DIM = 1536
 EMBEDDING_MODEL = "text-embedding-3-small"
 
-# Reference dictionary for point structure in agent_knowledge_base collection
-# This is for developer reference only - documents the complete structure of points
-AGENT_KNOWLEDGE_BASE_POINT_PAYLOAD_KEYS = {
-    "vector": {
-        "required": True,
-        "type": "list[float]",
-        "dimension": EMBEDDING_DIM,
-        "model": EMBEDDING_MODEL,
-        "source_key": "text_content",
-        "description": f"Vector embeddings of the text_content field. Generated using {EMBEDDING_MODEL} model with dimension {EMBEDDING_DIM}. The vector represents the semantic meaning of the text_content."
-    },
-    "payload": {
-        "agent_id": {
-            "required": True,
-            "type": "string",
-            "description": "The ID of the agent that owns this knowledge chunk"
-        },
-        "knowledge_source": {
-            "required": True,
-            "type": "string",
-            "description": "The source identifier for this knowledge chunk (e.g., URL for web content, file path for files, etc.)"
-        },
-        "text_index": {
-            "required": True,
-            "type": "integer",
-            "description": "The index of this text chunk within the original document (0, 1, 2, ...) to maintain order"
-        },
-        "text_content": {
-            "required": True,
-            "type": "string",
-            "description": "The actual text content chunk that was indexed. This is the source text from which the vector embeddings were generated."
-        },
-        "knowledge_type": {
-            "required": False,
-            "type": "string",
-            "description": "The type of knowledge this chunk represents"
-        },
-        "created_at": {
-            "required": False,
-            "type": "string (ISO format)",
-            "description": "Timestamp when this point was created"
-        }
-    }
-}
-
-# Reference dictionary for point structure in agent_web_catalog collection
-# This is for developer reference only - documents the complete structure of points
-AGENT_WEB_CATALOG_POINT_PAYLOAD_KEYS = {
-    "vector": {
-        "required": True,
-        "type": "list[float]",
-        "dimension": EMBEDDING_DIM,
-        "model": EMBEDDING_MODEL,
-        "source_key": "summary",
-        "description": f"Vector embeddings of the summary field. Generated using {EMBEDDING_MODEL} model with dimension {EMBEDDING_DIM}. The vector represents the semantic meaning of the page summary for agent routing and semantic search."
-    },
-    "payload": {
-        "agent_id": {
-            "required": True,
-            "type": "string",
-            "description": "The ID of the agent that owns this web catalog entry"
-        },
-        "url": {
-            "required": True,
-            "type": "string",
-            "description": "The canonical URL of the page. Used as unique identifier per agent (one point per URL per agent)."
-        },
-        "page_type": {
-            "required": True,
-            "type": "string (Literal['product', 'content'])",
-            "description": "Type of page: 'product' for product pages, 'content' for non-product pages"
-        },
-        "summary": {
-            "required": True,
-            "type": "string",
-            "description": "LLM-generated semantic summary of the page (150-300 tokens). Used for embeddings and agent routing."
-        },
-        "product_name": {
-            "required": False,
-            "type": "string | None",
-            "description": "Display name of the product as shown in the store (only for product pages)"
-        },
-        "product_id": {
-            "required": False,
-            "type": "string | None",
-            "description": "Unique product identifier or SKU (only for product pages)"
-        },
-        "category": {
-            "required": False,
-            "type": "string | None",
-            "description": "Product category (e.g., 'Filter Units', 'Jackets', 'Shoes')"
-        },
-        "price": {
-            "required": False,
-            "type": "float | None",
-            "description": "Product price if available"
-        },
-        "currency": {
-            "required": False,
-            "type": "string | None",
-            "description": "Currency code (e.g., 'EUR', 'USD', 'INR')"
-        },
-        "is_available": {
-            "required": False,
-            "type": "bool | None",
-            "description": "True if the product is currently available"
-        },
-        "created_at": {
-            "required": False,
-            "type": "string (ISO format)",
-            "description": "Timestamp when this point was created/updated"
-        }
-    }
-}
-
-# Track if collection has been ensured
-_collection_ensured = False
+_team_kb_collection_ensured = False
+_kb_catalog_collection_ensured = False
 
 
-async def ensure_agent_knowledge_base_collection_exists():
-    """
-    Ensure the Qdrant collection 'agent_knowledge_base' exists, create it if it doesn't.
-    Also ensures payload indexes exist for agent_id and knowledge_source fields.
-    This function is idempotent and can be called multiple times safely.
-    """
-    global _collection_ensured
-    
-    # If already ensured, return early
-    if _collection_ensured:
+async def ensure_team_knowledge_base_collection_exists() -> None:
+    global _team_kb_collection_ensured
+    if _team_kb_collection_ensured:
         return
-    
+
     try:
         client = get_qdrant_client_instance()
-        
-        # Check if collection exists
         collections = await client.get_collections()
-        collection_names = [col.name for col in collections.collections]
-        
-        collection_created = False
-        if AGENT_KNOWLEDGE_BASE_COLLECTION_NAME not in collection_names:
-            # Create collection with embedding vector config
+        names = [col.name for col in collections.collections]
+
+        if TEAM_KNOWLEDGE_BASE_COLLECTION not in names:
             await client.create_collection(
-                collection_name=AGENT_KNOWLEDGE_BASE_COLLECTION_NAME,
-                vectors_config=VectorParams(
-                    size=EMBEDDING_DIM,
-                    distance=Distance.COSINE
+                collection_name=TEAM_KNOWLEDGE_BASE_COLLECTION,
+                vectors_config=VectorParams(size=EMBEDDING_DIM, distance=Distance.COSINE),
+            )
+            logger.info(f"Created Qdrant collection: {TEAM_KNOWLEDGE_BASE_COLLECTION}")
+
+        for field_name in ("kb_id", "team_id", "source_type", "knowledge_source"):
+            try:
+                await client.create_payload_index(
+                    collection_name=TEAM_KNOWLEDGE_BASE_COLLECTION,
+                    field_name=field_name,
+                    field_schema="keyword",
                 )
-            )
-            logger.info(f"Created Qdrant collection: {AGENT_KNOWLEDGE_BASE_COLLECTION_NAME} with dimension {EMBEDDING_DIM}")
-            collection_created = True
-        
-        # Create payload indexes for agent_id and knowledge_source if they don't exist
-        # These indexes are required for filtering
-        try:
-            # Create index for agent_id (keyword type for exact matching)
-            await client.create_payload_index(
-                collection_name=AGENT_KNOWLEDGE_BASE_COLLECTION_NAME,
-                field_name="agent_id",
-                field_schema="keyword"
-            )
-            # logger.info(f"Created payload index for 'agent_id' in collection {AGENT_KNOWLEDGE_BASE_COLLECTION_NAME}")
-        except Exception as e:
-            # Index might already exist, which is fine
-            error_msg = str(e).lower()
-            if "already exists" not in error_msg and "index already" not in error_msg:
-                # logger.debug(f"Payload index for 'agent_id' may already exist: {e}")
-                pass
-        
-        try:
-            # Create index for knowledge_source (keyword type for exact matching)
-            await client.create_payload_index(
-                collection_name=AGENT_KNOWLEDGE_BASE_COLLECTION_NAME,
-                field_name="knowledge_source",
-                field_schema="keyword"
-            )
-            # logger.info(f"Created payload index for 'knowledge_source' in collection {AGENT_KNOWLEDGE_BASE_COLLECTION_NAME}")
-        except Exception as e:
-            # Index might already exist, which is fine
-            error_msg = str(e).lower()
-            if "already exists" not in error_msg and "index already" not in error_msg:
-                # logger.debug(f"Payload index for 'knowledge_source' may already exist: {e}")
-                pass
-        
-        try:
-            # Create index for knowledge_type (keyword type for exact matching)
-            await client.create_payload_index(
-                collection_name=AGENT_KNOWLEDGE_BASE_COLLECTION_NAME,
-                field_name="knowledge_type",
-                field_schema="keyword"
-            )
-            # logger.info(f"Created payload index for 'knowledge_type' in collection {AGENT_KNOWLEDGE_BASE_COLLECTION_NAME}")
-        except Exception as e:
-            # Index might already exist, which is fine
-            error_msg = str(e).lower()
-            if "already exists" not in error_msg and "index already" not in error_msg:
-                # logger.debug(f"Payload index for 'knowledge_type' may already exist: {e}")
-                pass
-        
-        # Mark as ensured after successful completion
-        _collection_ensured = True
-            
+            except Exception as e:
+                if "already exists" not in str(e).lower():
+                    logger.debug(f"Payload index {field_name} on {TEAM_KNOWLEDGE_BASE_COLLECTION}: {e}")
+
+        _team_kb_collection_ensured = True
     except Exception as e:
-        logger.error(f"Error ensuring agent knowledge base collection exists: {e}")
+        logger.error(f"Error ensuring {TEAM_KNOWLEDGE_BASE_COLLECTION}: {e}")
         raise
 
 
-# Track if agent_web_catalog collection has been ensured
-_web_catalog_collection_ensured = False
-
-
-async def ensure_agent_web_catalog_collection_exists():
-    """
-    Ensure the Qdrant collection 'agent_web_catalog' exists, create it if it doesn't.
-    Also ensures payload indexes exist for agent_id and url fields.
-    This collection stores metadata about web pages/products for agent routing.
-    This function is idempotent and can be called multiple times safely.
-    """
-    global _web_catalog_collection_ensured
-    
-    # If already ensured, return early
-    if _web_catalog_collection_ensured:
+async def ensure_kb_item_catalog_collection_exists() -> None:
+    global _kb_catalog_collection_ensured
+    if _kb_catalog_collection_ensured:
         return
-    
+
     try:
         client = get_qdrant_client_instance()
-        
-        # Check if collection exists
         collections = await client.get_collections()
-        collection_names = [col.name for col in collections.collections]
-        
-        if AGENT_WEB_CATALOG_COLLECTION_NAME not in collection_names:
-            # Create collection with embedding vector config (for summary embeddings)
+        names = [col.name for col in collections.collections]
+
+        if KB_ITEM_CATALOG_COLLECTION not in names:
             await client.create_collection(
-                collection_name=AGENT_WEB_CATALOG_COLLECTION_NAME,
-                vectors_config=VectorParams(
-                    size=EMBEDDING_DIM,
-                    distance=Distance.COSINE
+                collection_name=KB_ITEM_CATALOG_COLLECTION,
+                vectors_config=VectorParams(size=EMBEDDING_DIM, distance=Distance.COSINE),
+            )
+            logger.info(f"Created Qdrant collection: {KB_ITEM_CATALOG_COLLECTION}")
+
+        for field_name in ("kb_id", "team_id", "source_type"):
+            try:
+                await client.create_payload_index(
+                    collection_name=KB_ITEM_CATALOG_COLLECTION,
+                    field_name=field_name,
+                    field_schema="keyword",
                 )
-            )
-            logger.info(f"Created Qdrant collection: {AGENT_WEB_CATALOG_COLLECTION_NAME} with dimension {EMBEDDING_DIM}")
-        
-        # Create payload indexes for agent_id and url if they don't exist
-        try:
-            # Create index for agent_id (keyword type for exact matching)
-            await client.create_payload_index(
-                collection_name=AGENT_WEB_CATALOG_COLLECTION_NAME,
-                field_name="agent_id",
-                field_schema="keyword"
-            )
-        except Exception as e:
-            # Index might already exist, which is fine
-            error_msg = str(e).lower()
-            if "already exists" not in error_msg and "index already" not in error_msg:
-                pass
-        
-        try:
-            # Create index for url (keyword type for exact matching)
-            await client.create_payload_index(
-                collection_name=AGENT_WEB_CATALOG_COLLECTION_NAME,
-                field_name="url",
-                field_schema="keyword"
-            )
-        except Exception as e:
-            # Index might already exist, which is fine
-            error_msg = str(e).lower()
-            if "already exists" not in error_msg and "index already" not in error_msg:
-                pass
-        
-        # Mark as ensured after successful completion
-        _web_catalog_collection_ensured = True
-            
+            except Exception as e:
+                if "already exists" not in str(e).lower():
+                    logger.debug(f"Payload index {field_name} on {KB_ITEM_CATALOG_COLLECTION}: {e}")
+
+        _kb_catalog_collection_ensured = True
     except Exception as e:
-        logger.error(f"Error ensuring agent web catalog collection exists: {e}")
+        logger.error(f"Error ensuring {KB_ITEM_CATALOG_COLLECTION}: {e}")
         raise
 
 
-# Note: Collection is automatically ensured during application startup in main.py
-# The ensure_agent_knowledge_base_collection_exists() function is idempotent
-# and can be called multiple times safely
+async def ensure_kb_qdrant_collections_exist() -> None:
+    await ensure_team_knowledge_base_collection_exists()
+    await ensure_kb_item_catalog_collection_exists()
 
+
+# Backward-compatible alias for startup callers
+ensure_agent_knowledge_base_collection_exists = ensure_team_knowledge_base_collection_exists
+
+# Legacy names kept for any external imports; retrieval uses TEAM_KNOWLEDGE_BASE_COLLECTION directly
+AGENT_KNOWLEDGE_BASE_COLLECTION_NAME = TEAM_KNOWLEDGE_BASE_COLLECTION
+AGENT_WEB_CATALOG_COLLECTION_NAME = KB_ITEM_CATALOG_COLLECTION
