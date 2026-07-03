@@ -10,7 +10,7 @@ from services.elysium_atlas_services.atlas_chat_session_services import (
     get_chat_session_in_conversation_with,
 )
 from config.atlas_chat_config import clamp_chat_session_list_page_size, validate_chat_session_search_query
-from services.socket_connection_helpers import merge_socket_session
+from services.socket_connection_helpers import merge_socket_session, resolve_socket_user_id
 
 logger = get_logger()
 
@@ -561,7 +561,7 @@ async def handle_team_member_disconnected_service(session, sid):
         )
 
         team_id = session.get("team_id") if session else None
-        user_id = session.get("user_id") if session else None
+        user_id = resolve_socket_user_id(session)
         session_agent_id = session.get("agent_id") if session else None
 
         # Collect agent_ids BEFORE removing from Redis so the scan is still valid

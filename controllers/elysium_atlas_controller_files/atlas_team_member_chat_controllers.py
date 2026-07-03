@@ -3,6 +3,8 @@ import uuid
 import datetime
 import asyncio
 
+from services.socket_connection_helpers import resolve_socket_user_id
+
 logger = get_logger()
 
 
@@ -23,7 +25,7 @@ async def chat_with_visitor_controller_v1(sid, socketData):
 
         # Get the team member's user_id from their socket session
         session = await sio.get_session(sid)
-        team_member_id = session.get("user_id") if session else None
+        team_member_id = resolve_socket_user_id(session)
 
         if not agent_id or not chat_session_id or message is None:
             logger.warning("atlas team member message missing agent_id/chat_session_id/message")
@@ -132,7 +134,7 @@ async def team_member_start_conversation_controller(sid, socketData):
         chat_session_id = socketData.get("chat_session_id")
 
         session = await sio.get_session(sid)
-        user_id = session.get("user_id") if session else None
+        user_id = resolve_socket_user_id(session)
 
         if not agent_id or not chat_session_id or not user_id:
             logger.warning("atlas-team-member-start-conversation missing agent_id/chat_session_id/user_id")
@@ -219,7 +221,7 @@ async def team_member_monitor_conversation_controller(sid, socketData):
         chat_session_id = socketData.get("chat_session_id")
 
         session = await sio.get_session(sid)
-        user_id = session.get("user_id") if session else None
+        user_id = resolve_socket_user_id(session)
 
         if not agent_id or not chat_session_id or not user_id:
             logger.warning("atlas-team-member-monitor-conversation missing agent_id/chat_session_id/user_id")
@@ -286,7 +288,7 @@ async def team_member_stop_monitor_conversation_controller(sid, socketData):
         chat_session_id = socketData.get("chat_session_id")
 
         session = await sio.get_session(sid)
-        user_id = session.get("user_id") if session else None
+        user_id = resolve_socket_user_id(session)
 
         if agent_id and chat_session_id and user_id:
             remove_session_monitor(agent_id, chat_session_id, user_id, sid=sid)
@@ -319,7 +321,7 @@ async def team_member_end_conversation_controller(sid, socketData):
         chat_session_id = socketData.get("chat_session_id")
 
         session = await sio.get_session(sid)
-        user_id = session.get("user_id") if session else None
+        user_id = resolve_socket_user_id(session)
 
         monitor_sids = get_session_monitor_sids(agent_id, chat_session_id) if agent_id and chat_session_id else []
 
@@ -360,7 +362,7 @@ async def team_member_resolve_session_controller(sid, socketData):
         chat_session_id = socketData.get("chat_session_id")
 
         session = await sio.get_session(sid)
-        user_id = session.get("user_id") if session else None
+        user_id = resolve_socket_user_id(session)
 
         if not agent_id or not chat_session_id or not user_id:
             await emit_chat_session_resolved(

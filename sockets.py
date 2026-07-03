@@ -58,10 +58,16 @@ async def connect(sid, environ, auth):
         user_data = extract_token_from_socket_environ(environ,auth)
         logger.info(f"User data extracted from token: {user_data}")
 
-        if(user_data):
-            # logger.info(f"Saving socketuser data to session: {user_data}")
-            await merge_socket_session(sio, sid, {"user_data": user_data})
-            
+        if user_data:
+            session_updates: dict = {"user_data": user_data}
+            user_id = get_user_id_from_user_data(user_data)
+            if user_id:
+                session_updates["user_id"] = user_id
+            team_id = user_data.get("team_id")
+            if team_id:
+                session_updates["team_id"] = str(team_id).strip()
+            await merge_socket_session(sio, sid, session_updates)
+
             # Add socket ID to user's socket mapping in Redis
             add_user_socket_mapping(user_data, sid)
             

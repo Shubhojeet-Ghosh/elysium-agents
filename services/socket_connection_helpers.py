@@ -114,6 +114,23 @@ def get_socket_connections_count():
         raise
 
 
+def resolve_socket_user_id(session: dict | None) -> str | None:
+    """
+    Resolve authenticated user_id from a Socket.IO session.
+
+    Team member flows store user_id on atlas-team-member-connected; JWT connect
+    only stores user_data until that event runs again after reconnect.
+    """
+    if not session or not isinstance(session, dict):
+        return None
+
+    user_id = session.get("user_id")
+    if user_id:
+        return str(user_id).strip()
+
+    return get_user_id_from_user_data(session.get("user_data"))
+
+
 def get_user_id_from_user_data(user_data: dict) -> str | None:
     """
     Extract user_id from user_data dictionary.
