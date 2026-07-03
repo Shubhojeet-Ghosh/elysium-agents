@@ -1,26 +1,41 @@
 from logging_config import get_logger
-from services.elysium_atlas_services.atlas_redis_services import add_visitor_to_agent, get_visitors_for_agent, get_visitor_count_for_agent, remove_visitor_from_agent, add_team_member, add_agent_member, remove_team_member, remove_agent_member, get_or_cache_agent_data_async, update_visitor_alias_by_chat_session
-from services.elysium_atlas_services.atlas_chat_session_services import set_visitor_online_status, patch_chat_session
+from services.elysium_atlas_services.atlas_redis_services import add_visitor_to_agent, get_visitor_count_for_agent, remove_visitor_from_agent, add_team_member, add_agent_member, remove_team_member, remove_agent_member, get_or_cache_agent_data_async, update_visitor_alias_by_chat_session, get_visitor_by_chat_session
+from services.elysium_atlas_services.atlas_chat_session_services import (
+    set_visitor_online_status,
+    patch_chat_session,
+    ensure_chat_session_for_visitor,
+    count_chat_sessions_for_agent,
+    get_paginated_chat_sessions_for_agent_list,
+    search_paginated_chat_sessions_for_agent,
+    get_chat_session_in_conversation_with,
+)
+from config.atlas_chat_config import clamp_chat_session_list_page_size, validate_chat_session_search_query
 from services.socket_connection_helpers import merge_socket_session
 
 logger = get_logger()
 
 
 def get_online_visitor_total(agent_id: str) -> int:
-    """Current count of online visitors in the Live Visitors list (Redis only)."""
+    """Current count of online visitors in Redis (live presence only)."""
     count = get_visitor_count_for_agent(agent_id)
     return count if count is not None else 0
 
 
+async def get_agent_chat_session_total(agent_id: str) -> int:
+    """Total persisted chat sessions for an agent (used for visitors list pagination)."""
+    return await count_chat_sessions_for_agent(agent_id)
+
+
 async def emit_agent_visitors_pagination_updated(agent_id: str, total: int | None = None):
     """
-    Notify agent members that the online visitor count changed.
+    Notify agent members that the chat session list total changed.
+
     Clients should recompute total_pages from total and their active limit.
     """
     from sockets import sio
 
     if total is None:
-        total = get_online_visitor_total(agent_id)
+        total = await get_agent_chat_session_total(agent_id)
 
     agent_members_room = f"agent_{agent_id}_members"
     await sio.emit(
@@ -34,20 +49,48 @@ async def emit_agent_visitors_pagination_updated(agent_id: str, total: int | Non
     )
 
 
+async def emit_agent_visitor_count_updated(agent_id: str, visitor_count: int | None = None) -> None:
+    """Notify the team room that the online visitor count changed."""
+    from sockets import sio
+
+    agent_data = await get_or_cache_agent_data_async(agent_id)
+    if not agent_data:
+        return
+
+    team_id = agent_data.get("team_id")
+    if not team_id:
+        return
+
+    if visitor_count is None:
+        visitor_count = get_visitor_count_for_agent(agent_id)
+    visitor_count = visitor_count if visitor_count is not None else 0
+
+    team_room = f"team_{team_id}_members"
+    await sio.emit(
+        "agent_visitor_count_updated",
+        {"agent_id": agent_id, "visitor_count": visitor_count},
+        room=team_room,
+    )
+    logger.info(
+        f"Emitted agent_visitor_count_updated to room {team_room} "
+        f"for agent {agent_id}: {visitor_count}"
+    )
+
+
 async def emit_agent_visitor_disconnected_event(
     agent_id: str,
     chat_session_id: str | None,
     sid: str,
 ):
     """
-    Emit disconnect + pagination update for Live Visitors.
+    Emit disconnect + pagination update for the chat sessions list.
 
-    Disconnect removes the visitor from the online Redis list immediately;
-    pagination.total reflects the new online count.
+    Disconnect removes the visitor from the online Redis hash immediately;
+    pagination.total reflects the total persisted chat session count (unchanged).
     """
     from sockets import sio
 
-    total = get_online_visitor_total(agent_id)
+    total = await get_agent_chat_session_total(agent_id)
     agent_members_room = f"agent_{agent_id}_members"
     await sio.emit(
         "agent_visitor_disconnected",
@@ -63,7 +106,41 @@ async def emit_agent_visitor_disconnected_event(
         f"Emitted agent_visitor_disconnected to room {agent_members_room} "
         f"for agent {agent_id}, chat_session_id {chat_session_id}, sid {sid}, total={total}"
     )
-    await emit_agent_visitors_pagination_updated(agent_id, total=total)
+
+
+async def handle_visitor_socket_disconnect(
+    agent_id: str,
+    chat_session_id: str,
+    sid: str,
+) -> None:
+    """
+    Clean up visitor presence on socket disconnect.
+
+    Skips presence emits when the sid was already replaced (widget reconnect).
+    Does not mark visitor_online=false while another socket is still live for the session.
+    """
+    online_before = get_visitor_count_for_agent(agent_id) or 0
+    was_removed = remove_visitor_from_agent(agent_id, sid)
+
+    if was_removed is None:
+        return
+    if not was_removed:
+        logger.info(
+            f"Skipped visitor disconnect presence for sid {sid} "
+            f"(not in online hash for agent {agent_id})"
+        )
+        return
+
+    still_online = get_visitor_by_chat_session(agent_id, chat_session_id)
+    if not still_online:
+        await set_visitor_online_status(agent_id, chat_session_id, False)
+
+    online_after = get_visitor_count_for_agent(agent_id) or 0
+    if online_after != online_before:
+        await emit_agent_visitor_count_updated(agent_id, online_after)
+
+    if not still_online:
+        await emit_agent_visitor_disconnected_event(agent_id, chat_session_id, sid)
 
 
 async def handle_set_visitor_alias_service(socketData, sid):
@@ -154,42 +231,53 @@ async def handle_visitor_connection(agent_id, chat_session_id, sid, geo_data=Non
     # Fetch existing alias_name so reconnects don't reset it to None
     alias_name = await _fetch_visitor_alias(agent_id, chat_session_id) if (chat_session_id and agent_id) else None
 
+    previous_live = (
+        get_visitor_by_chat_session(agent_id, chat_session_id)
+        if chat_session_id and agent_id
+        else None
+    )
+    was_already_online_same_socket = (
+        previous_live is not None and previous_live.get("sid") == sid
+    )
+
+    # Ensure a persisted session exists before marking online (chat sessions list)
+    if chat_session_id and agent_id:
+        await ensure_chat_session_for_visitor(
+            agent_id,
+            chat_session_id,
+            visitor_at=visitor_at,
+        )
+
     # Add visitor to Redis (returns the visitor data dict)
     visitor_data = add_visitor_to_agent(agent_id, chat_session_id, sid, geo_data=geo_data, visitor_at=visitor_at, alias_name=alias_name)
 
+    # Restore persisted human takeover handler onto live Redis when visitor reconnects
+    if chat_session_id and agent_id:
+        stored_handler = await get_chat_session_in_conversation_with(agent_id, chat_session_id)
+        if stored_handler:
+            from services.elysium_atlas_services.atlas_redis_services import update_visitor_conversation_status
+            from services.elysium_atlas_services.atlas_team_member_emit_services import emit_conversation_started
 
-    # Broadcast new visitor to all team members connected to this agent
-    agent_members_room = f"agent_{agent_id}_members"
-    if visitor_data:
-        visitor_count = get_visitor_count_for_agent(agent_id)
-        total = visitor_count if visitor_count is not None else 0
-        await sio.emit(
-            "agent_new_visitor",
-            {
-                "agent_id": agent_id,
-                "visitor": visitor_data,
-                "total": total,
-                "pagination": {"total": total},
-            },
-            room=agent_members_room
-        )
-        logger.info(f"Emitted agent_new_visitor to room {agent_members_room} for agent {agent_id}, chat_session_id {chat_session_id}")
-        await emit_agent_visitors_pagination_updated(agent_id, total=total)
-
-    # Emit updated visitor count to the agent's team room if agent data is cached/available
-    agent_data = await get_or_cache_agent_data_async(agent_id)
-    if agent_data:
-        team_id = agent_data.get("team_id")
-        if team_id:
-            visitor_count = get_visitor_count_for_agent(agent_id)
-            team_room = f"team_{team_id}_members"
-            await sio.emit(
-                "agent_visitor_count_updated",
-                {"agent_id": agent_id, "visitor_count": visitor_count if visitor_count is not None else 0},
-                room=team_room
+            update_visitor_conversation_status(agent_id, chat_session_id, stored_handler)
+            await emit_conversation_started(sid, agent_id, chat_session_id, stored_handler)
+            logger.info(
+                f"Restored in_conversation_with={stored_handler} for reconnected visitor "
+                f"{chat_session_id} on agent {agent_id}"
             )
-            logger.info(f"Emitted agent_visitor_count_updated to room {team_room} for agent {agent_id}: {visitor_count}")
-    
+
+    online_count_after = get_visitor_count_for_agent(agent_id) or 0
+
+    # Presence signals only — never push agent_visitors_list (frontend refetches manually)
+    if visitor_data and not was_already_online_same_socket:
+        session_total = await get_agent_chat_session_total(agent_id)
+        await emit_agent_visitors_pagination_updated(agent_id, total=session_total)
+        await emit_agent_visitor_count_updated(agent_id, online_count_after)
+    elif was_already_online_same_socket:
+        logger.info(
+            f"Skipped presence emits for duplicate atlas-visitor-connected: "
+            f"chat_session_id={chat_session_id} sid={sid}"
+        )
+
     # Mark visitor as online in the chat session document
     await set_visitor_online_status(agent_id, chat_session_id, True)
 
@@ -231,18 +319,19 @@ async def handle_team_member_connection(team_id, user_id, agent_id, sid):
 
 async def emit_agent_visitors_list(agent_id, sid, page=1, limit=100):
     """
-    Fetch a paginated online visitors list for the agent and emit agent_visitors_list.
+    Fetch a paginated chat sessions list for the agent and emit agent_visitors_list.
 
-    The list contains online visitors only (Redis). Out-of-range pages are clamped
-    to the last valid page when visitors exist.
+    Includes all persisted atlas_chat_sessions for the agent (not only online visitors),
+    sorted by last_message_at descending. visitor_online reflects live Redis presence.
+    Out-of-range pages are clamped to the last valid page when sessions exist.
     """
     from sockets import sio
 
     page = max(1, page)
-    limit = max(1, limit)
+    limit = clamp_chat_session_list_page_size(limit)
     await merge_socket_session(sio, sid, {"visitors_list_limit": limit})
 
-    visitors_data = get_visitors_for_agent(agent_id, page=page, size=limit)
+    visitors_data = await get_paginated_chat_sessions_for_agent_list(agent_id, page=page, size=limit)
     if visitors_data is not None:
         await sio.emit(
             "agent_visitors_list",
@@ -260,11 +349,125 @@ async def emit_agent_visitors_list(agent_id, sid, page=1, limit=100):
         )
         logger.info(
             f"Emitted agent_visitors_list to socket {sid} for agent {agent_id}: "
-            f"{len(visitors_data['visitors'])} visitors "
+            f"{len(visitors_data['visitors'])} session(s) "
             f"(page {visitors_data['page']}, limit {limit}, total {visitors_data['total']})"
         )
     else:
         logger.warning(f"Could not retrieve visitors for agent {agent_id} to emit to socket {sid}")
+
+
+async def emit_agent_visitors_search_results(
+    agent_id: str,
+    sid: str,
+    query: str,
+    page: int = 1,
+    limit: int = 100,
+) -> None:
+    """
+    Run a paginated chat session search and emit agent_visitors_search_results to the requester.
+
+    Matches substrings on chat_session_id or alias_name (case-insensitive).
+    """
+    from sockets import sio
+
+    page = max(1, page)
+    limit = clamp_chat_session_list_page_size(limit)
+
+    is_valid, error_message, _ = validate_chat_session_search_query(query)
+    if not agent_id:
+        await sio.emit(
+            "agent_visitors_search_results",
+            {
+                "success": False,
+                "message": "agent_id is required.",
+                "agent_id": agent_id,
+                "query": (query or "").strip() if isinstance(query, str) else "",
+                "visitors": [],
+                "total": 0,
+                "page": 1,
+                "size": limit,
+                "total_pages": 0,
+                "has_next": False,
+                "has_prev": False,
+            },
+            to=sid,
+        )
+        return
+
+    if not is_valid:
+        await sio.emit(
+            "agent_visitors_search_results",
+            {
+                "success": False,
+                "message": error_message,
+                "agent_id": agent_id,
+                "query": (query or "").strip() if isinstance(query, str) else "",
+                "visitors": [],
+                "total": 0,
+                "page": 1,
+                "size": limit,
+                "total_pages": 0,
+                "has_next": False,
+                "has_prev": False,
+            },
+            to=sid,
+        )
+        logger.warning(
+            f"Invalid chat session search from socket {sid} for agent {agent_id}: {error_message}"
+        )
+        return
+
+    search_data = await search_paginated_chat_sessions_for_agent(
+        agent_id,
+        query,
+        page=page,
+        size=limit,
+    )
+    if search_data is None:
+        await sio.emit(
+            "agent_visitors_search_results",
+            {
+                "success": False,
+                "message": "Failed to search chat sessions.",
+                "agent_id": agent_id,
+                "query": query.strip(),
+                "visitors": [],
+                "total": 0,
+                "page": 1,
+                "size": limit,
+                "total_pages": 0,
+                "has_next": False,
+                "has_prev": False,
+            },
+            to=sid,
+        )
+        logger.warning(f"Could not search visitors for agent {agent_id} to emit to socket {sid}")
+        return
+
+    await sio.emit(
+        "agent_visitors_search_results",
+        {
+            "success": search_data.get("success", True),
+            "message": search_data.get("message"),
+            "agent_id": agent_id,
+            "query": search_data.get("query", query.strip()),
+            "visitors": search_data["visitors"],
+            "total": search_data["total"],
+            "page": search_data["page"],
+            "size": search_data["size"],
+            "total_pages": search_data["total_pages"],
+            "has_next": search_data["has_next"],
+            "has_prev": search_data["has_prev"],
+        },
+        to=sid,
+    )
+    logger.info(
+        f"Emitted agent_visitors_search_results to socket {sid} for agent {agent_id}: "
+        f"query={search_data.get('query')!r} "
+        f"{len(search_data['visitors'])} session(s) "
+        f"(page {search_data['page']}, limit {limit}, total {search_data['total']})"
+    )
+
 
 async def handle_agent_member_connection(agent_id, team_id, user_id, sid, page=1, limit=100):
     from sockets import sio
@@ -300,21 +503,18 @@ async def handle_team_member_explicit_disconnect_service(socketData):
 
     - Removes the team member from the team Redis hash and leaves the team room for all their sids.
     - Removes the team member from the agent Redis hash and leaves the agent members room for all their sids.
-    - Emits 'conversation_ended' to every visitor who was in conversation with this team member,
-      and clears their in_conversation_with field in Redis.
+    - Clears passive monitor registrations for this user on the agent.
 
-    Args:
-        socketData (dict): Payload containing team_id, user_id, and agent_id.
+    Human takeover (in_conversation_with) is **not** released on disconnect — it persists in Mongo
+    until the team member explicitly ends the conversation.
     """
     try:
         from sockets import sio
         from services.elysium_atlas_services.atlas_redis_services import (
             remove_team_members_by_user_id,
             remove_agent_members_by_user_id,
-            get_visitors_in_conversation_with,
-            update_visitor_conversation_status,
+            remove_all_session_monitors_for_user,
         )
-        from services.elysium_atlas_services.atlas_team_member_emit_services import emit_conversation_ended
 
         team_id = socketData.get("team_id")
         user_id = socketData.get("user_id")
@@ -335,19 +535,7 @@ async def handle_team_member_explicit_disconnect_service(socketData):
             for member_sid in agent_sids:
                 await sio.leave_room(member_sid, agent_members_room)
                 logger.info(f"Socket {member_sid} left room {agent_members_room} (explicit disconnect for user_id {user_id})")
-
-        # Emit conversation_ended to all visitors that were in conversation with this team member
-        if agent_id and user_id:
-            visitors = get_visitors_in_conversation_with(agent_id, user_id)
-            for visitor in visitors:
-                visitor_sid = visitor.get("sid")
-                chat_session_id = visitor.get("chat_session_id")
-                if visitor_sid and chat_session_id:
-                    # Clear conversation status in Redis
-                    update_visitor_conversation_status(agent_id, chat_session_id, None)
-                    # Notify the visitor
-                    await emit_conversation_ended(visitor_sid, agent_id, chat_session_id)
-                    logger.info(f"Emitted conversation_ended to visitor {chat_session_id} (sid: {visitor_sid}) due to team member {user_id} explicit disconnect")
+            remove_all_session_monitors_for_user(agent_id, user_id)
 
     except Exception as e:
         logger.error(f"Error handling team member explicit disconnect: {e}")
@@ -361,18 +549,16 @@ async def handle_team_member_disconnected_service(session, sid):
       1. Determine which agent_ids this user was serving — use agent_id from session
          if present, otherwise scan the team members hash to discover them (before removal).
       2. Remove the socket (sid) from the team Redis hash.
-      3. For every discovered agent_id:
-         a. Remove the socket from the agent members Redis hash.
-         b. Find all visitors whose in_conversation_with matches this user_id.
-         c. Clear in_conversation_with in Redis and emit 'conversation_ended' to each visitor.
+      3. For every discovered agent_id: remove the socket from the agent members Redis hash
+         and clear passive monitor registrations for this sid.
+
+    Human takeover is **not** released on disconnect.
     """
     try:
         from services.elysium_atlas_services.atlas_redis_services import (
             get_agent_ids_for_user_in_team,
-            get_visitors_in_conversation_with,
-            update_visitor_conversation_status,
+            remove_all_session_monitors_for_user,
         )
-        from services.elysium_atlas_services.atlas_team_member_emit_services import emit_conversation_ended
 
         team_id = session.get("team_id") if session else None
         user_id = session.get("user_id") if session else None
@@ -390,23 +576,13 @@ async def handle_team_member_disconnected_service(session, sid):
             logger.info(f"Removing team member socket {sid} from team {team_id} members")
             remove_team_member(team_id, sid)
 
-        # For each agent: remove from agent hash, then end any open conversations
+        # For each agent: remove from agent hash and clear monitor registrations for this sid
         for agent_id in agent_ids:
             logger.info(f"Removing team member socket {sid} from agent {agent_id} members")
             remove_agent_member(agent_id, sid)
 
             if user_id:
-                visitors = get_visitors_in_conversation_with(agent_id, user_id)
-                for visitor in visitors:
-                    visitor_sid = visitor.get("sid")
-                    chat_session_id = visitor.get("chat_session_id")
-                    if visitor_sid and chat_session_id:
-                        update_visitor_conversation_status(agent_id, chat_session_id, None)
-                        await emit_conversation_ended(visitor_sid, agent_id, chat_session_id)
-                        logger.info(
-                            f"Emitted conversation_ended to visitor {chat_session_id} "
-                            f"(sid: {visitor_sid}) because team member {user_id} (socket {sid}) disconnected"
-                        )
+                remove_all_session_monitors_for_user(agent_id, user_id, sid=sid)
 
     except Exception as e:
         logger.error(f"Error handling team member disconnection for sid {sid}: {e}")

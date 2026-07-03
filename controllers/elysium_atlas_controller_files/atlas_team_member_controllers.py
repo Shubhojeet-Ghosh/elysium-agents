@@ -1,16 +1,28 @@
-import asyncio
-import datetime
 from typing import Dict, Any
 from fastapi.responses import JSONResponse
 
 from logging_config import get_logger
-from services.mongo_services import get_collection
 from services.elysium_atlas_services.atlas_chat_session_services import (
-    serialize_chat_message_for_client,
-    count_unread_visitor_messages,
+    get_paginated_team_member_chat_sessions,
+    search_paginated_team_member_chat_sessions,
 )
 
 logger = get_logger()
+
+
+def _unauthorized_response(userData: Dict[str, Any] | None) -> JSONResponse | None:
+    if not userData or userData.get("success") is False:
+        return JSONResponse(
+            status_code=401,
+            content={"success": False, "message": userData.get("message", "Unauthorized") if userData else "Unauthorized"},
+        )
+    user_id = userData.get("user_id")
+    if not user_id:
+        return JSONResponse(
+            status_code=401,
+            content={"success": False, "message": "user_id not found in token"},
+        )
+    return None
 
 
 async def get_team_member_chat_sessions_controller(
@@ -36,110 +48,87 @@ async def get_team_member_chat_sessions_controller(
             last_message                 – most recent message in the conversation
     """
     try:
-        if not userData or userData.get("success") == False:
-            return JSONResponse(
-                status_code=401,
-                content={"success": False, "message": userData.get("message", "Unauthorized")}
-            )
+        auth_error = _unauthorized_response(userData)
+        if auth_error:
+            return auth_error
 
         user_id = userData.get("user_id")
-        if not user_id:
-            return JSONResponse(
-                status_code=401,
-                content={"success": False, "message": "user_id not found in token"}
-            )
-
-        if page < 1:
-            page = 1
-        if limit < 1:
-            limit = 1
-
-        query: Dict[str, Any] = {"team_member_ids": user_id}
-        if agent_id:
-            query["agent_id"] = agent_id
-
-        collection = get_collection("atlas_chat_sessions")
-
-        total = await collection.count_documents(query)
-
-        skip = (page - 1) * limit
-        cursor = (
-            collection.find(query)
-            .sort("last_message_at", -1)
-            .skip(skip)
-            .limit(limit)
+        result = await get_paginated_team_member_chat_sessions(
+            user_id,
+            agent_id=agent_id,
+            page=page,
+            limit=limit,
         )
-        documents = await cursor.to_list(length=None)
-
-        # Fetch the latest message for each session in parallel
-        messages_collection = get_collection("atlas_chat_mesages")
-
-        async def _get_last_message(chat_session_id, agent_id, conversation_id):
-            if not (chat_session_id and agent_id and conversation_id):
-                return None
-            msg = await messages_collection.find_one(
-                {
-                    "chat_session_id": chat_session_id,
-                    "agent_id": agent_id,
-                    "conversation_id": conversation_id,
-                },
-                sort=[("created_at", -1)],
+        if result is None:
+            return JSONResponse(
+                status_code=500,
+                content={"success": False, "message": "Failed to fetch chat sessions."},
             )
-            if msg:
-                msg.pop("_id", None)
-                msg = serialize_chat_message_for_client(msg)
-            return msg
-
-        last_messages = await asyncio.gather(*[
-            _get_last_message(
-                doc.get("chat_session_id"),
-                doc.get("agent_id"),
-                doc.get("conversation_id"),
-            )
-            for doc in documents
-        ])
-
-        unread_counts = await asyncio.gather(*[
-            count_unread_visitor_messages(
-                doc.get("agent_id"),
-                doc.get("chat_session_id"),
-                doc.get("conversation_id"),
-            )
-            for doc in documents
-        ])
-
-        # Return only the required fields; missing keys default to None
-        FIELDS = ("chat_session_id", "alias_name", "last_message_at", "visitor_online", "last_connected_at", "geo_data")
-        serialised = []
-        for doc, last_msg, unread_count in zip(documents, last_messages, unread_counts):
-            entry = {}
-            for field in FIELDS:
-                val = doc.get(field)
-                # Serialise datetime objects to ISO string
-                if isinstance(val, datetime.datetime):
-                    val = val.isoformat()
-                entry[field] = val
-            entry["last_message"] = last_msg
-            entry["has_unread_messages"] = unread_count > 0
-            entry["unread_visitor_message_count"] = unread_count
-            serialised.append(entry)
-        documents = serialised
 
         logger.info(
-            f"Fetched {len(documents)} chat session(s) for user_id={user_id} "
-            f"agent_id={agent_id} page={page} limit={limit} total={total}"
+            f"Fetched {len(result['data'])} chat session(s) for user_id={user_id} "
+            f"agent_id={agent_id} page={result['page']} limit={result['limit']} total={result['total']}"
         )
 
         return {
             "success": True,
-            "data": documents,
-            "total": total,
-            "page": page,
-            "limit": limit,
-            "has_next": (skip + limit) < total,
-            "has_prev": page > 1,
+            **result,
         }
 
     except Exception as e:
         logger.error(f"Error in get_team_member_chat_sessions_controller: {e}")
-        return {"success": False, "message": str(e)}
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "message": "Internal server error"},
+        )
+
+
+async def search_team_member_chat_sessions_controller(
+    userData: Dict[str, Any],
+    query: str,
+    agent_id: str | None = None,
+    page: int = 1,
+    limit: int = 20,
+) -> Dict[str, Any]:
+    """
+    Search paginated atlas_chat_sessions the authenticated team member participated in.
+
+    Matches case-insensitive substrings on chat_session_id or alias_name.
+    """
+    try:
+        auth_error = _unauthorized_response(userData)
+        if auth_error:
+            return auth_error
+
+        user_id = userData.get("user_id")
+        result, validation_error = await search_paginated_team_member_chat_sessions(
+            user_id,
+            query,
+            agent_id=agent_id,
+            page=page,
+            limit=limit,
+        )
+
+        if validation_error:
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "message": validation_error},
+            )
+
+        if result is None:
+            return JSONResponse(
+                status_code=500,
+                content={"success": False, "message": "Failed to search chat sessions."},
+            )
+
+        return {
+            "success": True,
+            **result,
+        }
+
+    except Exception as e:
+        logger.error(f"Error in search_team_member_chat_sessions_controller: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "message": "Internal server error"},
+        )

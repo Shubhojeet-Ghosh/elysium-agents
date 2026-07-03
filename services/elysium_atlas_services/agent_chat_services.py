@@ -10,6 +10,7 @@ from services.elysium_atlas_services.atlas_chat_session_services import (
     coerce_utc_datetime,
     format_utc_datetime_for_client,
     serialize_chat_message_for_client,
+    stored_message_metadata,
 )
 
 from config.llm_models_config import resolve_model_handler, DEFAULT_MODEL
@@ -227,7 +228,7 @@ async def chat_with_agent_v1(agent_id, message, sid=None, chat_session_id=None, 
     try:
         logger.info(f"{chat_log} Processing visitor message")
 
-        user_message_id = str(uuid.uuid4())
+        user_message_id = additional_params.get("_user_message_id") or str(uuid.uuid4())
         agent_message_id = str(uuid.uuid4())
         user_message_created_at = _resolve_user_message_created_at(additional_params)
 
@@ -246,6 +247,56 @@ async def chat_with_agent_v1(agent_id, message, sid=None, chat_session_id=None, 
             f"{chat_log} load_session_agent_kb_ids done in {(time.perf_counter() - step_start) * 1000:.0f}ms "
             f"(history_messages={len(chat_history)}, ready_kb_ids={len(ready_kb_ids)})"
         )
+
+        monitor_sids = additional_params.get("_monitor_sids") or []
+        user_message_stored = False
+        if chat_session_id and monitor_sids:
+            early_stored = await create_and_store_chat_messages(
+                chat_session_id=chat_session_id,
+                agent_id=agent_id,
+                user_message_payload={
+                    "message_id": user_message_id,
+                    "role": "user",
+                    "content": message,
+                    "created_at": user_message_created_at,
+                },
+                agent_message_payload=None,
+            )
+            if early_stored:
+                user_message_stored = True
+                user_stored_doc = next(
+                    (doc for doc in early_stored if doc.get("role") == "user"),
+                    early_stored[0],
+                )
+                visitor_message_metadata = stored_message_metadata(user_stored_doc)
+
+                async def _emit_visitor_to_monitors() -> None:
+                    try:
+                        from services.elysium_atlas_services.atlas_redis_services import (
+                            get_session_monitor_sids,
+                        )
+                        from services.elysium_atlas_services.atlas_team_member_emit_services import (
+                            emit_monitor_visitor_message,
+                        )
+
+                        active_monitor_sids = get_session_monitor_sids(agent_id, chat_session_id)
+                        if not active_monitor_sids:
+                            return
+                        await emit_monitor_visitor_message(
+                            active_monitor_sids,
+                            agent_id,
+                            chat_session_id,
+                            message,
+                            visitor_message_metadata,
+                        )
+                    except Exception as emit_err:
+                        logger.error(
+                            f"Failed to emit visitor message to monitors for {chat_session_id}: {emit_err}",
+                            exc_info=True,
+                        )
+
+                asyncio.create_task(_emit_visitor_to_monitors())
+                logger.info(f"{chat_log} Stored visitor message early for monitor mirror")
 
         agent_name = chat_session_data.get("agent_name") if chat_session_data else None
 
@@ -329,7 +380,7 @@ async def chat_with_agent_v1(agent_id, message, sid=None, chat_session_id=None, 
             chat_payload["stream"] = stream
 
         logger.info(f"{chat_log} Generating agent response (model={model}, stream={stream})")
-        logger.info(f"{chat_log} LLM messages: {json.dumps(messages, ensure_ascii=False)}")
+        # logger.info(f"{chat_log} LLM messages: {json.dumps(messages, ensure_ascii=False)}")
         llm_step_start = time.perf_counter()
         response_obj = await handler(chat_payload)
         logger.info(
@@ -358,15 +409,18 @@ async def chat_with_agent_v1(agent_id, message, sid=None, chat_session_id=None, 
 
             agent_mongo_id = None
             if chat_session_id:
-                stored_messages = await create_and_store_chat_messages(
-                    chat_session_id=chat_session_id,
-                    agent_id=agent_id,
-                    user_message_payload={
+                user_message_payload = None
+                if not user_message_stored:
+                    user_message_payload = {
                         "message_id": user_message_id,
                         "role": "user",
                         "content": message,
                         "created_at": user_message_created_at,
-                    },
+                    }
+                stored_messages = await create_and_store_chat_messages(
+                    chat_session_id=chat_session_id,
+                    agent_id=agent_id,
+                    user_message_payload=user_message_payload,
                     agent_message_payload={
                         "message_id": agent_message_id,
                         "role": "agent",
@@ -400,15 +454,18 @@ async def chat_with_agent_v1(agent_id, message, sid=None, chat_session_id=None, 
             response_text = response_obj
 
         if chat_session_id and not (stream and sid):
-            stored_messages = await create_and_store_chat_messages(
-                chat_session_id=chat_session_id,
-                agent_id=agent_id,
-                user_message_payload={
+            user_message_payload = None
+            if not user_message_stored:
+                user_message_payload = {
                     "message_id": user_message_id,
                     "role": "user",
                     "content": message,
                     "created_at": user_message_created_at,
-                },
+                }
+            stored_messages = await create_and_store_chat_messages(
+                chat_session_id=chat_session_id,
+                agent_id=agent_id,
+                user_message_payload=user_message_payload,
                 agent_message_payload={
                     "message_id": agent_message_id,
                     "role": "agent",

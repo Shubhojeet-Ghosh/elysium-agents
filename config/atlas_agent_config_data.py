@@ -66,5 +66,6 @@ ELYSIUM_ATLAS_AGENT_CONFIG_DATA = {
         "visitor_at": None,
         "visitor_online": False,
         "source": None,
+        "in_conversation_with": None,
     },
 }

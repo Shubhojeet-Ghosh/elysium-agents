@@ -11,7 +11,7 @@ from logging_config import get_logger
 from config.settings import settings
 from middlewares.socket_auth import extract_token_from_socket_environ
 from controllers.elysium_atlas_controller_files.atlas_chat_controllers import chat_with_agent_controller_v1
-from controllers.elysium_atlas_controller_files.atlas_team_member_chat_controllers import chat_with_visitor_controller_v1, team_member_start_conversation_controller, team_member_end_conversation_controller
+from controllers.elysium_atlas_controller_files.atlas_team_member_chat_controllers import chat_with_visitor_controller_v1, team_member_start_conversation_controller, team_member_end_conversation_controller, team_member_monitor_conversation_controller, team_member_stop_monitor_conversation_controller, team_member_resolve_session_controller
 
 from services.socket_connection_helpers import (
     add_socket_connection,
@@ -21,16 +21,18 @@ from services.socket_connection_helpers import (
     get_user_id_from_user_data,
     merge_socket_session,
 )
-from services.elysium_atlas_services.atlas_visitor_socket_services import handle_atlas_visitor_connected_service, handle_atlas_team_member_connected_service, handle_team_member_disconnected_service, handle_team_member_explicit_disconnect_service, emit_agent_visitors_list, handle_set_visitor_alias_service, emit_agent_visitor_disconnected_event
+from services.elysium_atlas_services.atlas_visitor_socket_services import handle_atlas_visitor_connected_service, handle_atlas_team_member_connected_service, handle_team_member_disconnected_service, handle_team_member_explicit_disconnect_service, emit_agent_visitors_list, emit_agent_visitors_search_results, handle_set_visitor_alias_service, handle_visitor_socket_disconnect
 
 logger = get_logger()
 
 REDIS_URL = f'redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/{settings.REDIS_DB}'
 
 # Create a Redis manager (edit the URL if your Redis is elsewhere)
+# write_only=True: emit only via Redis pub/sub so each client receives one copy
+# (write_only=False emits locally AND via pub/sub, duplicating every room broadcast).
 mgr = AsyncRedisManager(
     REDIS_URL,
-    write_only=False,
+    write_only=True,
     channel="socketio",
 )
 
@@ -90,34 +92,12 @@ async def disconnect(sid, reason=None):
                 # logger.info(f"Socket {sid} left room {user_id}")
                 remove_user_socket_mapping(user_id, sid)
         
-        # Check if it's a visitor and remove from agent Redis
+        # Visitor disconnect only — team members also store agent_id on the session
         agent_id = session.get("agent_id") if session else None
         chat_session_id = session.get("chat_session_id") if session else None
-        if agent_id:
+        if agent_id and chat_session_id:
             logger.info(f"Removing visitor socket {sid} from agent {agent_id} visitors")
-            from services.elysium_atlas_services.atlas_redis_services import remove_visitor_from_agent, get_visitor_count_for_agent, get_or_cache_agent_data_async
-            from services.elysium_atlas_services.atlas_chat_session_services import set_visitor_online_status
-            remove_visitor_from_agent(agent_id, sid)
-            if chat_session_id:
-                await set_visitor_online_status(agent_id, chat_session_id, False)
-
-            # Emit updated visitor count to the agent's team room
-            # and notify agent members of the specific visitor that disconnected
-            agent_data = await get_or_cache_agent_data_async(agent_id)
-            if agent_data:
-                team_id = agent_data.get("team_id")
-                if team_id:
-                    visitor_count = get_visitor_count_for_agent(agent_id)
-                    team_room = f"team_{team_id}_members"
-                    await sio.emit(
-                        "agent_visitor_count_updated",
-                        {"agent_id": agent_id, "visitor_count": visitor_count if visitor_count is not None else 0},
-                        room=team_room
-                    )
-                    logger.info(f"Emitted agent_visitor_count_updated to room {team_room} for agent {agent_id}: {visitor_count}")
-
-            # Notify team members scoped to this agent that a specific visitor disconnected
-            await emit_agent_visitor_disconnected_event(agent_id, chat_session_id, sid)
+            await handle_visitor_socket_disconnect(agent_id, chat_session_id, sid)
 
         # Check if it's a team member and remove from team/agent Redis
         team_id = session.get("team_id") if session else None
@@ -185,6 +165,23 @@ async def handle_atlas_agent_visitors_list(sid, socketData):
     except Exception as e:
         logger.error(f"Error handling atlas-agent-visitors-list for socket {sid}: {e}")
 
+# Handle 'atlas-agent-visitors-search' event - search paginated chat sessions for an agent
+@sio.on("atlas-agent-visitors-search")
+async def handle_atlas_agent_visitors_search(sid, socketData):
+    try:
+        agent_id = socketData.get("agent_id")
+        query = socketData.get("query")
+        page = socketData.get("page", 1)
+        limit = socketData.get("limit", 100)
+
+        logger.info(
+            f"Event 'atlas-agent-visitors-search' received from socket {sid} "
+            f"for agent {agent_id} (query={query!r}, page {page}, limit {limit})"
+        )
+        await emit_agent_visitors_search_results(agent_id, sid, query, page=page, limit=limit)
+    except Exception as e:
+        logger.error(f"Error handling atlas-agent-visitors-search for socket {sid}: {e}")
+
 # Handle 'atlas-team-member-message' event - message from team member
 @sio.on("atlas-team-member-message")
 async def handle_atlas_team_member_message(sid, socketData):
@@ -197,10 +194,25 @@ async def handle_atlas_team_member_message(sid, socketData):
 async def handle_atlas_team_member_start_conversation(sid, socketData):
     await team_member_start_conversation_controller(sid, socketData)
 
+# Handle 'atlas-team-member-monitor-conversation' event - team member passively monitors visitor ↔ AI chat
+@sio.on("atlas-team-member-monitor-conversation")
+async def handle_atlas_team_member_monitor_conversation(sid, socketData):
+    await team_member_monitor_conversation_controller(sid, socketData)
+
+# Handle 'atlas-team-member-stop-monitor-conversation' event - team member stops passive monitoring
+@sio.on("atlas-team-member-stop-monitor-conversation")
+async def handle_atlas_team_member_stop_monitor_conversation(sid, socketData):
+    await team_member_stop_monitor_conversation_controller(sid, socketData)
+
 # Handle 'atlas-team-member-end-conversation' event - team member ends a conversation with a visitor
 @sio.on("atlas-team-member-end-conversation")
 async def handle_atlas_team_member_end_conversation(sid, socketData):
     await team_member_end_conversation_controller(sid, socketData)
+
+# Handle 'atlas-team-member-resolve-session' event - team member marks a chat session as resolved
+@sio.on("atlas-team-member-resolve-session")
+async def handle_atlas_team_member_resolve_session(sid, socketData):
+    await team_member_resolve_session_controller(sid, socketData)
 
 # Handle 'atlas-team-member-disconnected' event - explicit team member logout/disconnect
 @sio.on("atlas-team-member-disconnected")

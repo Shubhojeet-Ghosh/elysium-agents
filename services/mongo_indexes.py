@@ -115,6 +115,78 @@ async def create_mongo_indexes():
         logger.info("Index created on atlas_chat_sessions.team_member_ids")
         await atlas_chat_sessions_collection.create_index("last_message_at", name="last_message_at_index")
         logger.info("Index created on atlas_chat_sessions.last_message_at")
+        await atlas_chat_sessions_collection.create_index(
+            [("agent_id", 1), ("last_message_at", -1), ("last_connected_at", -1), ("created_at", -1)],
+            name="agent_id_last_message_at_index",
+        )
+        logger.info("Compound index created on atlas_chat_sessions.agent_id and last_message_at")
+        await atlas_chat_sessions_collection.create_index(
+            [("agent_id", 1), ("status", 1), ("last_message_at", -1)],
+            name="agent_id_status_last_message_at_index",
+        )
+        logger.info(
+            "Compound index created on atlas_chat_sessions.agent_id, status, last_message_at"
+        )
+        await atlas_chat_sessions_collection.create_index(
+            [("agent_id", 1), ("in_conversation_with", 1)],
+            name="agent_id_in_conversation_with_index",
+        )
+        logger.info(
+            "Compound index created on atlas_chat_sessions.agent_id, in_conversation_with"
+        )
+        await atlas_chat_sessions_collection.create_index(
+            [("agent_id", 1), ("resolved_at", -1)],
+            name="agent_id_resolved_at_index",
+            partialFilterExpression={"status": "resolved"},
+        )
+        logger.info(
+            "Partial index created on atlas_chat_sessions.agent_id, resolved_at "
+            "(status=resolved only)"
+        )
+
+        # Create indexes for atlas_chat_session_audits collection
+        atlas_chat_session_audits_collection = get_collection("atlas_chat_session_audits")
+        await atlas_chat_session_audits_collection.create_index(
+            "audit_id",
+            name="audit_id_unique_index",
+            unique=True,
+        )
+        logger.info("Unique index created on atlas_chat_session_audits.audit_id")
+        await atlas_chat_session_audits_collection.create_index(
+            [("agent_id", 1), ("chat_session_id", 1), ("created_at", -1)],
+            name="agent_id_chat_session_id_created_at_index",
+        )
+        logger.info(
+            "Compound index created on atlas_chat_session_audits.agent_id, chat_session_id, created_at"
+        )
+        await atlas_chat_session_audits_collection.create_index(
+            [("agent_id", 1), ("created_at", -1)],
+            name="agent_id_created_at_index_audits",
+        )
+        logger.info("Compound index created on atlas_chat_session_audits.agent_id and created_at")
+        await atlas_chat_session_audits_collection.create_index(
+            [("agent_id", 1), ("event_type", 1), ("created_at", -1)],
+            name="agent_id_event_type_created_at_index_audits",
+        )
+        logger.info(
+            "Compound index created on atlas_chat_session_audits.agent_id, event_type, created_at"
+        )
+        await atlas_chat_session_audits_collection.create_index(
+            [("agent_id", 1), ("actor_user_id", 1), ("created_at", -1)],
+            name="agent_id_actor_user_id_created_at_index_audits",
+            partialFilterExpression={"actor_user_id": {"$type": "string"}},
+        )
+        logger.info(
+            "Partial compound index created on atlas_chat_session_audits.agent_id, "
+            "actor_user_id, created_at"
+        )
+        await atlas_chat_session_audits_collection.create_index(
+            [("chat_session_id", 1), ("created_at", -1)],
+            name="chat_session_id_created_at_index_audits",
+        )
+        logger.info(
+            "Compound index created on atlas_chat_session_audits.chat_session_id, created_at"
+        )
 
         # Create indexes for atlas_chat_mesages collection
         atlas_chat_mesages_collection = get_collection("atlas_chat_mesages")

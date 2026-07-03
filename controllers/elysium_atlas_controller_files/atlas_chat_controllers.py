@@ -79,6 +79,35 @@ async def route_visitor_message_to_team_member(
                 f"Message stored to DB only."
             )
 
+        async def _mirror_visitor_to_privileged_monitors() -> None:
+            try:
+                from services.elysium_atlas_services.atlas_team_member_emit_services import (
+                    get_privileged_takeover_mirror_monitor_sids,
+                    emit_monitor_visitor_message,
+                )
+
+                monitor_sids = await get_privileged_takeover_mirror_monitor_sids(
+                    agent_id,
+                    chat_session_id,
+                    exclude_user_id=in_conversation_with,
+                )
+                if monitor_sids:
+                    await emit_monitor_visitor_message(
+                        monitor_sids,
+                        agent_id,
+                        chat_session_id,
+                        message,
+                        message_metadata,
+                        conversation_mode="takeover",
+                    )
+            except Exception as emit_err:
+                logger.error(
+                    f"Failed to mirror takeover visitor message to monitors for {chat_session_id}: {emit_err}",
+                    exc_info=True,
+                )
+
+        asyncio.create_task(_mirror_visitor_to_privileged_monitors())
+
         return {"success": True, "message": "Message routed to team member"}
 
     except Exception as e:
@@ -122,6 +151,38 @@ async def chat_with_agent_controller_v1(chatPayload,user_data, sid = None):
                 )
             return {"success": False, "message": internal_message}
 
+        reactivation_payload = None
+        if agent_id and chat_session_id:
+            from services.elysium_atlas_services.atlas_chat_session_services import (
+                reactivate_chat_session_if_resolved,
+            )
+            from services.elysium_atlas_services.atlas_team_member_emit_services import (
+                emit_chat_session_status_updated,
+            )
+
+            reactivation_payload = await reactivate_chat_session_if_resolved(
+                agent_id,
+                chat_session_id,
+            )
+            if reactivation_payload:
+                await emit_chat_session_status_updated(
+                    agent_id,
+                    chat_session_id,
+                    status=reactivation_payload.get("status"),
+                    reactivated_at=reactivation_payload.get("reactivated_at"),
+                    previous_status=reactivation_payload.get("previous_status"),
+                )
+
+        if in_conversation_with is None and agent_id and chat_session_id:
+            from services.elysium_atlas_services.atlas_chat_session_services import (
+                resolve_active_conversation_handler,
+            )
+
+            in_conversation_with = await resolve_active_conversation_handler(
+                agent_id,
+                chat_session_id,
+            )
+
         # If the visitor is in a conversation with a team member, route directly to them
         if in_conversation_with:
             return await route_visitor_message_to_team_member(
@@ -133,6 +194,15 @@ async def chat_with_agent_controller_v1(chatPayload,user_data, sid = None):
                 message_received_at=chatPayload.get("_message_received_at"),
             )
 
+        monitor_sids: list[str] = []
+        if agent_id and chat_session_id:
+            from services.elysium_atlas_services.atlas_redis_services import get_session_monitor_sids
+
+            monitor_sids = get_session_monitor_sids(agent_id, chat_session_id)
+            if monitor_sids:
+                chatPayload["_monitor_sids"] = monitor_sids
+                chatPayload["_user_message_id"] = str(uuid.uuid4())
+
         chat_response = await chat_with_agent_v1(agent_id, message, sid, chat_session_id=chat_session_id,additional_params=chatPayload)
 
         if not chat_response.get("success"):
@@ -142,6 +212,35 @@ async def chat_with_agent_controller_v1(chatPayload,user_data, sid = None):
             }
 
         if agent_id and chat_session_id:
+            if monitor_sids:
+                agent_message = chat_response.get("agent_message")
+                if agent_message:
+                    async def _emit_agent_to_monitors() -> None:
+                        try:
+                            from services.elysium_atlas_services.atlas_redis_services import (
+                                get_session_monitor_sids,
+                            )
+                            from services.elysium_atlas_services.atlas_team_member_emit_services import (
+                                emit_monitor_agent_message,
+                            )
+
+                            active_monitor_sids = get_session_monitor_sids(agent_id, chat_session_id)
+                            if not active_monitor_sids:
+                                return
+                            await emit_monitor_agent_message(
+                                active_monitor_sids,
+                                agent_id,
+                                chat_session_id,
+                                agent_message,
+                            )
+                        except Exception as emit_err:
+                            logger.error(
+                                f"Failed to emit agent message to monitors for {chat_session_id}: {emit_err}",
+                                exc_info=True,
+                            )
+
+                    asyncio.create_task(_emit_agent_to_monitors())
+
             await emit_agent_visitor_ai_chat_message(
                 agent_id,
                 chat_session_id,

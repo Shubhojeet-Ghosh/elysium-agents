@@ -20,6 +20,23 @@ DEFAULT_MAX_VISITOR_MESSAGE_CHARS = int(
     _agent_chat_limits.get("max_visitor_message_chars", 4000)
 )
 
+CHAT_SESSION_STATUS_ACTIVE = "active"
+CHAT_SESSION_STATUS_IN_CONVERSATION = "in_conversation"
+CHAT_SESSION_STATUS_RESOLVED = "resolved"
+
+SUPPORTED_CHAT_SESSION_STATUSES = frozenset(
+    {
+        CHAT_SESSION_STATUS_ACTIVE,
+        CHAT_SESSION_STATUS_IN_CONVERSATION,
+        CHAT_SESSION_STATUS_RESOLVED,
+    }
+)
+
+
+def resolve_chat_session_status_for_takeover(user_id: str | None) -> str:
+    """Map takeover handler presence to atlas_chat_sessions.status."""
+    return CHAT_SESSION_STATUS_IN_CONVERSATION if user_id else CHAT_SESSION_STATUS_ACTIVE
+
 
 def get_default_max_visitor_message_chars() -> int:
     return DEFAULT_MAX_VISITOR_MESSAGE_CHARS
@@ -83,3 +100,41 @@ def validate_visitor_message(
         return False, internal, client
 
     return True, None, None
+
+
+CHAT_SESSION_LIST_MAX_PAGE_SIZE = 100
+CHAT_SESSION_SEARCH_MAX_QUERY_CHARS = 200
+
+
+def validate_chat_session_search_query(query: str | None) -> tuple[bool, str | None, str]:
+    """
+    Validate a team-member chat session search string.
+
+    Returns:
+        (is_valid, error_message, normalized_query)
+    """
+    if query is None:
+        return False, "query is required.", ""
+
+    if not isinstance(query, str):
+        return False, "query must be a string.", ""
+
+    normalized = query.strip()
+    if not normalized:
+        return False, "query cannot be empty.", ""
+
+    if len(normalized) > CHAT_SESSION_SEARCH_MAX_QUERY_CHARS:
+        return (
+            False,
+            f"query cannot exceed {CHAT_SESSION_SEARCH_MAX_QUERY_CHARS} characters.",
+            normalized[:CHAT_SESSION_SEARCH_MAX_QUERY_CHARS],
+        )
+
+    return True, None, normalized
+
+
+def clamp_chat_session_list_page_size(size: int | None) -> int:
+    """Bound list/search page size to a safe positive maximum."""
+    if size is None or size < 1:
+        return 1
+    return min(size, CHAT_SESSION_LIST_MAX_PAGE_SIZE)

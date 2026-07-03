@@ -2,11 +2,13 @@ from typing import Dict, Any, List
 from logging_config import get_logger
 from services.mongo_services import get_collection
 from config.atlas_agent_config_data import ELYSIUM_ATLAS_AGENT_CONFIG_DATA
+from config.atlas_chat_config import clamp_chat_session_list_page_size, validate_chat_session_search_query
 import datetime
 from bson import ObjectId
 import random
 import asyncio
 import uuid
+import re
 
 logger = get_logger()
 
@@ -40,6 +42,18 @@ def format_utc_datetime_for_client(value: datetime.datetime) -> str:
     else:
         value = value.astimezone(datetime.timezone.utc)
     return value.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+
+def serialize_chat_session_document_for_api(document: Dict[str, Any]) -> Dict[str, Any]:
+    """Convert atlas_chat_sessions Mongo fields to JSON-safe values."""
+    serialized = dict(document)
+    mongo_id = serialized.get("_id")
+    if mongo_id is not None:
+        serialized["_id"] = str(mongo_id)
+    for key, value in list(serialized.items()):
+        if isinstance(value, datetime.datetime):
+            serialized[key] = format_utc_datetime_for_client(value)
+    return serialized
 
 
 def serialize_chat_message_for_client(message: Dict[str, Any] | None) -> Dict[str, Any] | None:
@@ -128,17 +142,7 @@ async def get_chat_session_data(requestData: Dict[str, Any]) -> Dict[str, Any] |
         # Try to find existing document by chat_session_id and agent_id
         document = await collection.find_one({"chat_session_id": chat_session_id, "agent_id": agent_id})
         if document:
-            # Convert ObjectId and datetime fields
-            document["_id"] = str(document["_id"])
-            if "created_at" in document and document["created_at"]:
-                v = document["created_at"]
-                document["created_at"] = v.isoformat() if isinstance(v, datetime.datetime) else v
-            if "last_message_at" in document and document["last_message_at"]:
-                v = document["last_message_at"]
-                document["last_message_at"] = v.isoformat() if isinstance(v, datetime.datetime) else v
-            if "last_connected_at" in document and document["last_connected_at"]:
-                v = document["last_connected_at"]
-                document["last_connected_at"] = v.isoformat() if isinstance(v, datetime.datetime) else v
+            document = serialize_chat_session_document_for_api(document)
 
             # Ensure conversation_id exists; backfill if missing from older documents
             if not document.get("conversation_id"):
@@ -216,8 +220,7 @@ async def get_chat_session_data(requestData: Dict[str, Any]) -> Dict[str, Any] |
             
             result = await collection.insert_one(document)
             document["_id"] = str(result.inserted_id)
-            document["created_at"] = document["created_at"].isoformat()
-            document["last_message_at"] = document["last_message_at"].isoformat()
+            document = serialize_chat_session_document_for_api(document)
             
             # For new session, messages will be empty
             document["messages"] = []
@@ -360,6 +363,616 @@ def get_channel_from_session_id(chat_session_id: str) -> str:
         return "un"
 
 
+CHAT_SESSION_VISITOR_LIST_FIELDS = (
+    "chat_session_id",
+    "created_at",
+    "last_message_at",
+    "last_connected_at",
+    "first_message_at",
+    "alias_name",
+    "geo_data",
+    "visitor_at",
+    "visitor_online",
+    "in_conversation_with",
+    "status",
+    "resolved_at",
+    "resolved_by",
+)
+
+
+def _format_user_full_name(first_name: str | None, last_name: str | None) -> str | None:
+    parts = [str(part).strip() for part in (first_name, last_name) if part and str(part).strip()]
+    return " ".join(parts) if parts else None
+
+
+async def get_user_full_names_by_ids(user_ids: list[str]) -> dict[str, str | None]:
+    """Batch-resolve display names from elysium_atlas_users (first + last name)."""
+    from bson.errors import InvalidId
+
+    unique_ids = list({uid for uid in user_ids if uid})
+    if not unique_ids:
+        return {}
+
+    object_ids: list[ObjectId] = []
+    for uid in unique_ids:
+        try:
+            object_ids.append(ObjectId(uid))
+        except InvalidId:
+            logger.warning(f"Skipping invalid user_id for name lookup: {uid}")
+
+    if not object_ids:
+        return {}
+
+    collection = get_collection("elysium_atlas_users")
+    cursor = collection.find(
+        {"_id": {"$in": object_ids}},
+        {"first_name": 1, "last_name": 1},
+    )
+    docs = await cursor.to_list(length=len(object_ids))
+
+    names: dict[str, str | None] = {}
+    for doc in docs:
+        uid = str(doc["_id"])
+        names[uid] = _format_user_full_name(doc.get("first_name"), doc.get("last_name"))
+    return names
+
+
+async def enrich_visitor_list_rows_with_handler_names(rows: list[dict]) -> list[dict]:
+    """Add in_conversation_with_name to agent_visitors_list / search rows."""
+    handler_ids = [
+        row.get("in_conversation_with")
+        for row in rows
+        if row.get("in_conversation_with")
+    ]
+    names_by_id = await get_user_full_names_by_ids(handler_ids)
+    for row in rows:
+        handler_id = row.get("in_conversation_with")
+        row["in_conversation_with_name"] = names_by_id.get(handler_id) if handler_id else None
+    return rows
+
+
+async def ensure_chat_session_for_visitor(
+    agent_id: str,
+    chat_session_id: str,
+    *,
+    visitor_at: str | None = None,
+    source: str | None = None,
+) -> bool:
+    """
+    Create an atlas_chat_sessions document when a visitor connects, if one does not exist.
+
+    Ensures chat sessions appear in the agent visitors list before the first message.
+
+    Returns:
+        True if a new session document was inserted, False if it already existed.
+    """
+    try:
+        if not agent_id or not chat_session_id:
+            return False
+
+        collection = get_collection("atlas_chat_sessions")
+        existing = await collection.find_one(
+            {"chat_session_id": chat_session_id, "agent_id": agent_id},
+            {"_id": 1},
+        )
+        if existing:
+            return False
+
+        init_config = ELYSIUM_ATLAS_AGENT_CONFIG_DATA.get("chat_session_init_config", {})
+        document = init_config.copy()
+        document["chat_session_id"] = chat_session_id
+        document["agent_id"] = agent_id
+
+        agent_display_name = await get_agent_alias_name(agent_id)
+        now = datetime.datetime.now(datetime.timezone.utc)
+        document.update(
+            {
+                "agent_name": agent_display_name,
+                "channel": get_channel_from_session_id(chat_session_id),
+                "conversation_id": str(uuid.uuid4()),
+                "created_at": now,
+                "last_message_at": None,
+            }
+        )
+        if visitor_at:
+            document["visitor_at"] = visitor_at
+        if source:
+            document["source"] = source
+
+        await collection.insert_one(document)
+        logger.info(
+            f"Created chat session on visitor connect: chat_session_id={chat_session_id} "
+            f"agent_id={agent_id}"
+        )
+
+        from services.elysium_atlas_services.atlas_chat_session_audit_services import (
+            AUDIT_ACTOR_VISITOR,
+            AUDIT_EVENT_VISITOR_FIRST_CONNECTED,
+            record_chat_session_audit,
+        )
+
+        await record_chat_session_audit(
+            agent_id,
+            chat_session_id,
+            AUDIT_EVENT_VISITOR_FIRST_CONNECTED,
+            actor_type=AUDIT_ACTOR_VISITOR,
+            occurred_at=now,
+            metadata={"channel": document.get("channel")},
+        )
+        return True
+
+    except Exception as e:
+        logger.error(f"Error in ensure_chat_session_for_visitor: {str(e)}")
+        return False
+
+
+async def count_chat_sessions_for_agent(agent_id: str) -> int:
+    """Total persisted chat sessions for an agent (MongoDB)."""
+    try:
+        if not agent_id:
+            return 0
+        collection = get_collection("atlas_chat_sessions")
+        return await collection.count_documents({"agent_id": agent_id})
+    except Exception as e:
+        logger.error(f"Error counting chat sessions for agent {agent_id}: {str(e)}")
+        return 0
+
+
+def format_chat_session_as_visitor_row(
+    session_doc: Dict[str, Any],
+    agent_id: str,
+    live_visitor: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    """
+    Shape an atlas_chat_sessions document for agent_visitors_list socket payloads.
+
+    Live Redis data enriches sid, in_conversation_with, and visitor_online when connected.
+    in_conversation_with falls back to the persisted atlas_chat_sessions field when offline.
+    """
+    from config.atlas_chat_config import (
+        CHAT_SESSION_STATUS_ACTIVE,
+        CHAT_SESSION_STATUS_IN_CONVERSATION,
+        CHAT_SESSION_STATUS_RESOLVED,
+    )
+
+    chat_session_id = session_doc.get("chat_session_id")
+    is_online = live_visitor is not None
+
+    persisted_status = session_doc.get("status")
+    in_conversation_with = (
+        live_visitor.get("in_conversation_with")
+        if live_visitor and live_visitor.get("in_conversation_with")
+        else session_doc.get("in_conversation_with")
+    )
+    if persisted_status == CHAT_SESSION_STATUS_RESOLVED:
+        status = CHAT_SESSION_STATUS_RESOLVED
+        in_conversation_with = None
+    elif persisted_status:
+        status = persisted_status
+    else:
+        status = (
+            CHAT_SESSION_STATUS_IN_CONVERSATION
+            if in_conversation_with
+            else CHAT_SESSION_STATUS_ACTIVE
+        )
+
+    row: Dict[str, Any] = {
+        "agent_id": agent_id,
+        "chat_session_id": chat_session_id,
+        "created_at": _serialize_session_datetime(session_doc.get("created_at")),
+        "last_message_at": _serialize_session_datetime(session_doc.get("last_message_at")),
+        "last_connected_at": _serialize_session_datetime(
+            live_visitor.get("last_connected_at")
+            if live_visitor and live_visitor.get("last_connected_at")
+            else session_doc.get("last_connected_at")
+        ),
+        "sid": live_visitor.get("sid") if live_visitor else None,
+        "alias_name": session_doc.get("alias_name")
+        if session_doc.get("alias_name") is not None
+        else (live_visitor.get("alias_name") if live_visitor else None),
+        "in_conversation_with": in_conversation_with,
+        "in_conversation_with_name": None,
+        "status": status,
+        "geo_data": session_doc.get("geo_data")
+        if session_doc.get("geo_data") is not None
+        else (live_visitor.get("geo_data") if live_visitor else None),
+        "visitor_at": session_doc.get("visitor_at")
+        if session_doc.get("visitor_at") is not None
+        else (live_visitor.get("visitor_at") if live_visitor else None),
+        "visitor_online": is_online,
+        "first_message_at": _serialize_session_datetime(session_doc.get("first_message_at")),
+        "resolved_at": _serialize_session_datetime(session_doc.get("resolved_at")),
+        "resolved_by": session_doc.get("resolved_by"),
+    }
+    return row
+
+
+async def get_paginated_chat_sessions_for_agent_list(
+    agent_id: str,
+    page: int = 1,
+    size: int = 100,
+) -> dict | None:
+    """
+    Paginated chat sessions for an agent, sorted by last_message_at descending.
+
+    Out-of-range pages are clamped to the last valid page when sessions exist.
+    Online visitors are enriched from Redis (sid, in_conversation_with, visitor_online).
+    """
+    try:
+        if not agent_id:
+            return None
+
+        from services.elysium_atlas_services.atlas_redis_services import (
+            get_online_visitors_map_by_chat_session,
+        )
+
+        page = max(1, page)
+        size = max(1, size)
+
+        collection = get_collection("atlas_chat_sessions")
+        query = {"agent_id": agent_id}
+        total = await collection.count_documents(query)
+
+        if total == 0:
+            return {
+                "visitors": [],
+                "total": 0,
+                "page": 1,
+                "size": size,
+                "total_pages": 0,
+                "has_next": False,
+                "has_prev": False,
+            }
+
+        total_pages = (total + size - 1) // size
+        page = min(page, total_pages)
+        skip = (page - 1) * size
+
+        projection = {field: 1 for field in CHAT_SESSION_VISITOR_LIST_FIELDS}
+        projection["_id"] = 0
+
+        cursor = (
+            collection.find(query, projection)
+            .sort([("last_message_at", -1), ("last_connected_at", -1), ("created_at", -1)])
+            .skip(skip)
+            .limit(size)
+        )
+        session_docs = await cursor.to_list(length=None)
+        online_by_session = get_online_visitors_map_by_chat_session(agent_id)
+
+        visitors = [
+            format_chat_session_as_visitor_row(
+                doc,
+                agent_id,
+                online_by_session.get(doc.get("chat_session_id")),
+            )
+            for doc in session_docs
+        ]
+        visitors = await enrich_visitor_list_rows_with_handler_names(visitors)
+
+        logger.info(
+            f"Retrieved {len(visitors)} chat session(s) for agent {agent_id} "
+            f"(page {page}, size {size}, total {total}, total_pages {total_pages})"
+        )
+        return {
+            "visitors": visitors,
+            "total": total,
+            "page": page,
+            "size": size,
+            "total_pages": total_pages,
+            "has_next": page < total_pages,
+            "has_prev": page > 1,
+        }
+
+    except Exception as e:
+        logger.error(f"Error getting paginated chat sessions for agent {agent_id}: {str(e)}")
+        return None
+
+
+def _build_chat_session_list_page_result(
+    visitors: list[Dict[str, Any]],
+    *,
+    total: int,
+    page: int,
+    size: int,
+) -> dict:
+    if total == 0:
+        return {
+            "visitors": [],
+            "total": 0,
+            "page": 1,
+            "size": size,
+            "total_pages": 0,
+            "has_next": False,
+            "has_prev": False,
+        }
+
+    total_pages = (total + size - 1) // size
+    page = min(max(1, page), total_pages)
+    return {
+        "visitors": visitors,
+        "total": total,
+        "page": page,
+        "size": size,
+        "total_pages": total_pages,
+        "has_next": page < total_pages,
+        "has_prev": page > 1,
+    }
+
+
+async def search_paginated_chat_sessions_for_agent(
+    agent_id: str,
+    query: str,
+    page: int = 1,
+    size: int = 100,
+) -> dict | None:
+    """
+    Paginated chat session search for an agent.
+
+    Matches case-insensitive substrings on chat_session_id or alias_name.
+    Sorted by last_message_at descending (same as the default list).
+    """
+    try:
+        if not agent_id:
+            return None
+
+        is_valid, error_message, normalized_query = validate_chat_session_search_query(query)
+        if not is_valid:
+            return {
+                "success": False,
+                "message": error_message,
+                "query": normalized_query,
+                **_build_chat_session_list_page_result([], total=0, page=1, size=clamp_chat_session_list_page_size(size)),
+            }
+
+        from services.elysium_atlas_services.atlas_redis_services import (
+            get_online_visitors_map_by_chat_session,
+        )
+
+        page = max(1, page)
+        size = clamp_chat_session_list_page_size(size)
+        pattern = re.escape(normalized_query)
+
+        collection = get_collection("atlas_chat_sessions")
+        search_filter: Dict[str, Any] = {
+            "agent_id": agent_id,
+            "$or": [
+                {"chat_session_id": {"$regex": pattern, "$options": "i"}},
+                {"alias_name": {"$regex": pattern, "$options": "i"}},
+            ],
+        }
+
+        total = await collection.count_documents(search_filter)
+        if total == 0:
+            return {
+                "success": True,
+                "query": normalized_query,
+                **_build_chat_session_list_page_result([], total=0, page=1, size=size),
+            }
+
+        total_pages = (total + size - 1) // size
+        page = min(page, total_pages)
+        skip = (page - 1) * size
+
+        projection = {field: 1 for field in CHAT_SESSION_VISITOR_LIST_FIELDS}
+        projection["_id"] = 0
+
+        cursor = (
+            collection.find(search_filter, projection)
+            .sort([("last_message_at", -1), ("last_connected_at", -1), ("created_at", -1)])
+            .skip(skip)
+            .limit(size)
+        )
+        session_docs = await cursor.to_list(length=None)
+        online_by_session = get_online_visitors_map_by_chat_session(agent_id)
+
+        visitors = [
+            format_chat_session_as_visitor_row(
+                doc,
+                agent_id,
+                online_by_session.get(doc.get("chat_session_id")),
+            )
+            for doc in session_docs
+        ]
+        visitors = await enrich_visitor_list_rows_with_handler_names(visitors)
+
+        logger.info(
+            f"Search returned {len(visitors)} chat session(s) for agent {agent_id} "
+            f"query={normalized_query!r} (page {page}, size {size}, total {total}, total_pages {total_pages})"
+        )
+        return {
+            "success": True,
+            "query": normalized_query,
+            **_build_chat_session_list_page_result(visitors, total=total, page=page, size=size),
+        }
+
+    except Exception as e:
+        logger.error(f"Error searching chat sessions for agent {agent_id}: {str(e)}")
+        return None
+
+
+TEAM_MEMBER_CHAT_SESSION_RESPONSE_FIELDS = (
+    "chat_session_id",
+    "alias_name",
+    "last_message_at",
+    "visitor_online",
+    "last_connected_at",
+    "geo_data",
+)
+
+
+def _build_team_member_chat_sessions_base_query(
+    user_id: str,
+    agent_id: str | None = None,
+) -> Dict[str, Any]:
+    query: Dict[str, Any] = {"team_member_ids": user_id}
+    if agent_id:
+        query["agent_id"] = agent_id
+    return query
+
+
+async def enrich_team_member_chat_session_rows(documents: list[dict]) -> list[dict]:
+    """Add last_message and unread counts to team-member chat session API rows."""
+    messages_collection = get_collection("atlas_chat_mesages")
+
+    async def _get_last_message(chat_session_id, agent_id, conversation_id):
+        if not (chat_session_id and agent_id and conversation_id):
+            return None
+        msg = await messages_collection.find_one(
+            {
+                "chat_session_id": chat_session_id,
+                "agent_id": agent_id,
+                "conversation_id": conversation_id,
+            },
+            sort=[("created_at", -1)],
+        )
+        if msg:
+            msg.pop("_id", None)
+            msg = serialize_chat_message_for_client(msg)
+        return msg
+
+    last_messages = await asyncio.gather(*[
+        _get_last_message(
+            doc.get("chat_session_id"),
+            doc.get("agent_id"),
+            doc.get("conversation_id"),
+        )
+        for doc in documents
+    ])
+
+    unread_counts = await asyncio.gather(*[
+        count_unread_visitor_messages(
+            doc.get("agent_id"),
+            doc.get("chat_session_id"),
+            doc.get("conversation_id"),
+        )
+        for doc in documents
+    ])
+
+    serialised: list[dict] = []
+    for doc, last_msg, unread_count in zip(documents, last_messages, unread_counts):
+        entry: Dict[str, Any] = {}
+        for field in TEAM_MEMBER_CHAT_SESSION_RESPONSE_FIELDS:
+            val = doc.get(field)
+            if isinstance(val, datetime.datetime):
+                val = val.isoformat()
+            entry[field] = val
+        entry["last_message"] = last_msg
+        entry["has_unread_messages"] = unread_count > 0
+        entry["unread_visitor_message_count"] = unread_count
+        serialised.append(entry)
+    return serialised
+
+
+async def get_paginated_team_member_chat_sessions(
+    user_id: str,
+    *,
+    agent_id: str | None = None,
+    page: int = 1,
+    limit: int = 20,
+) -> dict | None:
+    """Paginated chat sessions where the team member participated (team_member_ids)."""
+    try:
+        if not user_id:
+            return None
+
+        page = max(1, page)
+        limit = clamp_chat_session_list_page_size(limit)
+        query = _build_team_member_chat_sessions_base_query(user_id, agent_id)
+
+        collection = get_collection("atlas_chat_sessions")
+        total = await collection.count_documents(query)
+        skip = (page - 1) * limit
+
+        cursor = (
+            collection.find(query)
+            .sort("last_message_at", -1)
+            .skip(skip)
+            .limit(limit)
+        )
+        documents = await cursor.to_list(length=None)
+        data = await enrich_team_member_chat_session_rows(documents)
+
+        return {
+            "data": data,
+            "total": total,
+            "page": page,
+            "limit": limit,
+            "has_next": (skip + limit) < total,
+            "has_prev": page > 1,
+        }
+    except Exception as e:
+        logger.error(f"Error fetching team member chat sessions for user_id={user_id}: {str(e)}")
+        return None
+
+
+async def search_paginated_team_member_chat_sessions(
+    user_id: str,
+    query: str,
+    *,
+    agent_id: str | None = None,
+    page: int = 1,
+    limit: int = 20,
+) -> tuple[dict | None, str | None]:
+    """
+    Search team-member chat sessions by chat_session_id or alias_name substring.
+
+    Returns:
+        (result_dict, validation_error_message)
+    """
+    try:
+        if not user_id:
+            return None, "user_id is required."
+
+        is_valid, error_message, normalized_query = validate_chat_session_search_query(query)
+        if not is_valid:
+            return None, error_message
+
+        page = max(1, page)
+        limit = clamp_chat_session_list_page_size(limit)
+        pattern = re.escape(normalized_query)
+
+        base_query = _build_team_member_chat_sessions_base_query(user_id, agent_id)
+        search_filter: Dict[str, Any] = {
+            **base_query,
+            "$or": [
+                {"chat_session_id": {"$regex": pattern, "$options": "i"}},
+                {"alias_name": {"$regex": pattern, "$options": "i"}},
+            ],
+        }
+
+        collection = get_collection("atlas_chat_sessions")
+        total = await collection.count_documents(search_filter)
+        skip = (page - 1) * limit
+
+        cursor = (
+            collection.find(search_filter)
+            .sort("last_message_at", -1)
+            .skip(skip)
+            .limit(limit)
+        )
+        documents = await cursor.to_list(length=None)
+        data = await enrich_team_member_chat_session_rows(documents)
+
+        logger.info(
+            f"Team member search returned {len(data)} session(s) for user_id={user_id} "
+            f"query={normalized_query!r} agent_id={agent_id} page={page} limit={limit} total={total}"
+        )
+        return {
+            "query": normalized_query,
+            "data": data,
+            "total": total,
+            "page": page,
+            "limit": limit,
+            "has_next": (skip + limit) < total,
+            "has_prev": page > 1,
+        }, None
+
+    except Exception as e:
+        logger.error(f"Error searching team member chat sessions for user_id={user_id}: {str(e)}")
+        return None, str(e)
+
+
 def build_chat_message_documents(
     chat_session_id: str,
     agent_id: str,
@@ -463,11 +1076,67 @@ async def create_and_store_chat_messages(
             agent_id,
         )
 
+        user_stored = next((doc for doc in messages if doc.get("role") == "user"), None)
+        if user_stored:
+            await maybe_record_visitor_first_message_audit(
+                agent_id,
+                chat_session_id,
+                user_stored.get("created_at"),
+            )
+
         return messages
 
     except Exception as e:
         logger.error(f"Error while creating and storing chat messages: {str(e)}")
         return []
+
+
+async def maybe_record_visitor_first_message_audit(
+    agent_id: str,
+    chat_session_id: str,
+    message_created_at: datetime.datetime | None = None,
+) -> bool:
+    """
+    Record visitor_first_message audit once per session (idempotent via first_message_at).
+    """
+    try:
+        if not agent_id or not chat_session_id:
+            return False
+
+        timestamp = coerce_utc_datetime(message_created_at)
+        sessions_collection = get_collection("atlas_chat_sessions")
+        result = await sessions_collection.update_one(
+            {
+                "chat_session_id": chat_session_id,
+                "agent_id": agent_id,
+                "$or": [
+                    {"first_message_at": {"$exists": False}},
+                    {"first_message_at": None},
+                ],
+            },
+            {"$set": {"first_message_at": timestamp}},
+        )
+        if result.modified_count != 1:
+            return False
+
+        from services.elysium_atlas_services.atlas_chat_session_audit_services import (
+            AUDIT_ACTOR_VISITOR,
+            AUDIT_EVENT_VISITOR_FIRST_MESSAGE,
+            record_chat_session_audit,
+        )
+
+        await record_chat_session_audit(
+            agent_id,
+            chat_session_id,
+            AUDIT_EVENT_VISITOR_FIRST_MESSAGE,
+            actor_type=AUDIT_ACTOR_VISITOR,
+            occurred_at=timestamp,
+        )
+        return True
+
+    except Exception as e:
+        logger.error(f"Error in maybe_record_visitor_first_message_audit: {str(e)}")
+        return False
 
 async def rotate_conversation_id(agent_id: str, chat_session_id: str) -> Dict[str, Any] | None:
     """
@@ -605,6 +1274,320 @@ async def patch_chat_session(agent_id: str, chat_session_id: str, fields: Dict[s
     except Exception as e:
         logger.error(f"Error in patch_chat_session: {str(e)}")
         return False
+
+
+async def get_chat_session_in_conversation_with(
+    agent_id: str,
+    chat_session_id: str,
+) -> str | None:
+    """Read the persisted human takeover handler from atlas_chat_sessions."""
+    try:
+        if not agent_id or not chat_session_id:
+            return None
+
+        collection = get_collection("atlas_chat_sessions")
+        doc = await collection.find_one(
+            {"chat_session_id": chat_session_id, "agent_id": agent_id},
+            {"in_conversation_with": 1, "_id": 0},
+        )
+        if not doc:
+            return None
+
+        handler = doc.get("in_conversation_with")
+        return str(handler) if handler is not None else None
+
+    except Exception as e:
+        logger.error(f"Error in get_chat_session_in_conversation_with: {str(e)}")
+        return None
+
+
+async def set_chat_session_in_conversation_with(
+    agent_id: str,
+    chat_session_id: str,
+    user_id: str | None,
+) -> bool:
+    """Persist human takeover handler and session status on atlas_chat_sessions."""
+    from config.atlas_chat_config import resolve_chat_session_status_for_takeover
+
+    return await patch_chat_session(
+        agent_id,
+        chat_session_id,
+        {
+            "in_conversation_with": user_id,
+            "status": resolve_chat_session_status_for_takeover(user_id),
+        },
+    )
+
+
+async def resolve_active_conversation_handler(
+    agent_id: str,
+    chat_session_id: str,
+) -> str | None:
+    """
+    Resolve who holds human takeover for a session.
+
+    Uses live Redis when the visitor is online; falls back to Mongo when offline.
+    """
+    from services.elysium_atlas_services.atlas_redis_services import get_visitor_by_chat_session
+
+    live_visitor = get_visitor_by_chat_session(agent_id, chat_session_id)
+    if live_visitor is not None:
+        handler = live_visitor.get("in_conversation_with")
+        if handler:
+            return str(handler)
+
+    return await get_chat_session_in_conversation_with(agent_id, chat_session_id)
+
+
+async def persist_in_conversation_with(
+    agent_id: str,
+    chat_session_id: str,
+    user_id: str | None,
+    *,
+    actor_user_id: str | None = None,
+) -> str | None:
+    """
+    Update in_conversation_with in Mongo and Redis (when the visitor is online).
+
+    Returns the visitor socket id when Redis was updated, else None.
+    """
+    from services.elysium_atlas_services.atlas_redis_services import update_visitor_conversation_status
+    from services.elysium_atlas_services.atlas_chat_session_audit_services import (
+        AUDIT_ACTOR_TEAM_MEMBER,
+        AUDIT_EVENT_TAKEOVER_RELEASED,
+        AUDIT_EVENT_TAKEOVER_STARTED,
+        record_chat_session_audit,
+    )
+
+    previous_handler = await get_chat_session_in_conversation_with(agent_id, chat_session_id)
+
+    visitor_sid = update_visitor_conversation_status(agent_id, chat_session_id, user_id)
+    await set_chat_session_in_conversation_with(agent_id, chat_session_id, user_id)
+
+    if user_id and user_id != previous_handler:
+        await record_chat_session_audit(
+            agent_id,
+            chat_session_id,
+            AUDIT_EVENT_TAKEOVER_STARTED,
+            actor_user_id=actor_user_id or user_id,
+            actor_type=AUDIT_ACTOR_TEAM_MEMBER,
+            metadata={
+                "previous_in_conversation_with": previous_handler,
+                "in_conversation_with": user_id,
+            },
+        )
+    elif user_id is None and previous_handler:
+        await record_chat_session_audit(
+            agent_id,
+            chat_session_id,
+            AUDIT_EVENT_TAKEOVER_RELEASED,
+            actor_user_id=actor_user_id or previous_handler,
+            actor_type=AUDIT_ACTOR_TEAM_MEMBER,
+            metadata={"released_in_conversation_with": previous_handler},
+        )
+
+    return visitor_sid
+
+
+async def mark_chat_session_resolved(
+    agent_id: str,
+    chat_session_id: str,
+    *,
+    resolved_by: str | None = None,
+    allow_privileged_resolve: bool = False,
+) -> dict[str, Any]:
+    """
+    Mark a chat session as resolved.
+
+    Team members with active takeover may always resolve.
+    Owner/admin may resolve without holding takeover (including AI-only sessions).
+
+    Clears any active human takeover and notifies the visitor when online.
+
+    Returns a result dict with success, status, and optional visitor_sid for emits.
+    """
+    from config.atlas_chat_config import CHAT_SESSION_STATUS_RESOLVED
+    from services.elysium_atlas_services.atlas_redis_services import update_visitor_conversation_status
+    from services.elysium_atlas_services.atlas_chat_session_audit_services import (
+        AUDIT_ACTOR_TEAM_MEMBER,
+        AUDIT_EVENT_SESSION_RESOLVED,
+        AUDIT_EVENT_TAKEOVER_RELEASED,
+        record_chat_session_audit,
+    )
+
+    try:
+        if not agent_id or not chat_session_id:
+            return {"success": False, "message": "agent_id and chat_session_id are required"}
+
+        if not resolved_by:
+            return {"success": False, "message": "resolved_by user_id is required"}
+
+        collection = get_collection("atlas_chat_sessions")
+        session = await collection.find_one(
+            {"chat_session_id": chat_session_id, "agent_id": agent_id},
+            {"status": 1, "in_conversation_with": 1, "resolved_at": 1},
+        )
+        if not session:
+            return {"success": False, "message": "Chat session not found"}
+
+        if session.get("status") == CHAT_SESSION_STATUS_RESOLVED:
+            return {
+                "success": True,
+                "message": "Session is already resolved",
+                "status": CHAT_SESSION_STATUS_RESOLVED,
+                "already_resolved": True,
+                "visitor_sid": None,
+            }
+
+        active_handler = await resolve_active_conversation_handler(agent_id, chat_session_id)
+        is_active_handler = bool(active_handler and active_handler == str(resolved_by))
+
+        if not is_active_handler and not allow_privileged_resolve:
+            return {
+                "success": False,
+                "message": "Only the team member who has taken over this conversation can mark it as resolved",
+                "in_conversation_with": active_handler,
+            }
+
+        previous_handler = active_handler
+        resolved_by_privileged = allow_privileged_resolve and not is_active_handler
+
+        now = datetime.datetime.now(datetime.timezone.utc)
+        visitor_sid = None
+        if previous_handler:
+            visitor_sid = update_visitor_conversation_status(agent_id, chat_session_id, None)
+            await record_chat_session_audit(
+                agent_id,
+                chat_session_id,
+                AUDIT_EVENT_TAKEOVER_RELEASED,
+                actor_user_id=resolved_by,
+                actor_type=AUDIT_ACTOR_TEAM_MEMBER,
+                metadata={
+                    "released_in_conversation_with": previous_handler,
+                    "released_via": "session_resolved",
+                    "resolved_by_privileged": resolved_by_privileged,
+                },
+            )
+
+        await collection.update_one(
+            {"chat_session_id": chat_session_id, "agent_id": agent_id},
+            {
+                "$set": {
+                    "status": CHAT_SESSION_STATUS_RESOLVED,
+                    "in_conversation_with": None,
+                    "resolved_at": now,
+                    "resolved_by": str(resolved_by) if resolved_by is not None else None,
+                }
+            },
+        )
+
+        audit_row = await record_chat_session_audit(
+            agent_id,
+            chat_session_id,
+            AUDIT_EVENT_SESSION_RESOLVED,
+            actor_user_id=resolved_by,
+            actor_type=AUDIT_ACTOR_TEAM_MEMBER,
+            occurred_at=now,
+            metadata={
+                "previous_status": session.get("status"),
+                "had_active_takeover": bool(previous_handler),
+                "previous_in_conversation_with": previous_handler,
+                "resolved_by_privileged": resolved_by_privileged,
+            },
+        )
+
+        logger.info(
+            "Marked chat session resolved: chat_session_id=%s agent_id=%s resolved_by=%s",
+            chat_session_id,
+            agent_id,
+            resolved_by,
+        )
+        return {
+            "success": True,
+            "message": "Chat session marked as resolved",
+            "status": CHAT_SESSION_STATUS_RESOLVED,
+            "resolved_at": format_utc_datetime_for_client(now),
+            "resolved_by": str(resolved_by) if resolved_by is not None else None,
+            "visitor_sid": visitor_sid,
+            "had_active_takeover": bool(previous_handler),
+            "resolved_by_privileged": resolved_by_privileged,
+            "audit": audit_row,
+        }
+
+    except Exception as e:
+        logger.error(f"Error in mark_chat_session_resolved: {str(e)}", exc_info=True)
+        return {"success": False, "message": "Failed to mark chat session as resolved"}
+
+
+async def reactivate_chat_session_if_resolved(
+    agent_id: str,
+    chat_session_id: str,
+) -> dict[str, Any] | None:
+    """
+    When a resolved session receives a new visitor message, move status back to active.
+
+    Returns reactivation payload when status changed, else None.
+    """
+    from config.atlas_chat_config import CHAT_SESSION_STATUS_ACTIVE, CHAT_SESSION_STATUS_RESOLVED
+    from services.elysium_atlas_services.atlas_chat_session_audit_services import (
+        AUDIT_ACTOR_VISITOR,
+        AUDIT_EVENT_SESSION_REACTIVATED,
+        record_chat_session_audit,
+    )
+
+    try:
+        if not agent_id or not chat_session_id:
+            return None
+
+        collection = get_collection("atlas_chat_sessions")
+        session = await collection.find_one(
+            {"chat_session_id": chat_session_id, "agent_id": agent_id},
+            {"status": 1, "resolved_at": 1, "resolved_by": 1},
+        )
+        if not session or session.get("status") != CHAT_SESSION_STATUS_RESOLVED:
+            return None
+
+        now = datetime.datetime.now(datetime.timezone.utc)
+        await collection.update_one(
+            {"chat_session_id": chat_session_id, "agent_id": agent_id},
+            {
+                "$set": {"status": CHAT_SESSION_STATUS_ACTIVE},
+                "$unset": {"resolved_at": "", "resolved_by": ""},
+            },
+        )
+
+        audit_row = await record_chat_session_audit(
+            agent_id,
+            chat_session_id,
+            AUDIT_EVENT_SESSION_REACTIVATED,
+            actor_type=AUDIT_ACTOR_VISITOR,
+            occurred_at=now,
+            metadata={
+                "previous_status": CHAT_SESSION_STATUS_RESOLVED,
+                "previous_resolved_at": format_utc_datetime_for_client(session["resolved_at"])
+                if isinstance(session.get("resolved_at"), datetime.datetime)
+                else session.get("resolved_at"),
+                "previous_resolved_by": session.get("resolved_by"),
+            },
+        )
+
+        logger.info(
+            "Reactivated resolved chat session: chat_session_id=%s agent_id=%s",
+            chat_session_id,
+            agent_id,
+        )
+        return {
+            "agent_id": agent_id,
+            "chat_session_id": chat_session_id,
+            "status": CHAT_SESSION_STATUS_ACTIVE,
+            "previous_status": CHAT_SESSION_STATUS_RESOLVED,
+            "reactivated_at": format_utc_datetime_for_client(now),
+            "audit": audit_row,
+        }
+
+    except Exception as e:
+        logger.error(f"Error in reactivate_chat_session_if_resolved: {str(e)}", exc_info=True)
+        return None
 
 
 async def get_chat_message_by_object_id(
