@@ -1,46 +1,63 @@
-from typing import Dict, Any, List
+from typing import Any, Dict
+
 from fastapi.responses import JSONResponse
 
 from logging_config import get_logger
-from services.elysium_atlas_services.atlas_redis_services import get_visitor_count_for_agent
-from services.elysium_atlas_services.agent_db_operations import get_agent_ids_by_owner_user_id
+from services.elysium_atlas_services.atlas_chat_session_services import get_agent_chat_sessions_summary
+from services.elysium_atlas_services.team_auth_services import can_user_read_agent
 
 logger = get_logger()
 
 
-async def get_agents_visitor_counts_controller(userData: Dict[str, Any]) -> Dict[str, Any]:
+async def get_agent_chat_sessions_summary_controller(
+    user_data: Dict[str, Any],
+    agent_id: str,
+) -> JSONResponse | Dict[str, Any]:
     """
-    Controller to get online visitor counts for a list of agent_ids.
+    Return persisted session total and live online count for an agent.
 
-    Args:
-        userData: Must contain 'user_id' (string).
-
-    Returns:
-        Dict with visitor counts per agent.
+    Intended for lightweight dashboard polling — not for full list rows.
     """
     try:
+        if user_data is None or user_data.get("success") is False:
+            return JSONResponse(
+                status_code=401,
+                content={"success": False, "message": (user_data or {}).get("message", "Unauthorized")},
+            )
 
-        if userData is None or userData.get("success") == False:
-            return JSONResponse(status_code=401, content={"success": False, "message": userData.get("message")})
-        
-        logger.info(f"User data: {userData}")
+        user_id = user_data.get("user_id")
+        if not user_id:
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "message": "user_id is required."},
+            )
+        if not agent_id:
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "message": "agent_id is required."},
+            )
+        if not await can_user_read_agent(str(user_id), agent_id):
+            return JSONResponse(
+                status_code=403,
+                content={"success": False, "message": "You are not authorized to access this agent."},
+            )
 
-        user_id = userData.get("user_id")
+        summary = await get_agent_chat_sessions_summary(agent_id)
+        if summary is None:
+            return JSONResponse(
+                status_code=500,
+                content={"success": False, "message": "Failed to fetch chat sessions summary."},
+            )
 
-        agent_ids: List[str] = await get_agent_ids_by_owner_user_id(user_id)
-
-        if not agent_ids:
-            return {"success": True, "visitor_counts": {}}
-
-        logger.info(f"agent_ids for user_id {user_id}: {agent_ids}")
-    
-        visitor_counts = {}
-        for agent_id in agent_ids:
-            count = get_visitor_count_for_agent(agent_id)
-            visitor_counts[agent_id] = count if count is not None else 0
-
-        return {"success": True, "visitor_counts": visitor_counts}
+        logger.info(
+            f"Chat sessions summary for agent_id={agent_id}: "
+            f"total={summary['total']} online_count={summary['online_count']}"
+        )
+        return {"success": True, **summary}
 
     except Exception as e:
-        logger.error(f"Error in get_agents_visitor_counts_controller: {e}")
-        return {"success": False, "message": str(e)}
+        logger.error(f"Error in get_agent_chat_sessions_summary_controller: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "message": "Internal server error"},
+        )

@@ -12,7 +12,6 @@ async def cleanup_stale_visitors(
     ctx,
     *,
     threshold_seconds: int | None = None,
-    emit_events: bool = True,
 ) -> Dict[str, Any]:
     """
     ARQ job: remove stale visitors from Redis and mark them offline in MongoDB.
@@ -23,7 +22,6 @@ async def cleanup_stale_visitors(
     logger.info("ARQ job cleanup_stale_visitors started")
     result = await cleanup_stale_visitors_service(
         threshold_seconds=threshold_seconds,
-        emit_events=emit_events,
     )
     logger.info(f"ARQ job cleanup_stale_visitors finished: {result}")
     return result

@@ -28,12 +28,10 @@ async def close_arq_pool() -> None:
 async def enqueue_cleanup_stale_visitors(
     *,
     threshold_seconds: int | None = None,
-    emit_events: bool = True,
 ) -> str | None:
     pool = await get_arq_pool()
     job = await pool.enqueue_job(
         "cleanup_stale_visitors",
         threshold_seconds=threshold_seconds,
-        emit_events=emit_events,
     )
     return job.job_id if job else None

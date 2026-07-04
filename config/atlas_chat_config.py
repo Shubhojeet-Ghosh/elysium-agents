@@ -138,3 +138,36 @@ def clamp_chat_session_list_page_size(size: int | None) -> int:
     if size is None or size < 1:
         return 1
     return min(size, CHAT_SESSION_LIST_MAX_PAGE_SIZE)
+
+
+def normalize_chat_session_refresh_ids(
+    chat_session_ids: object | None,
+) -> tuple[bool, str | None, list[str]]:
+    """
+    Validate chat_session_ids for atlas-agent-visitors-refresh-sessions.
+
+    Dedupes, trims, and caps at CHAT_SESSION_LIST_MAX_PAGE_SIZE (100).
+    """
+    if chat_session_ids is None:
+        return False, "chat_session_ids is required.", []
+
+    if not isinstance(chat_session_ids, list):
+        return False, "chat_session_ids must be an array.", []
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in chat_session_ids:
+        if not isinstance(item, str):
+            continue
+        session_id = item.strip()
+        if not session_id or session_id in seen:
+            continue
+        seen.add(session_id)
+        normalized.append(session_id)
+        if len(normalized) >= CHAT_SESSION_LIST_MAX_PAGE_SIZE:
+            break
+
+    if not normalized:
+        return False, "chat_session_ids must contain at least one valid id.", []
+
+    return True, None, normalized

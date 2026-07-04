@@ -518,6 +518,34 @@ async def count_chat_sessions_for_agent(agent_id: str) -> int:
         return 0
 
 
+async def get_agent_chat_sessions_summary(agent_id: str) -> Dict[str, Any] | None:
+    """
+    Lightweight chat-session counts for dashboard polling.
+
+    Does not return list rows — use socket atlas-agent-visitors-list or search for that.
+    """
+    import asyncio
+
+    from services.elysium_atlas_services.atlas_presence_services import get_visitor_count_for_agent
+
+    if not agent_id:
+        return None
+
+    try:
+        total, online_count = await asyncio.gather(
+            count_chat_sessions_for_agent(agent_id),
+            get_visitor_count_for_agent(agent_id),
+        )
+        return {
+            "agent_id": agent_id,
+            "total": total,
+            "online_count": online_count,
+        }
+    except Exception as e:
+        logger.error(f"Error fetching chat sessions summary for agent {agent_id}: {str(e)}")
+        return None
+
+
 def format_chat_session_as_visitor_row(
     session_doc: Dict[str, Any],
     agent_id: str,
@@ -526,24 +554,24 @@ def format_chat_session_as_visitor_row(
     """
     Shape an atlas_chat_sessions document for agent_visitors_list socket payloads.
 
-    Live Redis data enriches sid, in_conversation_with, and visitor_online when connected.
-    in_conversation_with falls back to the persisted atlas_chat_sessions field when offline.
+    Presence (visitor_online) is read from the session document (Mongo source of truth).
+    Socket routing uses per-session Socket.IO rooms — sid is not exposed to clients.
     """
     from config.atlas_chat_config import (
         CHAT_SESSION_STATUS_ACTIVE,
         CHAT_SESSION_STATUS_IN_CONVERSATION,
         CHAT_SESSION_STATUS_RESOLVED,
     )
+    from services.elysium_atlas_services.atlas_presence_services import session_doc_to_live_visitor
+
+    if live_visitor is None:
+        live_visitor = session_doc_to_live_visitor(session_doc)
 
     chat_session_id = session_doc.get("chat_session_id")
-    is_online = live_visitor is not None
+    is_online = bool(session_doc.get("visitor_online")) and live_visitor is not None
 
     persisted_status = session_doc.get("status")
-    in_conversation_with = (
-        live_visitor.get("in_conversation_with")
-        if live_visitor and live_visitor.get("in_conversation_with")
-        else session_doc.get("in_conversation_with")
-    )
+    in_conversation_with = session_doc.get("in_conversation_with")
     if persisted_status == CHAT_SESSION_STATUS_RESOLVED:
         status = CHAT_SESSION_STATUS_RESOLVED
         in_conversation_with = None
@@ -561,30 +589,86 @@ def format_chat_session_as_visitor_row(
         "chat_session_id": chat_session_id,
         "created_at": _serialize_session_datetime(session_doc.get("created_at")),
         "last_message_at": _serialize_session_datetime(session_doc.get("last_message_at")),
-        "last_connected_at": _serialize_session_datetime(
-            live_visitor.get("last_connected_at")
-            if live_visitor and live_visitor.get("last_connected_at")
-            else session_doc.get("last_connected_at")
-        ),
-        "sid": live_visitor.get("sid") if live_visitor else None,
-        "alias_name": session_doc.get("alias_name")
-        if session_doc.get("alias_name") is not None
-        else (live_visitor.get("alias_name") if live_visitor else None),
+        "last_connected_at": _serialize_session_datetime(session_doc.get("last_connected_at")),
+        "sid": None,
+        "alias_name": session_doc.get("alias_name"),
         "in_conversation_with": in_conversation_with,
         "in_conversation_with_name": None,
         "status": status,
-        "geo_data": session_doc.get("geo_data")
-        if session_doc.get("geo_data") is not None
-        else (live_visitor.get("geo_data") if live_visitor else None),
-        "visitor_at": session_doc.get("visitor_at")
-        if session_doc.get("visitor_at") is not None
-        else (live_visitor.get("visitor_at") if live_visitor else None),
+        "geo_data": session_doc.get("geo_data"),
+        "visitor_at": session_doc.get("visitor_at"),
         "visitor_online": is_online,
         "first_message_at": _serialize_session_datetime(session_doc.get("first_message_at")),
         "resolved_at": _serialize_session_datetime(session_doc.get("resolved_at")),
         "resolved_by": session_doc.get("resolved_by"),
     }
     return row
+
+
+async def build_chat_session_broadcast_row(
+    agent_id: str,
+    chat_session_id: str,
+) -> dict | None:
+    """Build a single agent_visitors_list-shaped row for real-time dashboard patches."""
+    if not agent_id or not chat_session_id:
+        return None
+
+    collection = get_collection("atlas_chat_sessions")
+    session_doc = await collection.find_one(
+        {"agent_id": agent_id, "chat_session_id": chat_session_id},
+    )
+    if not session_doc:
+        return None
+
+    row = format_chat_session_as_visitor_row(session_doc, agent_id)
+    await enrich_visitor_list_rows_with_handler_names([row])
+    return row
+
+
+async def get_chat_sessions_by_ids_for_agent(
+    agent_id: str,
+    chat_session_ids: list[str],
+) -> list[Dict[str, Any]] | None:
+    """
+    Fetch fresh list rows for specific chat sessions (visible-page refresh).
+
+    Returns rows in the same shape as agent_visitors_list.visitors.
+    Missing or cross-agent ids are omitted.
+    """
+    try:
+        if not agent_id or not chat_session_ids:
+            return None
+
+        collection = get_collection("atlas_chat_sessions")
+        projection = {field: 1 for field in CHAT_SESSION_VISITOR_LIST_FIELDS}
+        projection["_id"] = 0
+
+        cursor = collection.find(
+            {
+                "agent_id": agent_id,
+                "chat_session_id": {"$in": chat_session_ids},
+            },
+            projection,
+        )
+        session_docs = await cursor.to_list(length=None)
+        doc_by_id = {
+            doc.get("chat_session_id"): doc
+            for doc in session_docs
+            if doc.get("chat_session_id")
+        }
+
+        visitors = [
+            format_chat_session_as_visitor_row(doc_by_id[session_id], agent_id)
+            for session_id in chat_session_ids
+            if session_id in doc_by_id
+        ]
+        return await enrich_visitor_list_rows_with_handler_names(visitors)
+
+    except Exception as e:
+        logger.error(
+            f"Error fetching chat sessions by ids for agent {agent_id}: {str(e)}"
+        )
+        return None
 
 
 async def get_paginated_chat_sessions_for_agent_list(
@@ -596,15 +680,11 @@ async def get_paginated_chat_sessions_for_agent_list(
     Paginated chat sessions for an agent, sorted by last_message_at descending.
 
     Out-of-range pages are clamped to the last valid page when sessions exist.
-    Online visitors are enriched from Redis (sid, in_conversation_with, visitor_online).
+    Online presence is stored on each atlas_chat_sessions document (visitor_online).
     """
     try:
         if not agent_id:
             return None
-
-        from services.elysium_atlas_services.atlas_redis_services import (
-            get_online_visitors_map_by_chat_session,
-        )
 
         page = max(1, page)
         size = max(1, size)
@@ -638,14 +718,9 @@ async def get_paginated_chat_sessions_for_agent_list(
             .limit(size)
         )
         session_docs = await cursor.to_list(length=None)
-        online_by_session = get_online_visitors_map_by_chat_session(agent_id)
 
         visitors = [
-            format_chat_session_as_visitor_row(
-                doc,
-                agent_id,
-                online_by_session.get(doc.get("chat_session_id")),
-            )
+            format_chat_session_as_visitor_row(doc, agent_id)
             for doc in session_docs
         ]
         visitors = await enrich_visitor_list_rows_with_handler_names(visitors)
@@ -725,10 +800,6 @@ async def search_paginated_chat_sessions_for_agent(
                 **_build_chat_session_list_page_result([], total=0, page=1, size=clamp_chat_session_list_page_size(size)),
             }
 
-        from services.elysium_atlas_services.atlas_redis_services import (
-            get_online_visitors_map_by_chat_session,
-        )
-
         page = max(1, page)
         size = clamp_chat_session_list_page_size(size)
         pattern = re.escape(normalized_query)
@@ -764,14 +835,9 @@ async def search_paginated_chat_sessions_for_agent(
             .limit(size)
         )
         session_docs = await cursor.to_list(length=None)
-        online_by_session = get_online_visitors_map_by_chat_session(agent_id)
 
         visitors = [
-            format_chat_session_as_visitor_row(
-                doc,
-                agent_id,
-                online_by_session.get(doc.get("chat_session_id")),
-            )
+            format_chat_session_as_visitor_row(doc, agent_id)
             for doc in session_docs
         ]
         visitors = await enrich_visitor_list_rows_with_handler_names(visitors)
@@ -1323,20 +1389,9 @@ async def resolve_active_conversation_handler(
     agent_id: str,
     chat_session_id: str,
 ) -> str | None:
-    """
-    Resolve who holds human takeover for a session.
-
-    Uses live Redis when the visitor is online; falls back to Mongo when offline.
-    """
-    from services.elysium_atlas_services.atlas_redis_services import get_visitor_by_chat_session
-
-    live_visitor = get_visitor_by_chat_session(agent_id, chat_session_id)
-    if live_visitor is not None:
-        handler = live_visitor.get("in_conversation_with")
-        if handler:
-            return str(handler)
-
-    return await get_chat_session_in_conversation_with(agent_id, chat_session_id)
+    """Resolve who holds human takeover for a session (Mongo source of truth)."""
+    handler = await get_chat_session_in_conversation_with(agent_id, chat_session_id)
+    return str(handler) if handler else None
 
 
 async def persist_in_conversation_with(
@@ -1345,13 +1400,13 @@ async def persist_in_conversation_with(
     user_id: str | None,
     *,
     actor_user_id: str | None = None,
-) -> str | None:
+) -> bool:
     """
-    Update in_conversation_with in Mongo and Redis (when the visitor is online).
-
-    Returns the visitor socket id when Redis was updated, else None.
+    Update in_conversation_with in Mongo. Returns True when the visitor is online (for emits).
     """
-    from services.elysium_atlas_services.atlas_redis_services import update_visitor_conversation_status
+    from services.elysium_atlas_services.atlas_presence_services import (
+        update_visitor_conversation_status,
+    )
     from services.elysium_atlas_services.atlas_chat_session_audit_services import (
         AUDIT_ACTOR_TEAM_MEMBER,
         AUDIT_EVENT_TAKEOVER_RELEASED,
@@ -1361,7 +1416,7 @@ async def persist_in_conversation_with(
 
     previous_handler = await get_chat_session_in_conversation_with(agent_id, chat_session_id)
 
-    visitor_sid = update_visitor_conversation_status(agent_id, chat_session_id, user_id)
+    visitor_online = await update_visitor_conversation_status(agent_id, chat_session_id, user_id)
     await set_chat_session_in_conversation_with(agent_id, chat_session_id, user_id)
 
     if user_id and user_id != previous_handler:
@@ -1386,7 +1441,7 @@ async def persist_in_conversation_with(
             metadata={"released_in_conversation_with": previous_handler},
         )
 
-    return visitor_sid
+    return visitor_online
 
 
 async def mark_chat_session_resolved(
@@ -1404,10 +1459,12 @@ async def mark_chat_session_resolved(
 
     Clears any active human takeover and notifies the visitor when online.
 
-    Returns a result dict with success, status, and optional visitor_sid for emits.
+    Returns a result dict with success, status, and visitor_online for emits.
     """
     from config.atlas_chat_config import CHAT_SESSION_STATUS_RESOLVED
-    from services.elysium_atlas_services.atlas_redis_services import update_visitor_conversation_status
+    from services.elysium_atlas_services.atlas_presence_services import (
+        update_visitor_conversation_status,
+    )
     from services.elysium_atlas_services.atlas_chat_session_audit_services import (
         AUDIT_ACTOR_TEAM_MEMBER,
         AUDIT_EVENT_SESSION_RESOLVED,
@@ -1436,7 +1493,7 @@ async def mark_chat_session_resolved(
                 "message": "Session is already resolved",
                 "status": CHAT_SESSION_STATUS_RESOLVED,
                 "already_resolved": True,
-                "visitor_sid": None,
+                "visitor_online": False,
             }
 
         active_handler = await resolve_active_conversation_handler(agent_id, chat_session_id)
@@ -1453,9 +1510,9 @@ async def mark_chat_session_resolved(
         resolved_by_privileged = allow_privileged_resolve and not is_active_handler
 
         now = datetime.datetime.now(datetime.timezone.utc)
-        visitor_sid = None
+        visitor_online = False
         if previous_handler:
-            visitor_sid = update_visitor_conversation_status(agent_id, chat_session_id, None)
+            visitor_online = await update_visitor_conversation_status(agent_id, chat_session_id, None)
             await record_chat_session_audit(
                 agent_id,
                 chat_session_id,
@@ -1508,7 +1565,7 @@ async def mark_chat_session_resolved(
             "status": CHAT_SESSION_STATUS_RESOLVED,
             "resolved_at": format_utc_datetime_for_client(now),
             "resolved_by": str(resolved_by) if resolved_by is not None else None,
-            "visitor_sid": visitor_sid,
+            "visitor_online": visitor_online,
             "had_active_takeover": bool(previous_handler),
             "resolved_by_privileged": resolved_by_privileged,
             "audit": audit_row,

@@ -1,5 +1,5 @@
 """
-Sweep stale visitors from Redis and mark them offline in MongoDB.
+Sweep stale visitors from Mongo and mark them offline.
 
 Intended to be invoked periodically (cron, background task, admin endpoint, etc.).
 """
@@ -7,17 +7,13 @@ Intended to be invoked periodically (cron, background task, admin endpoint, etc.
 from __future__ import annotations
 
 import datetime
-from collections import defaultdict
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List
 
 from config.atlas_agent_config_data import ELYSIUM_ATLAS_AGENT_CONFIG_DATA
 from logging_config import get_logger
-from services.elysium_atlas_services.atlas_chat_session_services import set_visitor_online_status
-from services.elysium_atlas_services.atlas_redis_services import (
-    get_or_cache_agent_data_async,
-    get_visitor_count_for_agent,
-    iter_all_agent_visitor_entries,
-    remove_visitor_from_agent,
+from services.elysium_atlas_services.atlas_presence_services import (
+    iter_online_visitor_sessions,
+    mark_visitor_offline,
 )
 from services.mongo_services import get_collection
 
@@ -67,7 +63,7 @@ def resolve_visitor_last_activity_at(
     Most recent activity timestamp for stale checks.
 
     Considers last_message_at when set, last_connected_at, then optional fallback
-    (e.g. Redis created_at). Uses the latest parsed value so a fresh reconnect
+    (e.g. session created_at). Uses the latest parsed value so a fresh reconnect
     is not treated as stale because of an older last_message_at.
     """
     candidates: List[datetime.datetime] = []
@@ -108,63 +104,18 @@ async def _fetch_session_activity_fields(
     )
 
 
-async def _emit_stale_visitor_events(
-    cleaned_by_agent: Dict[str, List[Tuple[str, str | None]]],
-) -> None:
-    """Emit the same socket events as a normal visitor disconnect."""
-    if not cleaned_by_agent:
-        return
-
-    from services.elysium_atlas_services.atlas_visitor_socket_services import (
-        emit_agent_visitor_disconnected_event,
-    )
-
-    for agent_id, disconnects in cleaned_by_agent.items():
-        for sid, chat_session_id in disconnects:
-            await emit_agent_visitor_disconnected_event(agent_id, chat_session_id, sid)
-
-        agent_data = await get_or_cache_agent_data_async(agent_id)
-        if not agent_data:
-            continue
-
-        team_id = agent_data.get("team_id")
-        if not team_id:
-            continue
-
-        visitor_count = get_visitor_count_for_agent(agent_id)
-        team_room = f"team_{team_id}_members"
-        from sockets import sio
-
-        await sio.emit(
-            "agent_visitor_count_updated",
-            {
-                "agent_id": agent_id,
-                "visitor_count": visitor_count if visitor_count is not None else 0,
-            },
-            room=team_room,
-        )
-        logger.info(
-            f"Emitted stale cleanup events for agent {agent_id}: "
-            f"removed {len(disconnects)} visitor(s), count={visitor_count}"
-        )
-
-
 async def cleanup_stale_visitors_service(
     *,
     threshold_seconds: int | None = None,
-    emit_events: bool = True,
 ) -> Dict[str, Any]:
     """
     Scan all connected visitors across all agents and remove stale entries.
 
     A visitor is stale when its last activity is older than the configured threshold.
-    Last activity is the most recent of last_message_at and last_connected_at
-    (Mongo first, Redis visitor payload as fallback for missing fields).
+    Last activity is the most recent of last_message_at and last_connected_at on the session doc.
 
     Args:
         threshold_seconds: Override for stale_visitor_threshold_seconds config.
-        emit_events: When True, emit agent_visitor_disconnected and
-            agent_visitor_count_updated socket events (default True).
 
     Returns:
         Summary dict with success and cleaned_count.
@@ -172,12 +123,12 @@ async def cleanup_stale_visitors_service(
     threshold = threshold_seconds if threshold_seconds is not None else get_stale_visitor_threshold_seconds()
     now = datetime.datetime.now(datetime.timezone.utc)
     cleaned_count = 0
-    cleaned_by_agent: Dict[str, List[Tuple[str, str | None]]] = defaultdict(list)
     scanned = 0
     errors = 0
 
     try:
-        for agent_id, sid, visitor_data in iter_all_agent_visitor_entries():
+        online_entries = await iter_online_visitor_sessions()
+        for agent_id, chat_session_id, visitor_data in online_entries:
             scanned += 1
             chat_session_id = visitor_data.get("chat_session_id")
 
@@ -202,25 +153,19 @@ async def cleanup_stale_visitors_service(
                 if not is_visitor_stale(last_activity_at, threshold_seconds=threshold, now=now):
                     continue
 
-                remove_visitor_from_agent(agent_id, sid)
-
-                if chat_session_id:
-                    await set_visitor_online_status(agent_id, chat_session_id, False)
+                await mark_visitor_offline(agent_id, chat_session_id)
 
                 cleaned_count += 1
-                cleaned_by_agent[agent_id].append((sid, chat_session_id))
                 logger.info(
-                    f"Removed stale visitor sid={sid} agent_id={agent_id} "
+                    f"Removed stale visitor agent_id={agent_id} "
                     f"chat_session_id={chat_session_id} last_activity_at={last_activity_at}"
                 )
             except Exception as e:
                 errors += 1
                 logger.error(
-                    f"Error cleaning stale visitor sid={sid} agent_id={agent_id}: {e}"
+                    f"Error cleaning stale visitor agent_id={agent_id} "
+                    f"chat_session_id={chat_session_id}: {e}"
                 )
-
-        if emit_events and cleaned_by_agent:
-            await _emit_stale_visitor_events(cleaned_by_agent)
 
         summary = {
             "success": True,

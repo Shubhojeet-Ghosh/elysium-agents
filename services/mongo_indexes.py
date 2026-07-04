@@ -144,6 +144,29 @@ async def create_mongo_indexes():
             "(status=resolved only)"
         )
 
+        await atlas_chat_sessions_collection.create_index(
+            [("agent_id", 1), ("visitor_online", 1)],
+            name="agent_id_visitor_online_index",
+        )
+        logger.info("Compound index created on atlas_chat_sessions.agent_id and visitor_online")
+
+        atlas_team_member_presence_collection = get_collection("atlas_team_member_presence")
+        await atlas_team_member_presence_collection.create_index(
+            [("user_id", 1), ("team_id", 1)],
+            name="user_team_presence_unique",
+            unique=True,
+        )
+        logger.info(
+            "Unique compound index created on atlas_team_member_presence (user_id, team_id)"
+        )
+        await atlas_team_member_presence_collection.create_index(
+            [("active_agent_ids", 1), ("status", 1)],
+            name="active_agent_ids_status_presence_index",
+        )
+        logger.info(
+            "Compound index created on atlas_team_member_presence.active_agent_ids and status"
+        )
+
         # Create indexes for atlas_chat_session_audits collection
         atlas_chat_session_audits_collection = get_collection("atlas_chat_session_audits")
         await atlas_chat_session_audits_collection.create_index(

@@ -11,7 +11,6 @@ logger = get_logger()
 async def cleanup_stale_visitors_controller(
     authorized: bool,
     threshold_seconds: int | None = None,
-    emit_events: bool = True,
 ) -> JSONResponse:
     try:
         if not authorized:
@@ -23,7 +22,6 @@ async def cleanup_stale_visitors_controller(
         logger.info("cleanup_stale_visitors_controller invoked")
         result: Dict[str, Any] = await cleanup_stale_visitors_service(
             threshold_seconds=threshold_seconds,
-            emit_events=emit_events,
         )
 
         status_code = 200 if result.get("success") else 500

@@ -11,7 +11,6 @@ from services.redis_services import (
     set_remove,
     set_members,
     set_count,
-    set_contains
 )
 
 logger = get_logger()
@@ -118,8 +117,7 @@ def resolve_socket_user_id(session: dict | None) -> str | None:
     """
     Resolve authenticated user_id from a Socket.IO session.
 
-    Team member flows store user_id on atlas-team-member-connected; JWT connect
-    only stores user_data until that event runs again after reconnect.
+    Team member flows store user_id on connect (JWT) and atlas-team-member-connected.
     """
     if not session or not isinstance(session, dict):
         return None
@@ -129,6 +127,34 @@ def resolve_socket_user_id(session: dict | None) -> str | None:
         return str(user_id).strip()
 
     return get_user_id_from_user_data(session.get("user_data"))
+
+
+def resolve_socket_team_id(session: dict | None) -> str | None:
+    """team_id from session or JWT user_data."""
+    if not session or not isinstance(session, dict):
+        return None
+    team_id = session.get("team_id")
+    if not team_id:
+        user_data = session.get("user_data")
+        if isinstance(user_data, dict):
+            team_id = user_data.get("team_id")
+    return str(team_id).strip() if team_id else None
+
+
+def resolve_socket_team_role(session: dict | None) -> str | None:
+    """Role from JWT user_data on the socket session (owner | admin | member)."""
+    if not session or not isinstance(session, dict):
+        return None
+    user_data = session.get("user_data")
+    if not isinstance(user_data, dict):
+        return None
+    role = user_data.get("role")
+    return str(role).strip().lower() if role else None
+
+
+def is_socket_team_admin(session: dict | None) -> bool:
+    """Fast path: owner/admin from JWT without a Mongo role lookup."""
+    return resolve_socket_team_role(session) in {"owner", "admin"}
 
 
 def get_user_id_from_user_data(user_data: dict) -> str | None:

@@ -2,19 +2,17 @@ from logging_config import get_logger
 
 logger = get_logger()
 
-async def emit_visitor_message(visitor_sid, agent_id, chat_session_id, message, in_conversation_with, message_metadata=None):
-    """
-    Emit a chat message from a team member to a specific visitor's socket.
-
-    Args:
-        visitor_sid (str): The visitor's socket ID
-        agent_id (str): The agent ID
-        chat_session_id (str): The chat session ID
-        message (str): The message content
-        in_conversation_with (str): The user ID of the team member sending the message
-        message_metadata (dict | None): Persisted message fields (_id, message_id, created_at, role)
-    """
+async def emit_visitor_message(
+    agent_id: str,
+    chat_session_id: str,
+    message: str,
+    in_conversation_with: str,
+    message_metadata=None,
+):
+    """Emit a team member message to the visitor via their session room."""
     from sockets import sio
+    from services.elysium_atlas_services.atlas_visitor_socket_rooms import visitor_session_room
+
     payload = {
         "agent_id": agent_id,
         "chat_session_id": chat_session_id,
@@ -24,8 +22,47 @@ async def emit_visitor_message(visitor_sid, agent_id, chat_session_id, message, 
     }
     if message_metadata:
         payload.update(message_metadata)
-    await sio.emit("visitor_message", payload, to=visitor_sid)
-    logger.info(f"Emitted visitor_message to visitor {chat_session_id} (sid: {visitor_sid}) for agent {agent_id}")
+    room = visitor_session_room(chat_session_id)
+    await sio.emit("visitor_message", payload, room=room)
+    logger.info(
+        f"Emitted visitor_message to room {room} for chat_session_id {chat_session_id}, agent {agent_id}"
+    )
+
+async def emit_team_member_message_to_user(
+    user_id: str,
+    agent_id: str,
+    chat_session_id: str,
+    message: str,
+    chat_session_id_sender: str,
+    message_metadata=None,
+    *,
+    conversation_mode: str | None = None,
+) -> None:
+    """Emit a visitor message to all tabs of a team member via their user room."""
+    if not user_id:
+        return
+
+    from sockets import sio
+    from services.elysium_atlas_services.atlas_team_member_socket_rooms import team_member_user_room
+
+    payload = {
+        "agent_id": agent_id,
+        "chat_session_id": chat_session_id,
+        "message": message,
+        "sender": "visitor",
+    }
+    if conversation_mode:
+        payload["conversation_mode"] = conversation_mode
+    if message_metadata:
+        payload.update(message_metadata)
+
+    room = team_member_user_room(user_id)
+    await sio.emit("message_from_visitor", payload, room=room)
+    logger.info(
+        f"Emitted message_from_visitor to room {room} "
+        f"for chat_session_id {chat_session_id} agent {agent_id}"
+    )
+
 
 async def emit_team_member_message(
     team_member_sids,
@@ -68,27 +105,24 @@ async def emit_team_member_message(
     )
 
 
-async def emit_conversation_started(visitor_sid, agent_id, chat_session_id, user_id):
-    """
-    Notify a visitor that a team member has started a conversation with them.
-
-    Args:
-        visitor_sid (str): The visitor's socket ID
-        agent_id (str): The agent ID
-        chat_session_id (str): The chat session ID
-        user_id (str): The team member's user ID
-    """
+async def emit_conversation_started(agent_id: str, chat_session_id: str, user_id: str):
+    """Notify a visitor that a team member has started a conversation (session room)."""
     from sockets import sio
+    from services.elysium_atlas_services.atlas_visitor_socket_rooms import visitor_session_room
+
+    room = visitor_session_room(chat_session_id)
     await sio.emit(
         "conversation_started",
         {
             "agent_id": agent_id,
             "chat_session_id": chat_session_id,
-            "in_conversation_with": user_id
+            "in_conversation_with": user_id,
         },
-        to=visitor_sid
+        room=room,
     )
-    logger.info(f"Emitted conversation_started to visitor {chat_session_id} (sid: {visitor_sid}) for agent {agent_id}, user_id {user_id}")
+    logger.info(
+        f"Emitted conversation_started to room {room} for agent {agent_id}, user_id {user_id}"
+    )
 
 
 async def emit_team_member_conversation_started(
@@ -226,26 +260,22 @@ async def emit_session_takeover_ended_to_monitors(
         f"for chat_session_id {chat_session_id}, agent {agent_id}"
     )
 
-async def emit_conversation_ended(visitor_sid, agent_id, chat_session_id):
-    """
-    Notify a visitor that the team member has left the conversation.
-
-    Args:
-        visitor_sid (str): The visitor's socket ID
-        agent_id (str): The agent ID
-        chat_session_id (str): The chat session ID
-    """
+async def emit_conversation_ended(agent_id: str, chat_session_id: str):
+    """Notify a visitor that the team member has left the conversation (session room)."""
     from sockets import sio
+    from services.elysium_atlas_services.atlas_visitor_socket_rooms import visitor_session_room
+
+    room = visitor_session_room(chat_session_id)
     await sio.emit(
         "conversation_ended",
         {
             "agent_id": agent_id,
             "chat_session_id": chat_session_id,
-            "in_conversation_with": None
+            "in_conversation_with": None,
         },
-        to=visitor_sid
+        room=room,
     )
-    logger.info(f"Emitted conversation_ended to visitor {chat_session_id} (sid: {visitor_sid}) for agent {agent_id}")
+    logger.info(f"Emitted conversation_ended to room {room} for agent {agent_id}")
 
 
 async def emit_chat_session_resolved(
@@ -327,49 +357,40 @@ async def emit_chat_session_status_updated(
     )
 
 
-async def get_privileged_takeover_mirror_monitor_sids(
+async def emit_chat_session_takeover_updated(
     agent_id: str,
     chat_session_id: str,
-    exclude_user_id: str | None = None,
-) -> list[str]:
+) -> None:
     """
-    Socket IDs of owner/admin monitors who may receive live takeover mirrors.
+    Broadcast human takeover assignment changes to all online team members on the agent dashboard.
 
-    Regular team members (role=member) are excluded.
+    Emits the same row shape as agent_visitors_list so clients can patch list/search UI in place.
     """
-    from services.elysium_atlas_services.atlas_redis_services import get_session_monitors
-    from services.elysium_atlas_services.team_auth_services import (
-        get_agent_team_id,
-        get_user_role_for_team,
-        TEAM_ADMIN_ROLES,
+    from services.elysium_atlas_services.atlas_chat_session_services import (
+        build_chat_session_broadcast_row,
     )
+    from sockets import sio
 
-    team_id = await get_agent_team_id(agent_id)
-    if not team_id:
-        return []
+    row = await build_chat_session_broadcast_row(agent_id, chat_session_id)
+    if not row:
+        return
 
-    monitors = get_session_monitors(agent_id, chat_session_id)
-    if not monitors:
-        return []
-
-    role_cache: dict[str, str | None] = {}
-    privileged_sids: list[str] = []
-
-    for monitor in monitors:
-        monitor_user_id = monitor.get("user_id")
-        monitor_sid = monitor.get("sid")
-        if not monitor_user_id or not monitor_sid:
-            continue
-        if exclude_user_id and monitor_user_id == exclude_user_id:
-            continue
-        if monitor_user_id not in role_cache:
-            role_cache[monitor_user_id] = await get_user_role_for_team(monitor_user_id, team_id)
-        if role_cache[monitor_user_id] in TEAM_ADMIN_ROLES:
-            privileged_sids.append(
-                monitor_sid if isinstance(monitor_sid, str) else monitor_sid.decode()
-            )
-
-    return privileged_sids
+    payload = {
+        "agent_id": agent_id,
+        "chat_session_id": chat_session_id,
+        "in_conversation_with": row.get("in_conversation_with"),
+        "in_conversation_with_name": row.get("in_conversation_with_name"),
+        "status": row.get("status"),
+        "visitor_online": row.get("visitor_online"),
+        "visitor": row,
+    }
+    await sio.emit("chat_session_takeover_updated", payload, room=f"agent_{agent_id}_members")
+    logger.info(
+        "Emitted chat_session_takeover_updated chat_session_id=%s agent_id=%s handler=%s",
+        chat_session_id,
+        agent_id,
+        row.get("in_conversation_with"),
+    )
 
 
 async def notify_monitors_on_takeover_started(
@@ -432,6 +453,70 @@ async def notify_monitors_on_takeover_started(
         )
 
 
+async def mirror_takeover_visitor_message_to_monitors(
+    agent_id: str,
+    chat_session_id: str,
+    message: str,
+    message_metadata: dict | None,
+    *,
+    handler_user_id: str,
+) -> None:
+    """Mirror a visitor message to session monitors (caller is already on the takeover path)."""
+    from services.elysium_atlas_services.atlas_redis_services import (
+        get_session_monitor_sids_excluding_user,
+    )
+
+    if not agent_id or not chat_session_id or not handler_user_id:
+        return
+
+    monitor_sids = get_session_monitor_sids_excluding_user(
+        agent_id, chat_session_id, handler_user_id
+    )
+    if not monitor_sids:
+        return
+
+    await emit_monitor_visitor_message(
+        monitor_sids,
+        agent_id,
+        chat_session_id,
+        message,
+        message_metadata,
+        conversation_mode="takeover",
+    )
+
+
+async def mirror_takeover_team_member_reply_to_monitors(
+    agent_id: str,
+    chat_session_id: str,
+    message: str,
+    message_metadata: dict | None,
+    *,
+    handler_user_id: str,
+) -> None:
+    """Mirror a human handler reply to session monitors (caller is already on the takeover path)."""
+    from services.elysium_atlas_services.atlas_redis_services import (
+        get_session_monitor_sids_excluding_user,
+    )
+
+    if not agent_id or not chat_session_id or not handler_user_id:
+        return
+
+    monitor_sids = get_session_monitor_sids_excluding_user(
+        agent_id, chat_session_id, handler_user_id
+    )
+    if not monitor_sids:
+        return
+
+    await emit_monitor_team_member_message(
+        monitor_sids,
+        agent_id,
+        chat_session_id,
+        message,
+        message_metadata,
+        team_member_id=handler_user_id,
+    )
+
+
 async def emit_monitor_team_member_message(
     team_member_sids: list[str],
     agent_id: str,
@@ -440,8 +525,8 @@ async def emit_monitor_team_member_message(
     message_metadata: dict | None,
     team_member_id: str | None = None,
 ) -> None:
-    """Emit a human handler reply to owner/admin passive monitors during takeover."""
-    if not team_member_sids or not message_metadata:
+    """Emit a human handler reply to passive session monitors during takeover."""
+    if not team_member_sids:
         return
 
     from sockets import sio
@@ -456,7 +541,8 @@ async def emit_monitor_team_member_message(
     }
     if team_member_id:
         payload["team_member_id"] = team_member_id
-    payload.update(message_metadata)
+    if message_metadata:
+        payload.update(message_metadata)
 
     for member_sid in team_member_sids:
         await sio.emit("message_from_team_member", payload, to=member_sid)
@@ -478,7 +564,7 @@ async def emit_agent_visitor_ai_chat_message(
     Emits to agent_{agent_id}_members room as agent_visitor_ai_chat_message.
     """
     from sockets import sio
-    from services.elysium_atlas_services.atlas_redis_services import (
+    from services.elysium_atlas_services.atlas_presence_services import (
         get_visitor_by_chat_session,
         has_connected_team_members_for_agent,
     )
@@ -497,14 +583,14 @@ async def emit_agent_visitor_ai_chat_message(
         )
         return
 
-    if not has_connected_team_members_for_agent(agent_id):
+    if not await has_connected_team_members_for_agent(agent_id):
         logger.debug(
             f"Skipping agent_visitor_ai_chat_message for {chat_session_id}: "
             "no connected team members"
         )
         return
 
-    visitor = get_visitor_by_chat_session(agent_id, chat_session_id)
+    visitor = await get_visitor_by_chat_session(agent_id, chat_session_id)
     if visitor and visitor.get("in_conversation_with"):
         logger.debug(
             f"Skipping agent_visitor_ai_chat_message for {chat_session_id}: "
@@ -580,7 +666,7 @@ async def emit_monitor_visitor_message(
     conversation_mode: str = "monitor",
 ) -> None:
     """Emit a persisted visitor message to passive session monitors (non-blocking from caller)."""
-    if not team_member_sids or not message_metadata:
+    if not team_member_sids:
         return
 
     await emit_team_member_message(

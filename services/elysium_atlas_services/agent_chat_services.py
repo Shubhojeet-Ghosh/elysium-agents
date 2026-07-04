@@ -270,32 +270,19 @@ async def chat_with_agent_v1(agent_id, message, sid=None, chat_session_id=None, 
                 )
                 visitor_message_metadata = stored_message_metadata(user_stored_doc)
 
-                async def _emit_visitor_to_monitors() -> None:
-                    try:
-                        from services.elysium_atlas_services.atlas_redis_services import (
-                            get_session_monitor_sids,
-                        )
-                        from services.elysium_atlas_services.atlas_team_member_emit_services import (
-                            emit_monitor_visitor_message,
-                        )
+                from services.elysium_atlas_services.atlas_team_member_emit_services import (
+                    emit_monitor_visitor_message,
+                )
 
-                        active_monitor_sids = get_session_monitor_sids(agent_id, chat_session_id)
-                        if not active_monitor_sids:
-                            return
-                        await emit_monitor_visitor_message(
-                            active_monitor_sids,
-                            agent_id,
-                            chat_session_id,
-                            message,
-                            visitor_message_metadata,
-                        )
-                    except Exception as emit_err:
-                        logger.error(
-                            f"Failed to emit visitor message to monitors for {chat_session_id}: {emit_err}",
-                            exc_info=True,
-                        )
-
-                asyncio.create_task(_emit_visitor_to_monitors())
+                asyncio.create_task(
+                    emit_monitor_visitor_message(
+                        monitor_sids,
+                        agent_id,
+                        chat_session_id,
+                        message,
+                        visitor_message_metadata,
+                    )
+                )
                 logger.info(f"{chat_log} Stored visitor message early for monitor mirror")
 
         agent_name = chat_session_data.get("agent_name") if chat_session_data else None
