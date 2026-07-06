@@ -286,6 +286,20 @@ async def create_mongo_indexes():
         logger.info(
             f"Compound index created on {ATLAS_LEADS_COLLECTION}.agent_id, fields.email"
         )
+        await atlas_leads_collection.create_index(
+            [("team_id", 1), ("agent_id", 1), ("updated_at", -1)],
+            name="team_id_agent_id_updated_at_index",
+        )
+        logger.info(
+            f"Compound index created on {ATLAS_LEADS_COLLECTION}.team_id, agent_id, updated_at"
+        )
+        await atlas_leads_collection.create_index(
+            [("team_id", 1), ("updated_at", -1), ("_id", -1)],
+            name="team_id_updated_at_id_index",
+        )
+        logger.info(
+            f"Compound index created on {ATLAS_LEADS_COLLECTION}.team_id, updated_at, _id"
+        )
 
         logger.info("MongoDB indexes created / verified successfully.")
 

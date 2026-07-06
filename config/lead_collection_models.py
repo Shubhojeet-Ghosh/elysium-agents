@@ -8,6 +8,10 @@ from config.lead_collection_config import (
     MIN_MESSAGES_BEFORE_ASK_MAX,
     MIN_MESSAGES_BEFORE_ASK_MIN,
 )
+from config.lead_collection_constants import (
+    DEFAULT_LEADS_LIST_PAGE_SIZE,
+    MAX_LEADS_LIST_PAGE_SIZE,
+)
 
 LeadFieldKey = Literal["email", "name", "phone", "company", "interest"]
 
@@ -70,6 +74,20 @@ class ResetLeadCollectionConfigRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     agent_id: str = Field(..., min_length=1)
+
+
+class ListTeamLeadsRequest(BaseModel):
+    """Paginated list of captured leads for the authenticated user's team."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent_id: str | None = Field(
+        default=None,
+        min_length=1,
+        description="When set, return leads collected only by this agent.",
+    )
+    page: int = Field(default=1, ge=1)
+    limit: int = Field(default=DEFAULT_LEADS_LIST_PAGE_SIZE, ge=1, le=MAX_LEADS_LIST_PAGE_SIZE)
 
 
 class UpdateSessionLeadRequest(BaseModel):

@@ -2,6 +2,7 @@ from fastapi.responses import JSONResponse
 
 from config.lead_collection_models import (
     GetLeadCollectionConfigRequest,
+    ListTeamLeadsRequest,
     ResetLeadCollectionConfigRequest,
     UpdateLeadCollectionConfigRequest,
     UpdateSessionLeadRequest,
@@ -17,6 +18,9 @@ from services.elysium_atlas_services.lead_collection_config_services import (
 from services.elysium_atlas_services.team_auth_services import (
     can_user_modify_agent,
     can_user_read_agent,
+    get_agent_team_id,
+    is_user_member_of_team,
+    parse_session_team_context,
 )
 
 logger = get_logger()
@@ -292,6 +296,90 @@ async def update_session_lead_controller(
                 "success": False,
                 "message": "Something went wrong while saving contact details. Please try again.",
             },
+        )
+
+
+async def _require_team_member(user_data: dict) -> tuple[str, str] | JSONResponse:
+    auth_error = _unauthenticated_response(user_data)
+    if auth_error:
+        return auth_error
+
+    session_context = parse_session_team_context(user_data)
+    if session_context is None:
+        return JSONResponse(
+            status_code=400,
+            content={"success": False, "message": "team_id is required in session context."},
+        )
+
+    user_id, team_id = session_context
+    if not await is_user_member_of_team(user_id, team_id):
+        return JSONResponse(
+            status_code=403,
+            content={"success": False, "message": "You are not a member of this team."},
+        )
+    return user_id, team_id
+
+
+async def list_team_leads_controller(
+    body: ListTeamLeadsRequest,
+    user_data: dict,
+) -> JSONResponse:
+    try:
+        team_member = await _require_team_member(user_data)
+        if isinstance(team_member, JSONResponse):
+            return team_member
+
+        user_id, team_id = team_member
+
+        if body.agent_id:
+            auth_error = await _require_agent_read(user_data, body.agent_id)
+            if auth_error:
+                return auth_error
+
+            agent_team_id = await get_agent_team_id(body.agent_id)
+            if not agent_team_id:
+                return JSONResponse(
+                    status_code=404,
+                    content={"success": False, "message": "Agent not found."},
+                )
+            if agent_team_id != team_id:
+                return JSONResponse(
+                    status_code=403,
+                    content={
+                        "success": False,
+                        "message": "You are not authorized to access leads for this agent.",
+                    },
+                )
+
+        from services.elysium_atlas_services.lead_collection_services import list_team_leads
+
+        result = await list_team_leads(
+            team_id,
+            agent_id=body.agent_id,
+            page=body.page,
+            limit=body.limit,
+        )
+        logger.info(
+            "Listed team leads user_id=%s team_id=%s agent_id=%s page=%s limit=%s total=%s",
+            user_id,
+            team_id,
+            body.agent_id,
+            result.get("page"),
+            result.get("limit"),
+            result.get("total"),
+        )
+        return JSONResponse(status_code=200, content={"success": True, **result})
+    except Exception as e:
+        logger.error(
+            "Error in list_team_leads_controller team_id=%s agent_id=%s: %s",
+            (user_data or {}).get("team_id"),
+            body.agent_id,
+            e,
+            exc_info=True,
+        )
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "message": "An error occurred while listing team leads."},
         )
 
 

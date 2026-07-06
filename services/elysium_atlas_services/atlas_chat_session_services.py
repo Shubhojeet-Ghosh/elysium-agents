@@ -663,6 +663,57 @@ async def build_chat_session_broadcast_row(
     return row
 
 
+async def get_chat_session_alias_names_by_keys(
+    session_keys: list[tuple[str, str]],
+) -> dict[tuple[str, str], str | None]:
+    """
+    Batch-fetch alias_name from atlas_chat_sessions for (agent_id, chat_session_id) pairs.
+
+    Missing sessions or unset aliases map to None.
+    """
+    if not session_keys:
+        return {}
+
+    by_agent: dict[str, list[str]] = {}
+    for agent_id, chat_session_id in session_keys:
+        if not agent_id or not chat_session_id:
+            continue
+        session_ids = by_agent.setdefault(str(agent_id), [])
+        if chat_session_id not in session_ids:
+            session_ids.append(chat_session_id)
+
+    if not by_agent:
+        return {}
+
+    try:
+        collection = get_collection("atlas_chat_sessions")
+        or_clauses = [
+            {"agent_id": agent_id, "chat_session_id": {"$in": session_ids}}
+            for agent_id, session_ids in by_agent.items()
+        ]
+        cursor = collection.find(
+            {"$or": or_clauses},
+            {"_id": 0, "agent_id": 1, "chat_session_id": 1, "alias_name": 1},
+        )
+
+        aliases: dict[tuple[str, str], str | None] = {}
+        async for doc in cursor:
+            agent_id = doc.get("agent_id")
+            chat_session_id = doc.get("chat_session_id")
+            if not agent_id or not chat_session_id:
+                continue
+            key = (str(agent_id), str(chat_session_id))
+            alias_name = doc.get("alias_name")
+            if isinstance(alias_name, str) and alias_name.strip():
+                aliases[key] = alias_name.strip()
+            else:
+                aliases[key] = None
+        return aliases
+    except Exception as e:
+        logger.error("Error batch-fetching chat session alias names: %s", e, exc_info=True)
+        return {}
+
+
 async def get_chat_sessions_by_ids_for_agent(
     agent_id: str,
     chat_session_ids: list[str],

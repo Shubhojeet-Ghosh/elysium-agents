@@ -24,6 +24,7 @@ from config.lead_collection_config import (
 )
 from config.lead_collection_constants import (
     ATLAS_LEADS_COLLECTION,
+    DEFAULT_LEADS_LIST_PAGE_SIZE,
     LEAD_CHAT_HISTORY_LIMIT,
     LEAD_DOCUMENT_STATUS_COMPLETE,
     LEAD_DOCUMENT_STATUS_PARTIAL,
@@ -33,6 +34,7 @@ from config.lead_collection_constants import (
     LEAD_STATUS_NOT_STARTED,
     LEAD_STATUS_PARTIAL,
     LEAD_TRIGGER_MODEL,
+    MAX_LEADS_LIST_PAGE_SIZE,
 )
 from config.structured_output_models import LeadCollectionTriggerResult
 from logging_config import get_logger
@@ -920,3 +922,134 @@ async def process_lead_collection_turn(
     )
 
     return {"prompt_block": prompt_block, "lead_state": lead_state}
+
+
+def _normalize_leads_list_pagination(page: int, limit: int) -> tuple[int, int]:
+    return max(1, page), max(1, min(limit, MAX_LEADS_LIST_PAGE_SIZE))
+
+
+def _build_leads_list_pagination_meta(total: int, page: int, limit: int) -> dict[str, Any]:
+    if total == 0:
+        return {
+            "total": 0,
+            "page": 1,
+            "limit": limit,
+            "total_pages": 0,
+            "has_next": False,
+            "has_prev": False,
+        }
+    total_pages = (total + limit - 1) // limit
+    page = min(page, total_pages)
+    return {
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "total_pages": total_pages,
+        "has_next": page < total_pages,
+        "has_prev": page > 1,
+    }
+
+
+def _serialize_lead_list_item(
+    doc: dict[str, Any],
+    *,
+    alias_name: str | None = None,
+) -> dict[str, Any]:
+    created_at = doc.get("created_at")
+    updated_at = doc.get("updated_at")
+    return {
+        "lead_id": doc.get("lead_id"),
+        "agent_id": doc.get("agent_id"),
+        "chat_session_id": doc.get("chat_session_id"),
+        "alias_name": alias_name,
+        "fields": doc.get("fields") or {},
+        "status": doc.get("status"),
+        "created_at": format_utc_datetime_for_client(created_at)
+        if isinstance(created_at, datetime.datetime)
+        else None,
+        "updated_at": format_utc_datetime_for_client(updated_at)
+        if isinstance(updated_at, datetime.datetime)
+        else None,
+    }
+
+
+async def list_team_leads(
+    team_id: str,
+    *,
+    agent_id: str | None = None,
+    page: int = 1,
+    limit: int = DEFAULT_LEADS_LIST_PAGE_SIZE,
+) -> dict[str, Any]:
+    """
+    Return paginated lead documents from atlas_leads for a team.
+
+    When agent_id is omitted, returns leads across all agents on the team,
+    sorted by updated_at descending (newest activity first).
+    When agent_id is set, narrows to that agent only (same sort).
+    """
+    page, limit = _normalize_leads_list_pagination(page, limit)
+    empty_result = {"leads": [], **_build_leads_list_pagination_meta(0, page, limit)}
+
+    query: dict[str, Any] = {"team_id": str(team_id)}
+    if agent_id:
+        query["agent_id"] = agent_id
+
+    projection = {
+        "_id": 0,
+        "lead_id": 1,
+        "agent_id": 1,
+        "chat_session_id": 1,
+        "fields": 1,
+        "status": 1,
+        "created_at": 1,
+        "updated_at": 1,
+    }
+
+    try:
+        collection = get_collection(ATLAS_LEADS_COLLECTION)
+        total = await collection.count_documents(query)
+        meta = _build_leads_list_pagination_meta(total, page, limit)
+        page = meta["page"]
+
+        if total == 0:
+            return empty_result
+
+        skip = (page - 1) * limit
+        cursor = (
+            collection.find(query, projection)
+            .sort([("updated_at", -1), ("_id", -1)])
+            .skip(skip)
+            .limit(limit)
+        )
+        lead_docs = [doc async for doc in cursor]
+
+        from services.elysium_atlas_services.atlas_chat_session_services import (
+            get_chat_session_alias_names_by_keys,
+        )
+
+        session_keys = [
+            (str(doc.get("agent_id")), str(doc.get("chat_session_id")))
+            for doc in lead_docs
+            if doc.get("agent_id") and doc.get("chat_session_id")
+        ]
+        alias_by_session = await get_chat_session_alias_names_by_keys(session_keys)
+
+        leads = [
+            _serialize_lead_list_item(
+                doc,
+                alias_name=alias_by_session.get(
+                    (str(doc.get("agent_id")), str(doc.get("chat_session_id"))),
+                ),
+            )
+            for doc in lead_docs
+        ]
+        return {"leads": leads, **meta}
+    except Exception as exc:
+        logger.error(
+            "Error listing team leads team_id=%s agent_id=%s: %s",
+            team_id,
+            agent_id,
+            exc,
+            exc_info=True,
+        )
+        return empty_result
