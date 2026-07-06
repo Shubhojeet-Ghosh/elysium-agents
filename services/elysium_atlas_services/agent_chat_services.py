@@ -134,6 +134,7 @@ def build_messages_list(
     chat_history: list = None,
     tool_turn_messages: list | None = None,
     tool_result_role: str = "assistant",
+    lead_collection_prompt: str | None = None,
 ) -> list:
     """
     Build an OpenAI-style messages list with system prompt, chat history, knowledge base,
@@ -170,6 +171,12 @@ def build_messages_list(
         messages.append({
             "role": "system",
             "content": system_prompt
+        })
+
+    if lead_collection_prompt:
+        messages.append({
+            "role": "system",
+            "content": lead_collection_prompt,
         })
 
     # --- Chat History ---
@@ -301,13 +308,38 @@ async def chat_with_agent_v1(agent_id, message, sid=None, chat_session_id=None, 
         if(agent_name):
             agent_data["agent_name"] = agent_name
 
+        lead_collection_prompt = None
+        if chat_session_id and not chat_session_data.get("in_conversation_with"):
+            from services.elysium_atlas_services.lead_collection_services import (
+                process_lead_collection_turn,
+            )
+
+            lead_turn = await process_lead_collection_turn(
+                agent_id=agent_id,
+                chat_session_id=chat_session_id,
+                message=message,
+                chat_session_data=chat_session_data or {},
+                chat_history=chat_history,
+                lead_config=(agent_data or {}).get("lead_collection_config"),
+                agent_data=agent_data,
+            )
+            lead_collection_prompt = lead_turn.get("prompt_block")
+            if lead_turn.get("lead_state") is not None:
+                chat_session_data["lead_collection"] = lead_turn["lead_state"]
+
         logger.info(f"{chat_log} Building LLM prompt with knowledge and chat history")
         step_start = time.perf_counter()
         knowledge_base_string = format_knowledge_base_string(final_results)
         model = agent_data.get("llm_model") or DEFAULT_MODEL
         handler, _ = resolve_model_handler(model)
         tool_result_role = get_tool_result_message_role(model)
-        messages = build_messages_list(agent_data, message, knowledge_base_string, chat_history)
+        messages = build_messages_list(
+            agent_data,
+            message,
+            knowledge_base_string,
+            chat_history,
+            lead_collection_prompt=lead_collection_prompt,
+        )
 
         tool_ids = (agent_data or {}).get("tool_ids") or []
         tool_turn_messages = None
@@ -341,6 +373,7 @@ async def chat_with_agent_v1(agent_id, message, sid=None, chat_session_id=None, 
                     chat_history,
                     tool_turn_messages=tool_turn_messages,
                     tool_result_role=tool_result_role,
+                    lead_collection_prompt=lead_collection_prompt,
                 )
             else:
                 logger.info(f"{chat_log} No tools invoked for this turn")

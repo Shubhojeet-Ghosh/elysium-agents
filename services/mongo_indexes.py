@@ -261,6 +261,32 @@ async def create_mongo_indexes():
             "created_by_user_id, status"
         )
 
+        from config.lead_collection_constants import ATLAS_LEADS_COLLECTION
+
+        atlas_leads_collection = get_collection(ATLAS_LEADS_COLLECTION)
+        await atlas_leads_collection.create_index(
+            [("agent_id", 1), ("chat_session_id", 1)],
+            name="agent_id_chat_session_id_unique",
+            unique=True,
+        )
+        logger.info(
+            f"Unique compound index created on {ATLAS_LEADS_COLLECTION}.agent_id, chat_session_id"
+        )
+        await atlas_leads_collection.create_index(
+            [("agent_id", 1), ("status", 1), ("completed_at", -1)],
+            name="agent_id_status_completed_at_index",
+        )
+        logger.info(
+            f"Compound index created on {ATLAS_LEADS_COLLECTION}.agent_id, status, completed_at"
+        )
+        await atlas_leads_collection.create_index(
+            [("agent_id", 1), ("fields.email", 1)],
+            name="agent_id_fields_email_index",
+        )
+        logger.info(
+            f"Compound index created on {ATLAS_LEADS_COLLECTION}.agent_id, fields.email"
+        )
+
         logger.info("MongoDB indexes created / verified successfully.")
 
     except Exception as e:

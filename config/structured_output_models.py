@@ -35,6 +35,18 @@ class LeadExtraction(BaseModel):
     description: str  # What they were interested in (in a sentence)
 
 
+class LeadCollectionTriggerResult(BaseModel):
+    """Structured output for evaluating whether to start proactive lead collection."""
+    should_collect: bool = Field(
+        ...,
+        description="True when the conversation matches the owner's collection trigger rule.",
+    )
+    reason: str = Field(
+        default="",
+        description="Brief explanation when should_collect is true; empty otherwise.",
+    )
+
+
 # Registry mapping extraction type keys to their corresponding Pydantic models
 STRUCTURED_OUTPUT_MODELS_REGISTRY: Dict[str, Type[BaseModel]] = {
     "website_content": WebsiteContentExtraction,

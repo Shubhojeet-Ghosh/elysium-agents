@@ -53,6 +53,15 @@ def serialize_chat_session_document_for_api(document: Dict[str, Any]) -> Dict[st
     for key, value in list(serialized.items()):
         if isinstance(value, datetime.datetime):
             serialized[key] = format_utc_datetime_for_client(value)
+
+    lead_collection = serialized.get("lead_collection")
+    if isinstance(lead_collection, dict):
+        lead_copy = dict(lead_collection)
+        completed_at = lead_copy.get("completed_at")
+        if isinstance(completed_at, datetime.datetime):
+            lead_copy["completed_at"] = format_utc_datetime_for_client(completed_at)
+        serialized["lead_collection"] = lead_copy
+
     return serialized
 
 
@@ -377,6 +386,7 @@ CHAT_SESSION_VISITOR_LIST_FIELDS = (
     "status",
     "resolved_at",
     "resolved_by",
+    "lead_collection",
 )
 
 
@@ -550,6 +560,7 @@ def format_chat_session_as_visitor_row(
     session_doc: Dict[str, Any],
     agent_id: str,
     live_visitor: Dict[str, Any] | None = None,
+    lead_config: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     """
     Shape an atlas_chat_sessions document for agent_visitors_list socket payloads.
@@ -602,7 +613,33 @@ def format_chat_session_as_visitor_row(
         "resolved_at": _serialize_session_datetime(session_doc.get("resolved_at")),
         "resolved_by": session_doc.get("resolved_by"),
     }
+
+    from services.elysium_atlas_services.lead_collection_services import (
+        build_lead_collection_client_summary,
+    )
+
+    session_lead = session_doc.get("lead_collection") if isinstance(session_doc.get("lead_collection"), dict) else None
+    lead_summary = build_lead_collection_client_summary(lead_config, session_lead)
+    row["lead_collection"] = lead_summary
+    row["lead_status"] = lead_summary.get("list_status")
+    row["lead_email"] = next(
+        (field["value"] for field in lead_summary.get("fields", []) if field.get("key") == "email" and field.get("captured")),
+        None,
+    )
+    row["lead_name"] = next(
+        (field["value"] for field in lead_summary.get("fields", []) if field.get("key") == "name" and field.get("captured")),
+        None,
+    )
+
     return row
+
+
+async def _lead_config_for_agent_visitor_list(agent_id: str) -> dict:
+    from services.elysium_atlas_services.lead_collection_config_services import (
+        get_lead_collection_config_for_agent,
+    )
+
+    return (await get_lead_collection_config_for_agent(agent_id)) or {}
 
 
 async def build_chat_session_broadcast_row(
@@ -620,7 +657,8 @@ async def build_chat_session_broadcast_row(
     if not session_doc:
         return None
 
-    row = format_chat_session_as_visitor_row(session_doc, agent_id)
+    lead_config = await _lead_config_for_agent_visitor_list(agent_id)
+    row = format_chat_session_as_visitor_row(session_doc, agent_id, lead_config=lead_config)
     await enrich_visitor_list_rows_with_handler_names([row])
     return row
 
@@ -657,8 +695,9 @@ async def get_chat_sessions_by_ids_for_agent(
             if doc.get("chat_session_id")
         }
 
+        lead_config = await _lead_config_for_agent_visitor_list(agent_id)
         visitors = [
-            format_chat_session_as_visitor_row(doc_by_id[session_id], agent_id)
+            format_chat_session_as_visitor_row(doc_by_id[session_id], agent_id, lead_config=lead_config)
             for session_id in chat_session_ids
             if session_id in doc_by_id
         ]
@@ -719,8 +758,9 @@ async def get_paginated_chat_sessions_for_agent_list(
         )
         session_docs = await cursor.to_list(length=None)
 
+        lead_config = await _lead_config_for_agent_visitor_list(agent_id)
         visitors = [
-            format_chat_session_as_visitor_row(doc, agent_id)
+            format_chat_session_as_visitor_row(doc, agent_id, lead_config=lead_config)
             for doc in session_docs
         ]
         visitors = await enrich_visitor_list_rows_with_handler_names(visitors)
@@ -836,8 +876,9 @@ async def search_paginated_chat_sessions_for_agent(
         )
         session_docs = await cursor.to_list(length=None)
 
+        lead_config = await _lead_config_for_agent_visitor_list(agent_id)
         visitors = [
-            format_chat_session_as_visitor_row(doc, agent_id)
+            format_chat_session_as_visitor_row(doc, agent_id, lead_config=lead_config)
             for doc in session_docs
         ]
         visitors = await enrich_visitor_list_rows_with_handler_names(visitors)

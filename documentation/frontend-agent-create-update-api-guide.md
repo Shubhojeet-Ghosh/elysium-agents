@@ -326,15 +326,28 @@ Object with allowed keys only:
 | Key | Type | Default |
 |-----|------|---------|
 | `enable_lead_capturing` | `boolean` | `false` |
+| `collection_trigger_prompt` | `string` | `""` |
+| `min_messages_before_ask` | `integer` | `2` |
+| `fields` | `array` | `[]` |
+
+When `enable_lead_capturing` is `true`, `collection_trigger_prompt` (10–500 chars) and at least one `fields` item are required after merge.
 
 **Create:** full object replaces defaults.
 
 **Update:** partial object merged into stored config (only sent keys change).
 
+**Dedicated CRUD APIs:** see [frontend-lead-collection-api-guide.md](./frontend-lead-collection-api-guide.md).
+
 ```json
 {
   "lead_collection_config": {
-    "enable_lead_capturing": true
+    "enable_lead_capturing": true,
+    "collection_trigger_prompt": "Start when the visitor asks about pricing or wants a demo.",
+    "min_messages_before_ask": 2,
+    "fields": [
+      { "key": "email", "required": true, "order": 1 },
+      { "key": "name", "required": true, "order": 2 }
+    ]
   }
 }
 ```
@@ -462,8 +475,17 @@ Object with allowed keys only:
 type RetrievalStrategy = "simple" | "orchestrated";
 type AgentStatus = "active" | "inactive" | "disabled";
 
+interface LeadCollectionFieldConfig {
+  key: "email" | "name" | "phone" | "company" | "interest";
+  required: boolean;
+  order: number;
+}
+
 interface LeadCollectionConfig {
   enable_lead_capturing?: boolean;
+  collection_trigger_prompt?: string;
+  min_messages_before_ask?: number;
+  fields?: LeadCollectionFieldConfig[];
 }
 
 interface PreBuildAgentRequest {

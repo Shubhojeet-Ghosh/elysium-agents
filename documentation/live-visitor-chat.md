@@ -207,7 +207,7 @@ This endpoint is cheap (two Mongo counts). Use it instead of any removed socket 
 4. **Do not** auto-call `atlas-agent-visitors-list` on poll. **Do not** move the user from page 1 to page 3 (or any other page). Keep their viewport stable until they act.
 5. **User clicks Refresh / Jump to newest:** emit `atlas-agent-visitors-list` with `page: 1` and the active `limit`. Replace the list, set `baselineTotal = response.total`, clear `pendingNewCount`.
 6. **User navigates to page 2+:** keep showing that page until they refresh or choose “jump to newest”. Summary polling only updates the banner/badge — not the table body.
-7. **Visible row freshness:** every **~10 seconds** while the tab is focused, emit `atlas-agent-visitors-refresh-sessions` with the `chat_session_id`s currently rendered (max 100). Merge `agent_visitors_sessions_refreshed.visitors` into existing rows by `chat_session_id` — update `visitor_online`, `status`, `in_conversation_with`, etc. **Do not** reorder rows or change page.
+7. **Visible row freshness:** every **~10 seconds** while the tab is focused, emit `atlas-agent-visitors-refresh-sessions` with the `chat_session_id`s currently rendered (max 100). Merge `agent_visitors_sessions_refreshed.visitors` into existing rows by `chat_session_id` — update `visitor_online`, `status`, `in_conversation_with`, `lead_collection`, etc. **Do not** reorder rows or change page.
 8. **Global online badge:** use `online_count` from the summary HTTP poll (step 2).
 9. **Real-time chat:** keep Socket.IO for messages, takeover, resolve, etc. — not for list pagination or room-wide presence broadcasts.
 
@@ -260,7 +260,7 @@ setInterval(() => {
 
 ## Visible row refresh (online status)
 
-Use this for **row-level** fields on the current page (`visitor_online`, `status`, `in_conversation_with`, `last_connected_at`, etc.) without refetching the full paginated list or reordering the table.
+Use this for **row-level** fields on the current page (`visitor_online`, `status`, `in_conversation_with`, `lead_collection`, `last_connected_at`, etc.) without refetching the full paginated list or reordering the table.
 
 ### Request
 
@@ -354,7 +354,42 @@ On `atlas-visitor-connected`, the server updates Mongo and session rooms only �
         "time_zone": "Asia/Kolkata"
       },
       "visitor_at": null,
-      "visitor_online": true
+      "visitor_online": true,
+      "first_message_at": "2026-07-05T23:03:31.297000",
+      "resolved_at": null,
+      "resolved_by": null,
+      "lead_status": "complete",
+      "lead_email": "shubh@gmail.com",
+      "lead_name": "Shubh",
+      "lead_collection": {
+        "enabled": true,
+        "list_status": "complete",
+        "status": "complete",
+        "trigger_reason": "Visitor asked about pricing.",
+        "triggered_at_message": 4,
+        "completed_at": "2026-07-05T23:18:06.671Z",
+        "next_field": null,
+        "declined_fields": [],
+        "skipped_fields": [],
+        "fields": [
+          {
+            "key": "email",
+            "label": "Email",
+            "required": true,
+            "order": 1,
+            "value": "shubh@gmail.com",
+            "captured": true
+          },
+          {
+            "key": "name",
+            "label": "Name",
+            "required": true,
+            "order": 2,
+            "value": "Shubh",
+            "captured": true
+          }
+        ]
+      }
     }
   ],
   "total": 42,
@@ -384,8 +419,149 @@ On `atlas-visitor-connected`, the server updates Mongo and session rooms only �
 | `resolved_by` | `string` \| `null` | `user_id` of the team member who resolved the session |
 | `geo_data`                  | `object \| null` | Geo from widget connect                                                                                                                  |
 | `visitor_at`                | `string \| null` | Marketing attribution param when provided                                                                                                |
+| `lead_status`               | `string \| null` | Dashboard badge: `null`, `partial`, or `complete` (legacy shortcut — prefer `lead_collection.list_status`)                               |
+| `lead_email`                | `string \| null` | Captured email preview when present (legacy shortcut)                                                                                    |
+| `lead_name`                 | `string \| null` | Captured name preview when present (legacy shortcut)                                                                                     |
+| `lead_collection`           | `object`         | Full lead state for the session — see [Lead collection on session rows](#lead-collection-on-session-rows)                                |
 
 Offline rows keep the same shape; `visitor_online` is `false`, `sid` is `null`. `in_conversation_with` is read from Mongo when the visitor is offline (takeover can persist across disconnect).
+
+---
+
+## Lead collection on session rows
+
+When the agent has lead capturing configured, each visitor row includes **`lead_collection`** so human agents can see capture status and field values on the Chat Sessions page without opening the thread.
+
+### `lead_collection` object
+
+| Field | Type | Notes |
+| ----- | ---- | ----- |
+| `enabled` | `boolean` | Agent-level `enable_lead_capturing` toggle |
+| `list_status` | `string \| null` | Badge: `null` (no data yet), `partial`, or `complete` |
+| `status` | `string` | Pipeline state: `not_started`, `collecting`, `partial`, or `complete` |
+| `trigger_reason` | `string \| null` | Why AI collection started (when triggered) |
+| `triggered_at_message` | `number \| null` | Visitor message count when collection started |
+| `completed_at` | `string \| null` | UTC ISO-8601 when all required fields were captured |
+| `next_field` | `string \| null` | Next configured field the AI would ask for (if any) |
+| `declined_fields` | `string[]` | Fields the visitor explicitly refused |
+| `skipped_fields` | `string[]` | Optional fields skipped after refusal |
+| `fields` | `array` | One entry per configured field — see below |
+
+### `lead_collection.fields[]` item
+
+| Field | Type | Notes |
+| ----- | ---- | ----- |
+| `key` | `string` | Built-in key: `email`, `name`, `phone`, `company`, `interest` |
+| `label` | `string` | Display label |
+| `required` | `boolean` | From agent lead collection config |
+| `order` | `number` | Ask order from agent config |
+| `value` | `string \| null` | Captured value (normalized) |
+| `captured` | `boolean` | `true` when `value` is present |
+
+**UI tips:**
+
+- Row badge: use `lead_collection.list_status` (`partial` / `complete`).
+- Row subtitle: first captured `email` / `name` from `lead_collection.fields` or legacy `lead_email` / `lead_name`.
+- In-chat panel: render `lead_collection.fields` as a checklist (captured vs missing).
+- After human takeover, allow editing via [Update session lead](#update-session-lead-human-agent) below — **owners/admins always**; **members only while they are the active handler** (`in_conversation_with`). Hide Save for members who have not taken over that session.
+
+Included on: `agent_visitors_list`, `agent_visitors_search_results`, `agent_visitors_sessions_refreshed`, and `chat_session_takeover_updated` row patches.
+
+---
+
+## Update session lead (human agent)
+
+Human agents may **manually add or update** captured lead fields during or after a conversation (e.g. visitor gave their name on a call while the human had taken over).
+
+**`POST /elysium-agents/elysium-atlas/lead-collection/v1/update-session-lead`**
+
+JWT required.
+
+**RBAC:**
+
+| Role | View leads on session list | Update session lead |
+| ---- | :------------------------: | :-----------------: |
+| **owner** | ✓ | ✓ — any session |
+| **admin** | ✓ | ✓ — any session |
+| **member** | ✓ | ✓ **only while handling that chat** (`in_conversation_with` is their `user_id`) |
+
+Members must **take over the conversation** (`atlas-team-member-start-conversation`) before they can save contact details for that session. Owners and admins may edit leads anytime.
+
+### Request
+
+```json
+{
+  "agent_id": "695c342989c5797e0f344572",
+  "chat_session_id": "app-f0ad51d1-30ba-48ae-95d7-88ea91fbf974",
+  "fields": {
+    "name": "Shubhojeet Ghosh",
+    "email": "shubh04@gmail.com"
+  }
+}
+```
+
+| Field | Type | Required | Notes |
+| ----- | ---- | -------- | ----- |
+| `agent_id` | `string` | Yes | Agent scope |
+| `chat_session_id` | `string` | Yes | Session to update |
+| `fields` | `object` | Yes | Partial update — only include keys to change |
+
+**`fields` keys:** Must be from the agent's configured lead fields when set; otherwise any built-in key (`email`, `name`, `phone`, `company`, `interest`).
+
+**Clear a value:** Pass `null` or `""` for that key.
+
+Only keys in the request body are updated; omitted keys are left unchanged.
+
+### Success `200`
+
+```json
+{
+  "success": true,
+  "message": "Name saved. Still needed: Email.",
+  "agent_id": "695c342989c5797e0f344572",
+  "chat_session_id": "app-f0ad51d1-30ba-48ae-95d7-88ea91fbf974",
+  "lead_status": "partial",
+  "lead_email": "shubh04@gmail.com",
+  "lead_name": "Shubhojeet Ghosh",
+  "lead_collection": { }
+}
+```
+
+`message` is **human-friendly copy for toasts** — contextual based on what was saved and what's still missing. Examples:
+
+| Situation | Example `message` |
+| --------- | ------------------- |
+| Single field saved | `Email saved.` |
+| Two fields saved | `Email and Name saved.` |
+| All required fields captured | `Email and Name saved. This lead is complete.` |
+| Saved but required fields missing | `Name saved. Still needed: Email.` |
+
+`lead_collection` matches the socket row shape above. Status is recomputed server-side (e.g. all required fields filled → `complete`).
+
+### Errors
+
+| Status | When |
+| ------ | ---- |
+| `400` | No fields in request, invalid field, or value too long |
+| `401` | Invalid JWT |
+| `403` | Not allowed to edit (member not handling this session, or not on the team) |
+| `404` | Agent or conversation not found |
+| `500` | Server error |
+
+Example error messages (show in toast as-is):
+
+- `Add at least one contact field to save.`
+- `You can only edit contact details while you're handling this conversation. Take over the chat first.`
+- `This conversation couldn't be found. Refresh the page and try again.`
+- `Something went wrong while saving contact details. Please try again.`
+
+### Frontend flow
+
+1. Human opens session → read `lead_collection` from list row or refresh.
+2. Show Save when: JWT `role` is `owner` or `admin`, **or** (`role` is `member` and row `in_conversation_with === user_id`).
+3. On save in lead panel → `POST /v1/update-session-lead` with changed fields only.
+3. Merge response `lead_collection` into the local session row (and panel).
+4. Optionally emit `atlas-agent-visitors-refresh-sessions` for other tabs viewing the same page.
 
 ---
 

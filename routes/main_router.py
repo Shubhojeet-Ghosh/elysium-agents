@@ -9,6 +9,7 @@ from routes.elysium_atlas.atlas_team_members_routes import atlas_team_members_ro
 from routes.elysium_atlas.atlas_tools_routes import atlas_tools_router
 from routes.elysium_atlas.atlas_kb_items_routes import atlas_kb_items_router
 from routes.elysium_atlas.atlas_support_tickets_routes import atlas_support_tickets_router
+from routes.elysium_atlas.lead_collection_routes import lead_collection_router
 from routes.elysium_chat_routers.elysium_chat_router import elysium_chat_router
 
 # Create the main router with a prefix
@@ -22,4 +23,5 @@ main_router.include_router(atlas_team_members_router)
 main_router.include_router(atlas_tools_router)
 main_router.include_router(atlas_kb_items_router)
 main_router.include_router(atlas_support_tickets_router)
+main_router.include_router(lead_collection_router)
 main_router.include_router(elysium_chat_router)
