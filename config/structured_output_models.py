@@ -47,6 +47,18 @@ class LeadCollectionTriggerResult(BaseModel):
     )
 
 
+class HandoverTriggerResult(BaseModel):
+    """Structured output for evaluating whether the visitor wants human assistance."""
+    should_request_handover: bool = Field(
+        ...,
+        description="True when the visitor explicitly wants to speak with a human or live agent.",
+    )
+    reason: str = Field(
+        default="",
+        description="Brief explanation when should_request_handover is true; empty otherwise.",
+    )
+
+
 # Registry mapping extraction type keys to their corresponding Pydantic models
 STRUCTURED_OUTPUT_MODELS_REGISTRY: Dict[str, Type[BaseModel]] = {
     "website_content": WebsiteContentExtraction,

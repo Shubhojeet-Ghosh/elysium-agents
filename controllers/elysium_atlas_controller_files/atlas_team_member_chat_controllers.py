@@ -8,6 +8,8 @@ from services.socket_connection_helpers import (
 
     resolve_socket_user_id,
 
+    resolve_socket_team_id,
+
     is_socket_team_admin,
 
 )
@@ -318,7 +320,13 @@ async def team_member_start_conversation_controller(sid, socketData, session: di
 
         remove_session_monitor(agent_id, chat_session_id, user_id, sid=sid)
 
+        team_id = resolve_socket_team_id(session)
+        if team_id:
+            from services.elysium_atlas_services.atlas_presence_services import (
+                register_team_member_presence,
+            )
 
+            await register_team_member_presence(team_id, user_id, agent_id=agent_id)
 
         visitor_online = await persist_in_conversation_with(
 

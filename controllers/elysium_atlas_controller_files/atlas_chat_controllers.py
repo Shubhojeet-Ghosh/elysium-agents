@@ -29,9 +29,6 @@ async def route_visitor_message_to_team_member(
 ):
     """Route a visitor message to the human handler; mirror to session monitors async."""
     try:
-        from services.elysium_atlas_services.atlas_presence_services import (
-            is_team_member_online_for_agent,
-        )
         from services.elysium_atlas_services.atlas_team_member_emit_services import (
             emit_team_member_message_to_user,
             mirror_takeover_visitor_message_to_monitors,
@@ -52,15 +49,17 @@ async def route_visitor_message_to_team_member(
         )
         message_metadata = stored_message_metadata(stored_messages[0] if stored_messages else None)
 
-        if await is_team_member_online_for_agent(agent_id, in_conversation_with):
-            await emit_team_member_message_to_user(
-                in_conversation_with,
-                agent_id,
-                chat_session_id,
-                message,
-                chat_session_id,
-                message_metadata=message_metadata,
-            )
+        # Always emit to the handler's user room (joined on JWT connect). Do not gate on
+        # atlas_team_member_presence — that only tracks active agent scope and can be stale
+        # right after takeover from a handover/monitor view.
+        await emit_team_member_message_to_user(
+            in_conversation_with,
+            agent_id,
+            chat_session_id,
+            message,
+            chat_session_id,
+            message_metadata=message_metadata,
+        )
 
         asyncio.create_task(
             mirror_takeover_visitor_message_to_monitors(

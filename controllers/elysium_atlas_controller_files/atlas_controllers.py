@@ -13,6 +13,7 @@ from services.elysium_atlas_services.agent_services import (
     initialize_agent_build_update,
     fetch_agent_fields_by_id,
     update_agent_basic_attributes,
+    normalize_human_handover_config_for_update,
     normalize_lead_collection_config_for_update,
     validate_user_agent_status,
     requires_agent_reindex,
@@ -39,6 +40,7 @@ from services.elysium_atlas_services.agent_db_operations import check_agent_name
 from services.elysium_atlas_services.elysium_atlas_user_plan_services import can_user_build_agent
 from config.retrieval_strategy_config import normalize_retrieval_strategy_in_request
 from config.llm_models_config import normalize_llm_model_in_request
+from config.human_handover_config import build_human_handover_config_for_create
 from config.lead_collection_config import build_lead_collection_config_for_create
 from services.elysium_atlas_services.atlas_chat_session_services import get_chat_session_data
 
@@ -250,6 +252,16 @@ async def pre_build_agent_operations_controller(requestData: Dict[str, Any],user
                 content={"success": False, "message": lead_collection_error},
             )
         initial_data["lead_collection_config"] = lead_collection_config
+
+        human_handover_config, human_handover_error = build_human_handover_config_for_create(
+            requestData.get("human_handover_config"),
+        )
+        if human_handover_error:
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "message": human_handover_error},
+            )
+        initial_data["human_handover_config"] = human_handover_config
 
         tool_ids_error = await _validate_agent_tool_ids_for_request(requestData, team_id)
         if tool_ids_error:
@@ -503,6 +515,16 @@ async def update_agent_controller_v1(requestData,userData,background_tasks):
             return JSONResponse(
                 status_code=400,
                 content={"success": False, "message": lead_collection_error},
+            )
+
+        human_handover_error = await normalize_human_handover_config_for_update(
+            agent_id,
+            requestData,
+        )
+        if human_handover_error:
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "message": human_handover_error},
             )
 
         agent_status_error = validate_user_agent_status(requestData)

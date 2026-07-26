@@ -4,6 +4,7 @@ Default atlas agent configuration.
 The ``llm_model`` field must be one of ``config.llm_models_config.SUPPORTED_LLM_MODELS``,
 including DeepSeek: ``deepseek-v4-flash``, ``deepseek-v4-pro``.
 """
+from config.human_handover_config import get_default_human_handover_config
 from config.lead_collection_config import get_default_lead_collection_config
 
 USER_SETTABLE_AGENT_STATUSES = frozenset({"active", "inactive", "disabled"})
@@ -33,6 +34,7 @@ ELYSIUM_ATLAS_AGENT_CONFIG_DATA = {
         "retrieval_strategy": "simple",
         "widget_script": None,
         "lead_collection_config": get_default_lead_collection_config(),
+        "human_handover_config": get_default_human_handover_config(),
         "tool_ids": [],
     },
     "agent_task_progress": {

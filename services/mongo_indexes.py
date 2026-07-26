@@ -149,6 +149,13 @@ async def create_mongo_indexes():
             name="agent_id_visitor_online_index",
         )
         logger.info("Compound index created on atlas_chat_sessions.agent_id and visitor_online")
+        await atlas_chat_sessions_collection.create_index(
+            [("agent_id", 1), ("handover.status", 1)],
+            name="agent_id_handover_status_index",
+        )
+        logger.info(
+            "Compound index created on atlas_chat_sessions.agent_id and handover.status"
+        )
 
         atlas_team_member_presence_collection = get_collection("atlas_team_member_presence")
         await atlas_team_member_presence_collection.create_index(

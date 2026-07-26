@@ -183,6 +183,12 @@ async def handle_visitor_connection(agent_id, chat_session_id, sid, geo_data=Non
                 f"Restored in_conversation_with={stored_handler} for reconnected visitor "
                 f"{chat_session_id} on agent {agent_id}"
             )
+        else:
+            from services.elysium_atlas_services.human_handover_services import (
+                maybe_emit_pending_handover_on_visitor_connect,
+            )
+
+            await maybe_emit_pending_handover_on_visitor_connect(agent_id, chat_session_id)
 
     if visitor_data and not previous_online:
         logger.info(

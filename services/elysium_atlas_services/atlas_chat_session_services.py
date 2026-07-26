@@ -62,6 +62,14 @@ def serialize_chat_session_document_for_api(document: Dict[str, Any]) -> Dict[st
             lead_copy["completed_at"] = format_utc_datetime_for_client(completed_at)
         serialized["lead_collection"] = lead_copy
 
+    handover = serialized.get("handover")
+    if isinstance(handover, dict):
+        handover_copy = dict(handover)
+        requested_at = handover_copy.get("requested_at")
+        if isinstance(requested_at, datetime.datetime):
+            handover_copy["requested_at"] = format_utc_datetime_for_client(requested_at)
+        serialized["handover"] = handover_copy
+
     return serialized
 
 
@@ -387,6 +395,7 @@ CHAT_SESSION_VISITOR_LIST_FIELDS = (
     "resolved_at",
     "resolved_by",
     "lead_collection",
+    "handover",
 )
 
 
@@ -528,6 +537,28 @@ async def count_chat_sessions_for_agent(agent_id: str) -> int:
         return 0
 
 
+async def count_handover_requested_sessions_for_agent(agent_id: str) -> int:
+    """Sessions where a visitor requested human handover and no team member has taken over yet."""
+    try:
+        if not agent_id:
+            return 0
+
+        from config.human_handover_constants import HANDOVER_STATUS_REQUESTED
+
+        collection = get_collection("atlas_chat_sessions")
+        return await collection.count_documents(
+            {
+                "agent_id": agent_id,
+                "handover.status": HANDOVER_STATUS_REQUESTED,
+            }
+        )
+    except Exception as e:
+        logger.error(
+            f"Error counting handover-requested sessions for agent {agent_id}: {str(e)}"
+        )
+        return 0
+
+
 async def get_agent_chat_sessions_summary(agent_id: str) -> Dict[str, Any] | None:
     """
     Lightweight chat-session counts for dashboard polling.
@@ -542,14 +573,16 @@ async def get_agent_chat_sessions_summary(agent_id: str) -> Dict[str, Any] | Non
         return None
 
     try:
-        total, online_count = await asyncio.gather(
+        total, online_count, handover_requested_count = await asyncio.gather(
             count_chat_sessions_for_agent(agent_id),
             get_visitor_count_for_agent(agent_id),
+            count_handover_requested_sessions_for_agent(agent_id),
         )
         return {
             "agent_id": agent_id,
             "total": total,
             "online_count": online_count,
+            "handover_requested_count": handover_requested_count,
         }
     except Exception as e:
         logger.error(f"Error fetching chat sessions summary for agent {agent_id}: {str(e)}")
@@ -630,6 +663,14 @@ def format_chat_session_as_visitor_row(
         (field["value"] for field in lead_summary.get("fields", []) if field.get("key") == "name" and field.get("captured")),
         None,
     )
+
+    from services.elysium_atlas_services.human_handover_services import (
+        build_handover_list_fields,
+        get_handover_session_state,
+    )
+
+    handover_fields = build_handover_list_fields(get_handover_session_state(session_doc))
+    row.update(handover_fields)
 
     return row
 
@@ -1523,6 +1564,11 @@ async def persist_in_conversation_with(
                 "in_conversation_with": user_id,
             },
         )
+        from services.elysium_atlas_services.human_handover_services import (
+            assign_handover_on_takeover,
+        )
+
+        await assign_handover_on_takeover(agent_id, chat_session_id, user_id)
     elif user_id is None and previous_handler:
         await record_chat_session_audit(
             agent_id,
@@ -1532,6 +1578,11 @@ async def persist_in_conversation_with(
             actor_type=AUDIT_ACTOR_TEAM_MEMBER,
             metadata={"released_in_conversation_with": previous_handler},
         )
+        from services.elysium_atlas_services.human_handover_services import (
+            reset_handover_after_takeover_release,
+        )
+
+        await reset_handover_after_takeover_release(agent_id, chat_session_id)
 
     return visitor_online
 
@@ -1600,6 +1651,12 @@ async def mark_chat_session_resolved(
 
         previous_handler = active_handler
         resolved_by_privileged = allow_privileged_resolve and not is_active_handler
+
+        from services.elysium_atlas_services.human_handover_services import (
+            reset_handover_after_takeover_release,
+        )
+
+        await reset_handover_after_takeover_release(agent_id, chat_session_id)
 
         now = datetime.datetime.now(datetime.timezone.utc)
         visitor_online = False

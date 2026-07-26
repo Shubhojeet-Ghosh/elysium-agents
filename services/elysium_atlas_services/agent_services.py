@@ -5,6 +5,10 @@ from services.mongo_services import get_collection
 from datetime import datetime, timezone
 from config.atlas_agent_config_data import ELYSIUM_ATLAS_AGENT_CONFIG_DATA, USER_SETTABLE_AGENT_STATUSES, DEPRECATED_AGENT_STORED_FIELDS
 from config.retrieval_strategy_config import DEFAULT_RETRIEVAL_STRATEGY
+from config.human_handover_config import (
+    get_default_human_handover_config,
+    merge_human_handover_config,
+)
 from config.lead_collection_config import (
     get_default_lead_collection_config,
     merge_lead_collection_config,
@@ -159,6 +163,9 @@ async def create_agent_document(initial_data: Optional[Dict[str, Any]] = None) -
         if "lead_collection_config" not in document:
             document["lead_collection_config"] = get_default_lead_collection_config()
 
+        if "human_handover_config" not in document:
+            document["human_handover_config"] = get_default_human_handover_config()
+
         if "tool_ids" not in document:
             document["tool_ids"] = []
 
@@ -195,6 +202,7 @@ async def initialize_agent_build_update(requestData: Dict[str, Any]) -> bool:
             "temperature",
             "retrieval_strategy",
             "lead_collection_config",
+            "human_handover_config",
         ):
             if field in requestData and requestData[field] is not None:
                 updates[field] = requestData[field]
@@ -461,6 +469,32 @@ async def normalize_lead_collection_config_for_update(
     return None
 
 
+async def normalize_human_handover_config_for_update(
+    agent_id: str,
+    request_data: Dict[str, Any],
+) -> str | None:
+    """
+    If human_handover_config is present, validate partial fields and merge into request_data.
+
+    Returns:
+        Error message when invalid, otherwise None.
+    """
+    if "human_handover_config" not in request_data:
+        return None
+
+    agent = await get_agent_by_id(agent_id)
+    existing = agent.get("human_handover_config") if agent else None
+    merged, error_message = merge_human_handover_config(
+        existing,
+        request_data["human_handover_config"],
+    )
+    if error_message:
+        return error_message
+
+    request_data["human_handover_config"] = merged
+    return None
+
+
 async def update_agent_basic_attributes(agent_id: str, requestData: Dict[str, Any]) -> bool:
     """
     Update basic agent attributes like icon, color, text color, etc., if present in requestData.
@@ -483,6 +517,7 @@ async def update_agent_basic_attributes(agent_id: str, requestData: Dict[str, An
             "placeholder_text",
             "retrieval_strategy",
             "lead_collection_config",
+            "human_handover_config",
             "tool_ids",
         ]
         

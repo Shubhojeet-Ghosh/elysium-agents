@@ -36,7 +36,7 @@ async def emit_team_member_message_to_user(
     chat_session_id_sender: str,
     message_metadata=None,
     *,
-    conversation_mode: str | None = None,
+    conversation_mode: str = "takeover",
 ) -> None:
     """Emit a visitor message to all tabs of a team member via their user room."""
     if not user_id:
@@ -50,9 +50,8 @@ async def emit_team_member_message_to_user(
         "chat_session_id": chat_session_id,
         "message": message,
         "sender": "visitor",
+        "conversation_mode": conversation_mode,
     }
-    if conversation_mode:
-        payload["conversation_mode"] = conversation_mode
     if message_metadata:
         payload.update(message_metadata)
 
@@ -109,6 +108,15 @@ async def emit_conversation_started(agent_id: str, chat_session_id: str, user_id
     """Notify a visitor that a team member has started a conversation (session room)."""
     from sockets import sio
     from services.elysium_atlas_services.atlas_visitor_socket_rooms import visitor_session_room
+    from services.elysium_atlas_services.atlas_chat_session_services import get_user_full_names_by_ids
+    from config.human_handover_constants import (
+        VISITOR_TAKEOVER_STARTED_FALLBACK_NAME,
+        VISITOR_TAKEOVER_STARTED_MESSAGE,
+    )
+
+    names_by_id = await get_user_full_names_by_ids([user_id])
+    handler_name = names_by_id.get(user_id)
+    display_name = handler_name or VISITOR_TAKEOVER_STARTED_FALLBACK_NAME
 
     room = visitor_session_room(chat_session_id)
     await sio.emit(
@@ -117,11 +125,14 @@ async def emit_conversation_started(agent_id: str, chat_session_id: str, user_id
             "agent_id": agent_id,
             "chat_session_id": chat_session_id,
             "in_conversation_with": user_id,
+            "in_conversation_with_name": handler_name,
+            "message": VISITOR_TAKEOVER_STARTED_MESSAGE.format(name=display_name),
         },
         room=room,
     )
     logger.info(
-        f"Emitted conversation_started to room {room} for agent {agent_id}, user_id {user_id}"
+        f"Emitted conversation_started to room {room} for agent {agent_id}, "
+        f"user_id {user_id}, handler_name={handler_name!r}"
     )
 
 
@@ -382,6 +393,12 @@ async def emit_chat_session_takeover_updated(
         "in_conversation_with_name": row.get("in_conversation_with_name"),
         "status": row.get("status"),
         "visitor_online": row.get("visitor_online"),
+        "handover_status": row.get("handover_status"),
+        "handover_requested_at": row.get("handover_requested_at"),
+        "handover_reason": row.get("handover_reason"),
+        "handover_contact_name": row.get("handover_contact_name"),
+        "handover_contact_email": row.get("handover_contact_email"),
+        "handover_contact_status": row.get("handover_contact_status"),
         "visitor": row,
     }
     await sio.emit("chat_session_takeover_updated", payload, room=f"agent_{agent_id}_members")

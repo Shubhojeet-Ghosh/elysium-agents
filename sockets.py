@@ -19,6 +19,10 @@ from controllers.elysium_atlas_controller_files.atlas_team_member_chat_controlle
     team_member_stop_monitor_conversation_controller,
     team_member_resolve_session_controller,
 )
+from config.human_handover_models import (
+    VisitorHandoverContactDeclineRequest,
+    VisitorHandoverContactRequest,
+)
 from services.socket_connection_helpers import (
     add_socket_connection,
     remove_socket_connection,
@@ -130,6 +134,74 @@ async def handle_atlas_visitor_message(sid, socketData):
         socketData["_request_started_at"] = time.perf_counter()
         socketData["_message_received_at"] = datetime.datetime.now(datetime.timezone.utc)
     await chat_with_agent_controller_v1(socketData, None, sid)
+
+
+@sio.on("atlas-visitor-handover-contact")
+async def handle_atlas_visitor_handover_contact(sid, socketData):
+    if not isinstance(socketData, dict):
+        return
+
+    from pydantic import ValidationError
+    from services.elysium_atlas_services.human_handover_services import (
+        map_handover_contact_error,
+        submit_handover_contact,
+    )
+
+    try:
+        body = VisitorHandoverContactRequest.model_validate(socketData)
+    except ValidationError:
+        await sio.emit(
+            "handover_contact_saved",
+            {"success": False, "message": "Invalid contact payload."},
+            to=sid,
+        )
+        return
+
+    payload, error_code = await submit_handover_contact(
+        agent_id=body.agent_id,
+        chat_session_id=body.chat_session_id,
+        name=body.name,
+        email=body.email,
+    )
+    if error_code:
+        await sio.emit(
+            "handover_contact_saved",
+            {"success": False, "message": map_handover_contact_error(error_code)},
+            to=sid,
+        )
+
+
+@sio.on("atlas-visitor-handover-contact-decline")
+async def handle_atlas_visitor_handover_contact_decline(sid, socketData):
+    if not isinstance(socketData, dict):
+        return
+
+    from pydantic import ValidationError
+    from services.elysium_atlas_services.human_handover_services import (
+        decline_handover_contact,
+        map_handover_contact_error,
+    )
+
+    try:
+        body = VisitorHandoverContactDeclineRequest.model_validate(socketData)
+    except ValidationError:
+        await sio.emit(
+            "handover_contact_declined",
+            {"success": False, "message": "Invalid decline payload."},
+            to=sid,
+        )
+        return
+
+    _, error_code = await decline_handover_contact(
+        agent_id=body.agent_id,
+        chat_session_id=body.chat_session_id,
+    )
+    if error_code:
+        await sio.emit(
+            "handover_contact_declined",
+            {"success": False, "message": map_handover_contact_error(error_code)},
+            to=sid,
+        )
 
 
 @sio.on("atlas-team-member-connected")
