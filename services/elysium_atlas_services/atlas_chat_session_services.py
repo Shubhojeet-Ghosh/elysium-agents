@@ -204,7 +204,8 @@ async def get_chat_session_data(requestData: Dict[str, Any]) -> Dict[str, Any] |
                 conversation_id=document.get("conversation_id"),
             )
             document["messages"] = messages
-            
+            document = await enrich_chat_session_with_handler_name(document)
+
             logger.info(f"Retrieved existing chat session document for chat_session_id: {chat_session_id} and agent_id: {agent_id}")
             return document
         else:
@@ -241,7 +242,8 @@ async def get_chat_session_data(requestData: Dict[str, Any]) -> Dict[str, Any] |
             
             # For new session, messages will be empty
             document["messages"] = []
-            
+            document = await enrich_chat_session_with_handler_name(document)
+
             logger.info(f"Created new chat session document with chat_session_id: {chat_session_id} and agent_id: {agent_id}")
             return document
 
@@ -448,6 +450,18 @@ async def enrich_visitor_list_rows_with_handler_names(rows: list[dict]) -> list[
         handler_id = row.get("in_conversation_with")
         row["in_conversation_with_name"] = names_by_id.get(handler_id) if handler_id else None
     return rows
+
+
+async def enrich_chat_session_with_handler_name(document: Dict[str, Any]) -> Dict[str, Any]:
+    """Add in_conversation_with_name for visitor widget restore (e.g. get-agent-fields)."""
+    handler_id = document.get("in_conversation_with")
+    if not handler_id:
+        document["in_conversation_with_name"] = None
+        return document
+
+    names_by_id = await get_user_full_names_by_ids([str(handler_id)])
+    document["in_conversation_with_name"] = names_by_id.get(str(handler_id))
+    return document
 
 
 async def ensure_chat_session_for_visitor(
