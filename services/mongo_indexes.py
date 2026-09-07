@@ -308,6 +308,34 @@ async def create_mongo_indexes():
             f"Compound index created on {ATLAS_LEADS_COLLECTION}.team_id, updated_at, _id"
         )
 
+        from config.demo_customer_inquiry_config import (
+            DEMO_CUSTOMERS_COLLECTION,
+            DEMO_LEADS_COLLECTION,
+            DEMO_TICKETS_COLLECTION,
+        )
+
+        demo_customers = get_collection(DEMO_CUSTOMERS_COLLECTION)
+        await demo_customers.create_index("email", name="email_unique", unique=True)
+        await demo_customers.create_index("customer_id", name="customer_id_unique", unique=True)
+        logger.info(f"Indexes created on {DEMO_CUSTOMERS_COLLECTION}")
+
+        demo_tickets = get_collection(DEMO_TICKETS_COLLECTION)
+        await demo_tickets.create_index("ticket_id", name="ticket_id_unique", unique=True)
+        await demo_tickets.create_index(
+            [("customer_id", 1), ("status", 1)],
+            name="customer_id_status_1",
+        )
+        logger.info(f"Indexes created on {DEMO_TICKETS_COLLECTION}")
+
+        demo_leads = get_collection(DEMO_LEADS_COLLECTION)
+        await demo_leads.create_index("lead_id", name="lead_id_unique", unique=True)
+        await demo_leads.create_index("email", name="email_1")
+        await demo_leads.create_index(
+            [("email", 1), ("status", 1)],
+            name="email_status_1",
+        )
+        logger.info(f"Indexes created on {DEMO_LEADS_COLLECTION}")
+
         logger.info("MongoDB indexes created / verified successfully.")
 
     except Exception as e:

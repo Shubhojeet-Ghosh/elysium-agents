@@ -15,6 +15,7 @@ from services.elysium_atlas_services.atlas_chat_session_services import (
 
 from config.llm_models_config import resolve_model_handler, DEFAULT_MODEL
 from config.atlas_tool_config import get_tool_result_message_role
+from config.atlas_tool_calling_config import normalize_tool_calling_config
 from config.retrieval_strategy_config import DEFAULT_RETRIEVAL_STRATEGY
 from services.elysium_atlas_services.atlas_tool_execution_services import run_agent_tool_calling_round
 
@@ -371,8 +372,11 @@ async def chat_with_agent_v1(agent_id, message, sid=None, chat_session_id=None, 
         )
 
         tool_ids = (agent_data or {}).get("tool_ids") or []
+        tool_calling_config = normalize_tool_calling_config(
+            (agent_data or {}).get("tool_calling_config")
+        )
         tool_turn_messages = None
-        if tool_ids:
+        if tool_ids and tool_calling_config.get("enabled"):
             logger.info(f"{chat_log} Checking registered tools for this turn (count={len(tool_ids)})")
             tool_temperature = agent_data.get("temperature", 0.5) if agent_data else 0.5
             tool_step_start = time.perf_counter()
@@ -380,6 +384,7 @@ async def chat_with_agent_v1(agent_id, message, sid=None, chat_session_id=None, 
                 tool_turn_messages = await run_agent_tool_calling_round(
                     messages,
                     tool_ids,
+                    tool_calling_config=tool_calling_config,
                     temperature=tool_temperature,
                 )
             except Exception as tool_error:

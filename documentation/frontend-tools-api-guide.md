@@ -1,6 +1,6 @@
 # Custom Tools APIs — frontend guide
 
-Reference for building the **team custom tools** UI in Elysium Atlas. Tools are external HTTP integrations configured like OpenAI function calling — the LLM uses `name`, `description`, and `parameters` at runtime (execution wiring comes later).
+Reference for building the **team custom tools** UI in Elysium Atlas. Tools are external HTTP integrations configured like OpenAI function calling. At chat runtime, attached tools are orchestrated via DeepSeek (multi-round when configured), then results are passed to the agent’s main LLM for the visitor-facing reply.
 
 **Base path:** `/elysium-agents/elysium-atlas/tools`
 
@@ -20,6 +20,7 @@ All routes require `Authorization: Bearer <session_jwt>`. The JWT must include `
 | Name uniqueness | Unique per team (`team_id` + `name`) |
 | Secrets | API keys/tokens are **never returned** after save; responses include `auth.token_configured: true` |
 | Agent linking | Agents store attached tools in `tool_ids` (array of `atlas_tools._id` strings) |
+| Runtime orchestration | Per-agent `tool_calling_config` controls multi-round tool execution during chat |
 
 ---
 
@@ -70,6 +71,94 @@ Send `"tool_ids": []` to detach all tools.
 **Errors:** Invalid or cross-team tool IDs return `400` with a message such as `One or more tool_ids are invalid or do not belong to this team.`
 
 For full create/update agent request parameters, see [frontend-agent-create-update-api-guide.md](./frontend-agent-create-update-api-guide.md).
+
+**Demo tool APIs:** See [frontend-demo-customer-inquiry-api-guide.md](./frontend-demo-customer-inquiry-api-guide.md) for the customer lookup / lead / summary demo endpoints and tool registration copy-paste.
+
+---
+
+## Tool calling config (`tool_calling_config`)
+
+Controls **how** attached tools run during visitor chat. Stored on each `atlas_agents` document alongside `tool_ids`.
+
+| Field | Type | Default | UI | Description |
+|-------|------|---------|-----|-------------|
+| `enabled` | `boolean` | `true` | Optional | Master switch. When `false`, tools are attached but not executed at chat time |
+| `max_rounds` | `integer` | `5` | **Yes** | Max plan → execute → replan cycles per visitor message (enables chained tools) |
+| `max_executions_per_turn` | `integer` | `10` | **Yes** | Hard cap on total HTTP tool calls per visitor message |
+| `parallel_calls_per_round` | `boolean` | `true` | **Yes** | When `true`, multiple independent tools may run in the same round; when `false`, only one tool runs per round |
+| `stop_on_error` | `boolean` | `false` | Hidden | When `true`, stop further tool rounds after a tool returns an error payload |
+
+### Validation limits
+
+| Field | Min | Max |
+|-------|-----|-----|
+| `max_rounds` | `1` | `10` |
+| `max_executions_per_turn` | `1` | `20` |
+
+Partial updates merge into the stored config (same pattern as `lead_collection_config`). Unknown keys return `400`.
+
+### What the settings mean (for UI copy)
+
+- **`max_rounds`** — How many times the agent can *think, call tools, see results, and think again* before answering. Use **3–5** when tools depend on each other (e.g. lookup customer → fetch orders).
+- **`max_executions_per_turn`** — Total number of tool HTTP calls allowed in one visitor message (cost/latency guardrail).
+- **`parallel_calls_per_round`** — When on, independent tools can run together in one step. Turn off if APIs are rate-limited or must run strictly one at a time.
+
+### Agent APIs that accept `tool_calling_config`
+
+Same endpoints as `tool_ids`:
+
+| Endpoint | When |
+|----------|------|
+| `POST /elysium-atlas/agent/v1/pre-build-agent-operations` | Create agent shell |
+| `POST /elysium-atlas/agent/v1/build-agent` | Build / index pipeline |
+| `POST /elysium-atlas/agent/v1/update-agent` | Metadata update |
+
+**Create example** (with tools):
+
+```json
+{
+  "agent_name": "Support Bot",
+  "tool_ids": ["674a1b2c3d4e5f6789012345"],
+  "tool_calling_config": {
+    "enabled": true,
+    "max_rounds": 5,
+    "max_executions_per_turn": 10,
+    "parallel_calls_per_round": true
+  }
+}
+```
+
+**Partial update example** (`update-agent`):
+
+```json
+{
+  "agent_id": "674a1b2c3d4e5f6789012345",
+  "tool_calling_config": {
+    "max_rounds": 3,
+    "parallel_calls_per_round": false
+  }
+}
+```
+
+**Read:** `tool_calling_config` is returned on `get-agent-details` and other agent document responses. Older agents without the field receive defaults when read.
+
+**Errors:** Invalid values return `400`, e.g. `max_rounds must be between 1 and 10.` or `Invalid tool_calling_config field(s): ...`
+
+### Runtime behavior (chat)
+
+When a visitor sends a message and the agent has non-empty `tool_ids` with `tool_calling_config.enabled === true`:
+
+1. Knowledge retrieval and prompt assembly run as today.
+2. **Tool orchestration** (DeepSeek `deepseek-v4-pro`):
+   - Up to `max_rounds` cycles.
+   - Each cycle: model may call zero or more tools → HTTP execution → results fed back to the orchestrator.
+   - Stops when the model calls no tools, limits are hit, or `stop_on_error` triggers.
+3. Tool results are injected into the final prompt as plain-text assistant messages.
+4. The agent’s configured **`llm_model`** generates the streamed/non-streamed reply.
+
+**Chained tools:** Round 1 might call `find_customer`; round 2 sees that result and calls `get_order_status`. No explicit dependency graph is required — the orchestrator infers order from tool descriptions and prior results.
+
+**UI recommendation:** Show `max_rounds`, `max_executions_per_turn`, and `parallel_calls_per_round` only when at least one tool is selected. Hide `stop_on_error` (server default `false`).
 
 ---
 
@@ -751,6 +840,18 @@ interface ToolAuthInput {
   param_name?: string;
   token?: string;
   token_prefix?: TokenPrefix;
+}
+interface ToolCallingConfig {
+  enabled?: boolean;
+  max_rounds?: number;
+  max_executions_per_turn?: number;
+  parallel_calls_per_round?: boolean;
+  stop_on_error?: boolean;
+}
+
+interface AgentToolSettings {
+  tool_ids?: string[];
+  tool_calling_config?: ToolCallingConfig;
 }
 
 interface CreateToolRequest {

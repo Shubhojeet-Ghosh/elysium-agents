@@ -180,63 +180,134 @@ async def run_agent_tool_calling_round(
     messages: list[dict[str, Any]],
     tool_ids: list[str],
     *,
+    tool_calling_config: dict[str, Any] | None = None,
     temperature: float = 0.3,
 ) -> list[dict[str, Any]] | None:
     """
-    Ask DeepSeek whether any registered tools should run for this turn.
+    Run multi-round tool orchestration via DeepSeek for this chat turn.
 
     Returns messages to insert before the current user message on the final response
     call (assistant role, plain text — compatible with Claude and other chat APIs).
     Returns None when no tools run this turn.
     """
+    from config.atlas_tool_calling_config import normalize_tool_calling_config
     from services.deepseek_services import deepseek_chat_completion_with_tools
+
+    config = normalize_tool_calling_config(tool_calling_config)
+    if not config.get("enabled"):
+        return None
+
+    max_rounds = config["max_rounds"]
+    max_executions = config["max_executions_per_turn"]
+    parallel_calls = config["parallel_calls_per_round"]
+    stop_on_error = config["stop_on_error"]
 
     tool_documents = await get_active_tools_by_ids(tool_ids)
     if not tool_documents:
         return None
 
     tools = build_openai_tools_definitions(tool_documents)
-    tool_response = await deepseek_chat_completion_with_tools(
-        {
-            "model": TOOL_CALL_MODEL,
-            "messages": messages,
-            "tools": tools,
-            "temperature": temperature,
-        }
-    )
-
-    tool_calls = tool_response.get("tool_calls") or []
-    if not tool_calls:
-        return None
-
     tools_lookup = _tools_by_name(tool_documents)
-    turn_messages: list[dict[str, Any]] = []
+    working_messages = list(messages)
+    final_turn_messages: list[dict[str, Any]] = []
+    executions = 0
 
-    for tool_call in tool_calls:
-        function_name = tool_call.get("function", {}).get("name")
-        raw_arguments = tool_call.get("function", {}).get("arguments") or "{}"
+    for round_index in range(max_rounds):
+        tool_response = await deepseek_chat_completion_with_tools(
+            {
+                "model": TOOL_CALL_MODEL,
+                "messages": working_messages,
+                "tools": tools,
+                "temperature": temperature,
+            }
+        )
 
-        tool_document = tools_lookup.get(function_name)
-        if not tool_document:
-            logger.warning(f"LLM requested unknown tool '{function_name}'; skipping execution")
-            error_payload = json.dumps({"error": True, "message": f"Unknown tool: {function_name}"})
-            turn_messages.append(
-                _build_tool_result_message(function_name or "unknown", error_payload)
+        tool_calls = tool_response.get("tool_calls") or []
+        if not tool_calls:
+            logger.info(f"Tool calling finished after round {round_index}: no further tool_calls")
+            break
+
+        assistant_message = tool_response.get("assistant_message")
+        if assistant_message:
+            working_messages.append(assistant_message)
+        else:
+            working_messages.append(
+                {
+                    "role": "assistant",
+                    "content": tool_response.get("content"),
+                    "tool_calls": tool_calls,
+                }
             )
-            continue
 
-        try:
-            parsed_arguments = json.loads(raw_arguments) if isinstance(raw_arguments, str) else raw_arguments
-            if not isinstance(parsed_arguments, dict):
-                parsed_arguments = {}
-        except json.JSONDecodeError:
-            logger.warning(f"Invalid JSON arguments for tool '{function_name}': {raw_arguments}")
-            parsed_arguments = {}
+        calls_to_run = tool_calls if parallel_calls else tool_calls[:1]
+        round_stop = False
 
-        tool_result = await execute_atlas_tool(tool_document, parsed_arguments)
-        turn_messages.append(_build_tool_result_message(function_name or "unknown", tool_result))
+        for tool_call in calls_to_run:
+            if executions >= max_executions:
+                logger.info(
+                    f"Tool calling stopped: max_executions_per_turn={max_executions} reached"
+                )
+                round_stop = True
+                break
 
-    return turn_messages or None
+            function_name = tool_call.get("function", {}).get("name")
+            raw_arguments = tool_call.get("function", {}).get("arguments") or "{}"
+            tool_call_id = tool_call.get("id") or f"call_{executions}"
+
+            tool_document = tools_lookup.get(function_name)
+            if not tool_document:
+                logger.warning(f"LLM requested unknown tool '{function_name}'; skipping execution")
+                tool_result = json.dumps({"error": True, "message": f"Unknown tool: {function_name}"})
+            else:
+                try:
+                    parsed_arguments = (
+                        json.loads(raw_arguments)
+                        if isinstance(raw_arguments, str)
+                        else raw_arguments
+                    )
+                    if not isinstance(parsed_arguments, dict):
+                        parsed_arguments = {}
+                except json.JSONDecodeError:
+                    logger.warning(f"Invalid JSON arguments for tool '{function_name}': {raw_arguments}")
+                    parsed_arguments = {}
+
+                tool_result = await execute_atlas_tool(tool_document, parsed_arguments)
+
+            executions += 1
+            capped_result = cap_tool_result_for_llm(function_name or "unknown", tool_result)
+            working_messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tool_call_id,
+                    "content": capped_result,
+                }
+            )
+            final_turn_messages.append(
+                _build_tool_result_message(function_name or "unknown", tool_result)
+            )
+
+            if stop_on_error and _is_tool_result_error(tool_result):
+                logger.info(f"Tool calling stopped after error from tool '{function_name}'")
+                round_stop = True
+                break
+
+        logger.info(
+            f"Tool calling round {round_index + 1}/{max_rounds} complete "
+            f"(executions={executions}, tool_calls={len(calls_to_run)})"
+        )
+
+        if round_stop or executions >= max_executions:
+            break
+
+    return final_turn_messages or None
+
+
+def _is_tool_result_error(tool_result: str) -> bool:
+    try:
+        payload = json.loads(tool_result)
+    except (json.JSONDecodeError, TypeError):
+        return False
+    return isinstance(payload, dict) and payload.get("error") is True
 
 
 def _build_tool_result_message(tool_name: str, tool_result: str) -> dict[str, Any]:

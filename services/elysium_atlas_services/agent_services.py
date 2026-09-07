@@ -13,6 +13,11 @@ from config.lead_collection_config import (
     get_default_lead_collection_config,
     merge_lead_collection_config,
 )
+from config.atlas_tool_calling_config import (
+    get_default_tool_calling_config,
+    merge_tool_calling_config,
+    normalize_tool_calling_config,
+)
 from bson import ObjectId
 from services.elysium_atlas_services.agent_db_operations import update_agent_status, update_agent_fields, update_agent_current_task, get_agent_by_id, get_agent_fields_by_id
 import asyncio
@@ -169,6 +174,9 @@ async def create_agent_document(initial_data: Optional[Dict[str, Any]] = None) -
         if "tool_ids" not in document:
             document["tool_ids"] = []
 
+        if "tool_calling_config" not in document:
+            document["tool_calling_config"] = get_default_tool_calling_config()
+
         result = await collection.insert_one(document)
         agent_id = str(result.inserted_id)
 
@@ -203,6 +211,7 @@ async def initialize_agent_build_update(requestData: Dict[str, Any]) -> bool:
             "retrieval_strategy",
             "lead_collection_config",
             "human_handover_config",
+            "tool_calling_config",
         ):
             if field in requestData and requestData[field] is not None:
                 updates[field] = requestData[field]
@@ -345,6 +354,10 @@ async def fetch_agent_document(agent_id: str) -> Optional[Dict[str, Any]]:
 
             if "tool_ids" not in document:
                 document["tool_ids"] = []
+
+            document["tool_calling_config"] = normalize_tool_calling_config(
+                document.get("tool_calling_config")
+            )
 
             deprecated_present = any(field in document for field in DEPRECATED_AGENT_STORED_FIELDS)
             for field in DEPRECATED_AGENT_STORED_FIELDS:
@@ -495,6 +508,32 @@ async def normalize_human_handover_config_for_update(
     return None
 
 
+async def normalize_tool_calling_config_for_update(
+    agent_id: str,
+    request_data: Dict[str, Any],
+) -> str | None:
+    """
+    If tool_calling_config is present, validate partial fields and merge into request_data.
+
+    Returns:
+        Error message when invalid, otherwise None.
+    """
+    if "tool_calling_config" not in request_data:
+        return None
+
+    agent = await get_agent_by_id(agent_id)
+    existing = agent.get("tool_calling_config") if agent else None
+    merged, error_message = merge_tool_calling_config(
+        existing,
+        request_data["tool_calling_config"],
+    )
+    if error_message:
+        return error_message
+
+    request_data["tool_calling_config"] = merged
+    return None
+
+
 async def update_agent_basic_attributes(agent_id: str, requestData: Dict[str, Any]) -> bool:
     """
     Update basic agent attributes like icon, color, text color, etc., if present in requestData.
@@ -519,6 +558,7 @@ async def update_agent_basic_attributes(agent_id: str, requestData: Dict[str, An
             "lead_collection_config",
             "human_handover_config",
             "tool_ids",
+            "tool_calling_config",
         ]
         
         updates = {}

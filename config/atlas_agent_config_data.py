@@ -6,6 +6,7 @@ including DeepSeek: ``deepseek-v4-flash``, ``deepseek-v4-pro``.
 """
 from config.human_handover_config import get_default_human_handover_config
 from config.lead_collection_config import get_default_lead_collection_config
+from config.atlas_tool_calling_config import get_default_tool_calling_config
 
 USER_SETTABLE_AGENT_STATUSES = frozenset({"active", "inactive", "disabled"})
 
@@ -36,6 +37,7 @@ ELYSIUM_ATLAS_AGENT_CONFIG_DATA = {
         "lead_collection_config": get_default_lead_collection_config(),
         "human_handover_config": get_default_human_handover_config(),
         "tool_ids": [],
+        "tool_calling_config": get_default_tool_calling_config(),
     },
     "agent_task_progress": {
         "initializing": 0,
