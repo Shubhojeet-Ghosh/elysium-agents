@@ -673,6 +673,61 @@ async def emit_monitor_agent_message(
     )
 
 
+async def emit_monitor_tool_call(
+    team_member_sids: list[str],
+    agent_id: str,
+    chat_session_id: str,
+    tool_call: dict | None,
+) -> None:
+    """
+    Emit a persisted (or best-effort) tool call to session monitors.
+
+    Visitor widgets never receive this event. Failures still emit so monitors
+    can see timeouts and 4xx payloads.
+    """
+    if not team_member_sids or not tool_call:
+        return
+
+    from sockets import sio
+    from services.elysium_atlas_services.atlas_chat_session_services import (
+        format_utc_datetime_for_client,
+    )
+
+    created_at = tool_call.get("created_at")
+    if hasattr(created_at, "tzinfo"):
+        created_at = format_utc_datetime_for_client(created_at)
+
+    payload: dict = {
+        "agent_id": agent_id,
+        "chat_session_id": chat_session_id,
+        "sender": "tool",
+        "role": "tool",
+        "conversation_mode": "monitor",
+        "tool_name": tool_call.get("tool_name"),
+        "request_payload": tool_call.get("request_payload"),
+        "response_payload": tool_call.get("response_payload"),
+        "request_payload_truncated": bool(tool_call.get("request_payload_truncated")),
+        "response_payload_truncated": bool(tool_call.get("response_payload_truncated")),
+        "status": tool_call.get("status") or "success",
+    }
+    if tool_call.get("message_id"):
+        payload["message_id"] = tool_call["message_id"]
+    if tool_call.get("_id"):
+        payload["_id"] = str(tool_call["_id"])
+    if created_at is not None:
+        payload["created_at"] = created_at
+    if tool_call.get("parent_user_message_id"):
+        payload["parent_user_message_id"] = tool_call["parent_user_message_id"]
+
+    for member_sid in team_member_sids:
+        await sio.emit("tool_call_from_agent", payload, to=member_sid)
+    logger.info(
+        f"Emitted tool_call_from_agent to {len(team_member_sids)} monitor socket(s) "
+        f"for chat_session_id {chat_session_id}, agent {agent_id}, "
+        f"tool={payload.get('tool_name')}"
+    )
+
+
 async def emit_monitor_visitor_message(
     team_member_sids: list[str],
     agent_id: str,

@@ -405,6 +405,7 @@ async def process_handover_turn(
         chat_session_id,
         limit=HANDOVER_CHAT_HISTORY_LIMIT,
         conversation_id=conversation_id,
+        exclude_roles=["tool"],
     )
     conversation_text = _format_conversation_for_llm(full_history, message)
     trigger = await _evaluate_handover_trigger(normalized_config, conversation_text)

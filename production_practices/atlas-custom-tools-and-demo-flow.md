@@ -20,6 +20,7 @@ Visitor message
 | Orchestration limits | `atlas_agents.tool_calling_config` |
 | Chat entrypoint | `services/.../agent_chat_services.py` → `chat_with_agent_v1` |
 | Tool execution | `services/.../atlas_tool_execution_services.py` |
+| Tool audit / monitor emit | `atlas_chat_mesages` `role: "tool"` + `tool_call_from_agent` (fire-and-forget) |
 | Demo HTTP APIs | `routes/demo/demo_customer_inquiry_routes.py` |
 
 **Why two LLMs?** Tool calling uses OpenAI-style `tools` + `tool` roles. The final model might be Claude/Grok and only accepts plain messages. So **DeepSeek decides and runs tools**; results are injected as **plain-text assistant messages** for the final model.
@@ -172,12 +173,14 @@ Full tool copy-paste + scripts: `documentation/frontend-demo-customer-inquiry-ap
 ```
 config/atlas_tool_calling_config.py     # defaults + validation
 config/atlas_tool_config.py             # truncation caps, absolute max rounds
-config/demo_customer_inquiry_*.py       # demo seed + request models
+config/atlas_chat_config.py             # role: tool + LLM/last_message exclusions
 
 services/elysium_atlas_services/
-  agent_chat_services.py                # chat pipeline + tool gate
-  atlas_tool_execution_services.py      # multi-round loop + httpx
+  agent_chat_services.py                # chat pipeline + tool gate + persist/emit callback
+  atlas_tool_execution_services.py      # multi-round loop + httpx + observability records
   atlas_tool_services.py                # CRUD + validate_agent_tool_ids
+  atlas_chat_session_services.py        # role: tool rows, history include/exclude
+  atlas_team_member_emit_services.py    # tool_call_from_agent
 
 services/demo/demo_customer_inquiry_services.py
 
@@ -194,9 +197,10 @@ documentation/frontend-demo-customer-inquiry-api-guide.md
 
 - **“How do custom tools work?”** — Team defines HTTP endpoints as OpenAI functions; agent attaches tool IDs; at chat time DeepSeek may call them; results feed the main model.
 - **“How does chaining work?”** — Bounded loop: model calls tool A, sees result in context, may call tool B in the next round.
-- **“Why no slowdown without tools?”** — Early `if tool_ids` guard skips the whole orchestration path.
+- **“Where do tool calls go in Atlas?”** — Each HTTP call is a `role: "tool"` message plus live `tool_call_from_agent`. LLM history and the visitor widget never see those rows.
+- **“Why no slowdown without tools?”** — Early `if tool_ids` guard skips the whole orchestration path. Persist/emit is `asyncio.create_task` after each HTTP call.
 - **“What did the demo prove?”** — Same agent branches on DB state: lookup → lead write vs account summary read.
 
 ---
 
-*Last aligned with: multi-round `tool_calling_config`, demo customer-inquiry APIs, open demo tools + passkey seed/reset.*
+*Last aligned with: multi-round `tool_calling_config`, tool-call audit rows + monitor emit, demo customer-inquiry APIs, open demo tools + passkey seed/reset.*

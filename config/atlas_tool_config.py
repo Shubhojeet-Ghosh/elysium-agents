@@ -8,6 +8,10 @@ from typing import Literal
 # Applied per tool call, not across all tools in a turn.
 ATLAS_TOOL_LLM_RESULT_MAX_CHARS: int = 48_000
 
+# Max JSON characters stored/emitted per tool request or response payload.
+# Applied independently to request_payload and response_payload.
+ATLAS_TOOL_OBSERVABILITY_MAX_CHARS: int = 16_000
+
 # Hard caps for agent tool_calling_config (user values are clamped during validation).
 ABSOLUTE_MAX_TOOL_ROUNDS: int = 10
 ABSOLUTE_MAX_TOOL_EXECUTIONS_PER_TURN: int = 20

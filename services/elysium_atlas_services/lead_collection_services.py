@@ -179,11 +179,14 @@ def _format_conversation_for_llm(
     """Full conversation with speaker labels (for trigger evaluation)."""
     lines: list[str] = []
     for msg in messages:
-        role = msg.get("role", "user")
-        speaker = "Visitor" if role == "user" else "Agent"
         content = (msg.get("content") or "").strip()
-        if content:
-            lines.append(f"{speaker}: {content}")
+        if not content:
+            continue
+        role = msg.get("role", "user")
+        if role == "tool":
+            continue
+        speaker = "Visitor" if role == "user" else "Agent"
+        lines.append(f"{speaker}: {content}")
     current = (current_message or "").strip()
     if current:
         lines.append(f"Visitor: {current}")
@@ -866,6 +869,7 @@ async def process_lead_collection_turn(
         chat_session_id,
         limit=LEAD_CHAT_HISTORY_LIMIT,
         conversation_id=conversation_id,
+        exclude_roles=["tool"],
     )
     visitor_count = count_visitor_messages(full_history, include_current=True)
     conversation_text = _format_conversation_for_llm(full_history, message)

@@ -2,7 +2,12 @@ from typing import Dict, Any, List
 from logging_config import get_logger
 from services.mongo_services import get_collection
 from config.atlas_agent_config_data import ELYSIUM_ATLAS_AGENT_CONFIG_DATA
-from config.atlas_chat_config import clamp_chat_session_list_page_size, validate_chat_session_search_query
+from config.atlas_chat_config import (
+    clamp_chat_session_list_page_size,
+    validate_chat_session_search_query,
+    CHAT_MESSAGE_ROLE_TOOL,
+    CHAT_MESSAGE_ROLES_HIDDEN_FROM_LAST_MESSAGE,
+)
 import datetime
 from bson import ObjectId
 import random
@@ -197,11 +202,13 @@ async def get_chat_session_data(requestData: Dict[str, Any]) -> Dict[str, Any] |
                 asyncio.create_task(update_source())
             
             # Retrieve messages for the session, scoped to the current conversation
+            exclude_roles = requestData.get("exclude_roles")
             messages = await get_chat_messages_for_session(
                 agent_id,
                 chat_session_id,
                 limit=limit,
                 conversation_id=document.get("conversation_id"),
+                exclude_roles=exclude_roles,
             )
             document["messages"] = messages
             document = await enrich_chat_session_with_handler_name(document)
@@ -256,6 +263,7 @@ async def get_chat_messages_for_session(
     chat_session_id: str,
     limit: int = 50,
     conversation_id: str | None = None,
+    exclude_roles: list[str] | None = None,
 ) -> list[Dict[str, Any]]:
     """
     Retrieve chat messages for a specific session, sorted by created_at ascending.
@@ -267,6 +275,7 @@ async def get_chat_messages_for_session(
         chat_session_id: The chat session identifier.
         limit: Maximum number of messages to retrieve.
         conversation_id: Optional conversation thread identifier to filter by.
+        exclude_roles: Optional message roles to omit (e.g. tool rows for LLM history).
 
     Returns:
         List of message documents with message_id, role, content, created_at.
@@ -281,6 +290,8 @@ async def get_chat_messages_for_session(
         query: Dict[str, Any] = {"agent_id": agent_id, "chat_session_id": chat_session_id}
         if conversation_id:
             query["conversation_id"] = conversation_id
+        if exclude_roles:
+            query["role"] = {"$nin": list(exclude_roles)}
 
         # Find the latest `limit` messages by sorting descending in Mongo,
         # then reverse in Python so the caller still receives messages
@@ -296,6 +307,13 @@ async def get_chat_messages_for_session(
                 "read_by": 1,
                 "conversation_id": 1,
                 "_id": 1,
+                "tool_name": 1,
+                "request_payload": 1,
+                "response_payload": 1,
+                "request_payload_truncated": 1,
+                "response_payload_truncated": 1,
+                "status": 1,
+                "parent_user_message_id": 1,
             },
         ).sort("created_at", -1).limit(limit)
 
@@ -1036,6 +1054,7 @@ async def enrich_team_member_chat_session_rows(documents: list[dict]) -> list[di
                 "chat_session_id": chat_session_id,
                 "agent_id": agent_id,
                 "conversation_id": conversation_id,
+                "role": {"$nin": list(CHAT_MESSAGE_ROLES_HIDDEN_FROM_LAST_MESSAGE)},
             },
             sort=[("created_at", -1)],
         )
@@ -1302,6 +1321,76 @@ async def create_and_store_chat_messages(
     except Exception as e:
         logger.error(f"Error while creating and storing chat messages: {str(e)}")
         return []
+
+
+async def create_and_store_tool_call_message(
+    *,
+    chat_session_id: str,
+    agent_id: str,
+    tool_name: str,
+    request_payload: Any,
+    response_payload: Any,
+    status: str,
+    conversation_id: str | None = None,
+    parent_user_message_id: str | None = None,
+    request_payload_truncated: bool = False,
+    response_payload_truncated: bool = False,
+    created_at: datetime.datetime | None = None,
+) -> Dict[str, Any] | None:
+    """
+    Persist one tool-call audit row. Does not bump last_message_at or first-message audit.
+    """
+    try:
+        if not chat_session_id or not agent_id or not tool_name:
+            logger.warning("chat_session_id, agent_id, and tool_name are required to store a tool call")
+            return None
+
+        resolved_conversation_id = conversation_id
+        if not resolved_conversation_id:
+            sessions_collection = get_collection("atlas_chat_sessions")
+            session_doc = await sessions_collection.find_one(
+                {"chat_session_id": chat_session_id, "agent_id": agent_id},
+                {"conversation_id": 1},
+            )
+            resolved_conversation_id = (
+                session_doc.get("conversation_id") if session_doc else None
+            )
+
+        document: Dict[str, Any] = {
+            "chat_session_id": chat_session_id,
+            "agent_id": agent_id,
+            "message_id": str(uuid.uuid4()),
+            "role": CHAT_MESSAGE_ROLE_TOOL,
+            "content": tool_name,
+            "tool_name": tool_name,
+            "request_payload": request_payload,
+            "response_payload": response_payload,
+            "request_payload_truncated": bool(request_payload_truncated),
+            "response_payload_truncated": bool(response_payload_truncated),
+            "status": status if status in {"success", "error"} else "success",
+            "created_at": coerce_utc_datetime(created_at),
+        }
+        if resolved_conversation_id is not None:
+            document["conversation_id"] = resolved_conversation_id
+        if parent_user_message_id:
+            document["parent_user_message_id"] = parent_user_message_id
+
+        collection = get_collection("atlas_chat_mesages")
+        result = await collection.insert_one(document)
+        document["_id"] = str(result.inserted_id)
+
+        logger.info(
+            "Stored tool call '%s' (%s) for chat_session_id=%s agent_id=%s",
+            tool_name,
+            document["status"],
+            chat_session_id,
+            agent_id,
+        )
+        return document
+
+    except Exception as e:
+        logger.error(f"Error while storing tool call message: {str(e)}", exc_info=True)
+        return None
 
 
 async def maybe_record_visitor_first_message_audit(
@@ -1926,6 +2015,7 @@ async def get_last_chat_message_for_session(
     query: Dict[str, Any] = {
         "agent_id": agent_id,
         "chat_session_id": chat_session_id,
+        "role": {"$nin": list(CHAT_MESSAGE_ROLES_HIDDEN_FROM_LAST_MESSAGE)},
     }
     if conversation_id:
         query["conversation_id"] = conversation_id

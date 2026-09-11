@@ -44,6 +44,7 @@ from config.llm_models_config import normalize_llm_model_in_request
 from config.human_handover_config import build_human_handover_config_for_create
 from config.lead_collection_config import build_lead_collection_config_for_create
 from config.atlas_tool_calling_config import build_tool_calling_config_for_create
+from config.atlas_chat_config import CHAT_MESSAGE_ROLES_HIDDEN_FROM_LLM
 from services.elysium_atlas_services.atlas_chat_session_services import get_chat_session_data
 
 logger = get_logger()
@@ -462,9 +463,12 @@ async def get_agent_fields_controller(requestData: dict):
         
         # Run async calls in parallel
         if chat_session_id:
+            session_request = dict(requestData)
+            if session_request.get("include_tool_calls") is not True:
+                session_request["exclude_roles"] = list(CHAT_MESSAGE_ROLES_HIDDEN_FROM_LLM)
             agent_data, chat_session_data = await asyncio.gather(
                 fetch_agent_fields_by_id(agent_id, fields),
-                get_chat_session_data(requestData)
+                get_chat_session_data(session_request)
             )
         else:
             agent_data = await fetch_agent_fields_by_id(agent_id, fields)

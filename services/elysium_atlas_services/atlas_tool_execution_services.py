@@ -1,11 +1,17 @@
+import asyncio
+import datetime
 import json
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import httpx
 from bson import ObjectId
 from bson.errors import InvalidId
 
-from config.atlas_tool_config import ATLAS_TOOL_LLM_RESULT_MAX_CHARS
+from config.atlas_tool_config import (
+    ATLAS_TOOL_LLM_RESULT_MAX_CHARS,
+    ATLAS_TOOL_OBSERVABILITY_MAX_CHARS,
+)
 from logging_config import get_logger
 from services.elysium_atlas_services.atlas_tool_secrets import decrypt_tool_token
 from services.mongo_services import get_collection
@@ -176,12 +182,72 @@ def _tools_by_name(tool_documents: list[dict[str, Any]]) -> dict[str, dict[str, 
     return {document["name"]: document for document in tool_documents if document.get("name")}
 
 
+def parse_tool_result_payload(tool_result: str) -> Any:
+    """Parse a tool HTTP result string into JSON when possible."""
+    if not tool_result:
+        return tool_result
+    try:
+        return json.loads(tool_result)
+    except (json.JSONDecodeError, TypeError):
+        return tool_result
+
+
+def cap_observability_payload(value: Any) -> tuple[Any, bool]:
+    """Cap a JSON-serializable payload for Mongo/socket (does not affect the LLM prompt)."""
+    if value is None:
+        return None, False
+    serialized = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+    if len(serialized) <= ATLAS_TOOL_OBSERVABILITY_MAX_CHARS:
+        return value, False
+    logger.warning(
+        f"Tool observability payload truncated from {len(serialized)} "
+        f"to {ATLAS_TOOL_OBSERVABILITY_MAX_CHARS} chars"
+    )
+    return serialized[:ATLAS_TOOL_OBSERVABILITY_MAX_CHARS], True
+
+
+def build_tool_call_observability_record(
+    *,
+    tool_name: str,
+    request_payload: dict[str, Any],
+    tool_result: str,
+) -> dict[str, Any]:
+    """Structured tool call record for persistence and monitor emit."""
+    capped_request, request_truncated = cap_observability_payload(request_payload)
+    capped_response, response_truncated = cap_observability_payload(
+        parse_tool_result_payload(tool_result)
+    )
+    return {
+        "tool_name": tool_name,
+        "request_payload": capped_request,
+        "response_payload": capped_response,
+        "request_payload_truncated": request_truncated,
+        "response_payload_truncated": response_truncated,
+        "status": "error" if _is_tool_result_error(tool_result) else "success",
+        "created_at": datetime.datetime.now(datetime.timezone.utc),
+    }
+
+
+async def _notify_tool_call_observer(
+    on_tool_call: Callable[[dict[str, Any]], Awaitable[None]],
+    record: dict[str, Any],
+) -> None:
+    try:
+        await on_tool_call(record)
+    except Exception:
+        logger.error(
+            f"Tool call observer failed for tool '{record.get('tool_name')}'",
+            exc_info=True,
+        )
+
+
 async def run_agent_tool_calling_round(
     messages: list[dict[str, Any]],
     tool_ids: list[str],
     *,
     tool_calling_config: dict[str, Any] | None = None,
     temperature: float = 0.3,
+    on_tool_call: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
 ) -> list[dict[str, Any]] | None:
     """
     Run multi-round tool orchestration via DeepSeek for this chat turn.
@@ -189,6 +255,9 @@ async def run_agent_tool_calling_round(
     Returns messages to insert before the current user message on the final response
     call (assistant role, plain text — compatible with Claude and other chat APIs).
     Returns None when no tools run this turn.
+
+    on_tool_call is fired in the background after each HTTP tool execution (success or
+    error) so persist/emit cannot block the orchestration loop.
     """
     from config.atlas_tool_calling_config import normalize_tool_calling_config
     from services.deepseek_services import deepseek_chat_completion_with_tools
@@ -254,6 +323,7 @@ async def run_agent_tool_calling_round(
             raw_arguments = tool_call.get("function", {}).get("arguments") or "{}"
             tool_call_id = tool_call.get("id") or f"call_{executions}"
 
+            parsed_arguments: dict[str, Any] = {}
             tool_document = tools_lookup.get(function_name)
             if not tool_document:
                 logger.warning(f"LLM requested unknown tool '{function_name}'; skipping execution")
@@ -274,7 +344,17 @@ async def run_agent_tool_calling_round(
                 tool_result = await execute_atlas_tool(tool_document, parsed_arguments)
 
             executions += 1
-            capped_result = cap_tool_result_for_llm(function_name or "unknown", tool_result)
+            resolved_tool_name = function_name or "unknown"
+            if on_tool_call:
+                observability_record = build_tool_call_observability_record(
+                    tool_name=resolved_tool_name,
+                    request_payload=parsed_arguments,
+                    tool_result=tool_result,
+                )
+                asyncio.create_task(
+                    _notify_tool_call_observer(on_tool_call, dict(observability_record))
+                )
+            capped_result = cap_tool_result_for_llm(resolved_tool_name, tool_result)
             working_messages.append(
                 {
                     "role": "tool",
@@ -283,7 +363,7 @@ async def run_agent_tool_calling_round(
                 }
             )
             final_turn_messages.append(
-                _build_tool_result_message(function_name or "unknown", tool_result)
+                _build_tool_result_message(resolved_tool_name, tool_result)
             )
 
             if stop_on_error and _is_tool_result_error(tool_result):

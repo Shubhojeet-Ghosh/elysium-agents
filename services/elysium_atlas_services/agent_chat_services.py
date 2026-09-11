@@ -6,6 +6,7 @@ from services.elysium_atlas_services.kb_item.kb_attachment_service import list_r
 from services.socket_emit_services import emit_atlas_response_chunk
 from services.elysium_atlas_services.atlas_chat_session_services import (
     create_and_store_chat_messages,
+    create_and_store_tool_call_message,
     get_chat_session_data,
     coerce_utc_datetime,
     format_utc_datetime_for_client,
@@ -16,6 +17,7 @@ from services.elysium_atlas_services.atlas_chat_session_services import (
 from config.llm_models_config import resolve_model_handler, DEFAULT_MODEL
 from config.atlas_tool_config import get_tool_result_message_role
 from config.atlas_tool_calling_config import normalize_tool_calling_config
+from config.atlas_chat_config import CHAT_MESSAGE_ROLE_TOOL, CHAT_MESSAGE_ROLES_HIDDEN_FROM_LLM
 from config.retrieval_strategy_config import DEFAULT_RETRIEVAL_STRATEGY
 from services.elysium_atlas_services.atlas_tool_execution_services import run_agent_tool_calling_round
 
@@ -192,6 +194,8 @@ def build_messages_list(
     if chat_history:
         for hist_msg in chat_history:
             raw_role = hist_msg.get("role", "user")
+            if raw_role == CHAT_MESSAGE_ROLE_TOOL or raw_role in CHAT_MESSAGE_ROLES_HIDDEN_FROM_LLM:
+                continue
             if raw_role in ("agent", "human"):
                 role = "assistant"
             elif raw_role in VALID_ROLES:
@@ -252,7 +256,8 @@ async def chat_with_agent_v1(agent_id, message, sid=None, chat_session_id=None, 
             get_chat_session_data({
                 "agent_id": agent_id,
                 "chat_session_id": chat_session_id,
-                "limit": 10
+                "limit": 10,
+                "exclude_roles": list(CHAT_MESSAGE_ROLES_HIDDEN_FROM_LLM),
             }),
             get_agent_by_id(agent_id),
             list_ready_kb_ids_for_agent(agent_id),
@@ -380,12 +385,44 @@ async def chat_with_agent_v1(agent_id, message, sid=None, chat_session_id=None, 
             logger.info(f"{chat_log} Checking registered tools for this turn (count={len(tool_ids)})")
             tool_temperature = agent_data.get("temperature", 0.5) if agent_data else 0.5
             tool_step_start = time.perf_counter()
+            conversation_id = (chat_session_data or {}).get("conversation_id")
+            monitor_sids_for_tools = list(monitor_sids)
+
+            async def persist_and_emit_tool_call(record: dict) -> None:
+                stored = None
+                if chat_session_id:
+                    stored = await create_and_store_tool_call_message(
+                        chat_session_id=chat_session_id,
+                        agent_id=agent_id,
+                        conversation_id=conversation_id,
+                        parent_user_message_id=user_message_id,
+                        tool_name=record.get("tool_name") or "unknown",
+                        request_payload=record.get("request_payload"),
+                        response_payload=record.get("response_payload"),
+                        status=record.get("status") or "success",
+                        request_payload_truncated=bool(record.get("request_payload_truncated")),
+                        response_payload_truncated=bool(record.get("response_payload_truncated")),
+                        created_at=record.get("created_at"),
+                    )
+                emit_payload = serialize_chat_message_for_client(stored) if stored else record
+                if monitor_sids_for_tools:
+                    from services.elysium_atlas_services.atlas_team_member_emit_services import (
+                        emit_monitor_tool_call,
+                    )
+                    await emit_monitor_tool_call(
+                        monitor_sids_for_tools,
+                        agent_id,
+                        chat_session_id,
+                        emit_payload,
+                    )
+
             try:
                 tool_turn_messages = await run_agent_tool_calling_round(
                     messages,
                     tool_ids,
                     tool_calling_config=tool_calling_config,
                     temperature=tool_temperature,
+                    on_tool_call=persist_and_emit_tool_call,
                 )
             except Exception as tool_error:
                 logger.error(f"{chat_log} Tool calling round failed: {tool_error}", exc_info=True)

@@ -21,6 +21,7 @@ All routes require `Authorization: Bearer <session_jwt>`. The JWT must include `
 | Secrets | API keys/tokens are **never returned** after save; responses include `auth.token_configured: true` |
 | Agent linking | Agents store attached tools in `tool_ids` (array of `atlas_tools._id` strings) |
 | Runtime orchestration | Per-agent `tool_calling_config` controls multi-round tool execution during chat |
+| Chat audit | Each tool HTTP call is stored as `role: "tool"` on `atlas_chat_mesages` and mirrored to monitors |
 
 ---
 
@@ -159,6 +160,91 @@ When a visitor sends a message and the agent has non-empty `tool_ids` with `tool
 **Chained tools:** Round 1 might call `find_customer`; round 2 sees that result and calls `get_order_status`. No explicit dependency graph is required — the orchestrator infers order from tool descriptions and prior results.
 
 **UI recommendation:** Show `max_rounds`, `max_executions_per_turn`, and `parallel_calls_per_round` only when at least one tool is selected. Hide `stop_on_error` (server default `false`).
+
+---
+
+## Tool calls in chat (monitors + history)
+
+Each HTTP tool execution is stored as its **own** `atlas_chat_mesages` row (`role: "tool"`) and mirrored live to session monitors. Persist and socket emit run in the background and do **not** delay the visitor reply.
+
+### Who sees them
+
+| Surface | Sees tool calls? |
+|---------|------------------|
+| Atlas live monitor | Yes — socket event `tool_call_from_agent` after each tool HTTP returns (success or error) |
+| Atlas session history | Yes — `get-agent-fields` with `include_tool_calls: true` |
+| Visitor widget | **Never** — not on the visitor socket; `get-agent-fields` omits `role: "tool"` unless `include_tool_calls` is true |
+
+Human takeover does not run tools. `tool_call_from_agent` is AI-monitor only.
+
+### Message shape (`role: "tool"`)
+
+Tool rows sit **between** the visitor message that triggered them and the agent reply, sorted by `created_at`.
+
+```json
+{
+  "_id": "67a1b2c3d4e5f6789012345d",
+  "message_id": "c3d4e5f6-a7b8-9012-cdef-123456789012",
+  "role": "tool",
+  "content": "lookup_demo_customer",
+  "tool_name": "lookup_demo_customer",
+  "request_payload": { "email": "ada@example.com" },
+  "response_payload": { "customer_id": "demo_cust_001", "status": "returning" },
+  "request_payload_truncated": false,
+  "response_payload_truncated": false,
+  "status": "success",
+  "parent_user_message_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+  "created_at": "2026-09-11T00:25:12.340Z"
+}
+```
+
+| Field | Type | Notes |
+|-------|------|--------|
+| `role` | `"tool"` | Filter/toggle technical rows with `role === "tool"` |
+| `content` | `string` | Same as `tool_name` (fallback for generic message renderers) |
+| `tool_name` | `string` | Atlas tool `name` (LLM function name) |
+| `request_payload` | `object` or truncated `string` | LLM function arguments (not auth tokens) |
+| `response_payload` | `object`, `string`, or truncated `string` | Parsed JSON body when possible; `{ "error": true, ... }` on timeout/4xx/unknown tool |
+| `request_payload_truncated` | `boolean` | True when request JSON exceeded 16 000 characters |
+| `response_payload_truncated` | `boolean` | True when response JSON exceeded 16 000 characters |
+| `status` | `"success"` \| `"error"` | Error includes HTTP failures, timeouts, and unknown tool names |
+| `parent_user_message_id` | `string` | Visitor `message_id` for this turn |
+| `created_at` | `string` | When the HTTP call finished — use this for ordering |
+
+**Inbox / last message:** `role: "tool"` is excluded from `last_message` and does **not** bump `last_message_at`.
+
+**LLM history:** stored tool rows are **not** replayed into later prompts. Only this turn’s live results are injected for the answering model.
+
+### Loading history (Atlas)
+
+`POST /elysium-atlas/agent/v1/get-agent-fields` is used by the visitor widget and **omits tool rows by default**.
+
+Atlas dashboard / session transcript must send:
+
+```json
+{
+  "agent_id": "674a1b2c3d4e5f6789012345",
+  "chat_session_id": "web-c0430c6c-0d3f-40ef-be30-864c7b9222b7",
+  "fields": ["agent_name"],
+  "include_tool_calls": true,
+  "limit": 50
+}
+```
+
+`chat_session_data.messages` then includes `role: "tool"` rows in chronological order. Tool rows count toward `limit`.
+
+The widget must **not** send `include_tool_calls`.
+
+### Frontend rendering
+
+1. Keep a toggle (e.g. “Show tool calls”) — default hidden or collapsed so non-technical agents can ignore them.
+2. When shown, render each `role: "tool"` row **between** the parent visitor message and the agent reply (sort all messages by `created_at`).
+3. Use a collapsible JSON block for `request_payload` and `response_payload`.
+4. If `request_payload_truncated` or `response_payload_truncated` is true, the matching payload is a **string preview**, not valid JSON — show a “truncated” badge.
+5. Style `status: "error"` distinctly.
+6. Do **not** treat tool rows as chat bubbles meant for the visitor.
+
+Live socket payload and history row share the same fields. See [live-visitor-chat.md](./live-visitor-chat.md) for `tool_call_from_agent`.
 
 ---
 

@@ -38,6 +38,7 @@ Now, `agent_visitors_list` returns **all persisted chat sessions** from MongoDB 
 | Server → client | `monitor_conversation_ended`                  | Ack for monitor stop                                                   |
 | Server → client | `message_from_visitor`                        | Visitor message (takeover or monitor mirror)                           |
 | Server → client | `message_from_agent`                          | Complete AI reply (monitor mirror only)                                |
+| Server → client | `tool_call_from_agent`                        | Tool HTTP call (monitor mirror only; not sent to the visitor widget)   |
 | Server → client | `message_from_team_member`                    | Human handler reply (owner/admin monitor mirror during takeover)       |
 | Server → client | `conversation_started`                        | Takeover active (visitor + team member who took over)                  |
 | Server → client | `conversation_ended`                          | Takeover ended (visitor)                                               |
@@ -755,7 +756,9 @@ When the handling team member reconnects, emit `atlas-team-member-start-conversa
 
 **Takeover lock:** Only **one** team member can hold takeover at a time (`in_conversation_with` in Mongo). A second `atlas-team-member-start-conversation` is rejected with `conversation_started` / `success: false`. The lock applies even when the visitor is offline. Multiple team members may **monitor** the same session at once, including while takeover is active.
 
-**Monitor only** (implemented) does **not** change `in_conversation_with`. Visitor ↔ AI chat runs unchanged. The monitoring team member receives a real-time mirror of both sides.
+**Monitor only** (implemented) does **not** change `in_conversation_with`. Visitor ↔ AI chat runs unchanged. The monitoring team member receives a real-time mirror of both sides, plus tool calls when the AI executes tools (`tool_call_from_agent`). The visitor widget never receives tool-call events.
+
+Tools run only on the **AI chat path**. During human takeover the AI does not call tools, so monitors will not receive `tool_call_from_agent` until takeover ends and the AI is answering again.
 
 ### Takeover — start (`atlas-team-member-start-conversation`)
 
@@ -861,9 +864,9 @@ Event: `atlas-team-member-start-conversation`
 
 **Frontend (owner/admin monitors while someone else took over):**
 
-1. On `session_takeover_started`: show banner (“Agent X is handling this chat”); stop expecting `message_from_agent`.
+1. On `session_takeover_started`: show banner (“Agent X is handling this chat”); stop expecting `message_from_agent` and `tool_call_from_agent`.
 2. Listen for `message_from_visitor` and `message_from_team_member` with `conversation_mode: "takeover"`.
-3. On `session_takeover_ended`: hide banner; resume expecting AI mirror events (`message_from_agent`).
+3. On `session_takeover_ended`: hide banner; resume expecting AI mirror events (`message_from_agent`, `tool_call_from_agent`).
 
 **Frontend (member monitors when takeover starts):**
 
@@ -1052,10 +1055,11 @@ While monitoring, the team member receives messages **only after they are persis
 
 **AI chat (no active takeover)** — all monitoring roles (when allowed to monitor):
 
-| Event                  | When                                          | Payload notes                                                 |
-| ---------------------- | --------------------------------------------- | ------------------------------------------------------------- |
-| `message_from_visitor` | After visitor message is stored (before LLM)  | `conversation_mode: "monitor"`, `sender: "visitor"`, `_id`, … |
-| `message_from_agent`   | After full AI response is stored and streamed | `conversation_mode: "monitor"`, `sender: "agent"`, `_id`, …   |
+| Event                    | When                                                         | Payload notes                                                                 |
+| ------------------------ | ------------------------------------------------------------ | ----------------------------------------------------------------------------- |
+| `message_from_visitor`   | After visitor message is stored (before LLM)                 | `conversation_mode: "monitor"`, `sender: "visitor"`, `_id`, …                 |
+| `tool_call_from_agent`   | After each tool HTTP call returns (before the AI reply)      | `conversation_mode: "monitor"`, `sender: "tool"`, `role: "tool"`, payloads …  |
+| `message_from_agent`     | After full AI response is stored and streamed                | `conversation_mode: "monitor"`, `sender: "agent"`, `_id`, …                   |
 
 **Human takeover (owner/admin monitors only)** — delivery order per message:
 
@@ -1101,6 +1105,34 @@ Example `message_from_agent`:
   "created_at": "2026-07-03T18:05:18.120000+00:00"
 }
 ```
+
+Example `tool_call_from_agent` (AI monitor only — **never** sent to the visitor widget). Fired after each tool HTTP call, including failures, while the visitor is still waiting for the AI reply. Insert the row by `created_at` between the visitor message and the agent reply. Render as a collapsible JSON block, behind a “Show tool calls” toggle.
+
+```json
+{
+  "agent_id": "695c342989c5797e0f344572",
+  "chat_session_id": "web-c0430c6c-0d3f-40ef-be30-864c7b9222b7",
+  "sender": "tool",
+  "role": "tool",
+  "conversation_mode": "monitor",
+  "tool_name": "lookup_demo_customer",
+  "request_payload": { "email": "ada@example.com" },
+  "response_payload": { "customer_id": "demo_cust_001", "status": "returning" },
+  "request_payload_truncated": false,
+  "response_payload_truncated": false,
+  "status": "success",
+  "_id": "67a1b2c3d4e5f6789012345d",
+  "message_id": "c3d4e5f6-a7b8-9012-cdef-123456789012",
+  "parent_user_message_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+  "created_at": "2026-07-03T18:05:14.210Z"
+}
+```
+
+`status` is `"error"` when the HTTP call timed out, returned 4xx/5xx, or the model named an unknown tool. Payloads longer than 16 000 characters are stored/emitted as a string preview with `request_payload_truncated` / `response_payload_truncated: true`.
+
+Do not use tool rows as `last_message` in the sessions list — the server already excludes them.
+
+For history after the fact, see [frontend-tools-api-guide.md](./frontend-tools-api-guide.md#tool-calls-in-chat-monitors--history) (`include_tool_calls: true` on `get-agent-fields`).
 
 Example `message_from_team_member` (takeover mirror — listen for this while watching another agent handle the chat):
 
@@ -1159,9 +1191,10 @@ When the team member views a mirrored message in the monitor UI, call the existi
 **Frontend guidance:**
 
 1. On each `message_from_visitor` / `message_from_agent` / `message_from_team_member`, render the message and keep `_id` on the row.
-2. When the message scrolls into view (or the monitor panel is focused), POST mark-read with that `_id`.
-3. Mark-read is idempotent — safe to retry; the server preserves the first `read_at`.
-4. Apply to both visitor and agent mirrored messages so unread counts stay accurate.
+2. `tool_call_from_agent` is optional in the transcript (toggle). It does **not** affect unread visitor counts — do not mark tool rows as read for badge purposes.
+3. When a visitor or agent message scrolls into view (or the monitor panel is focused), POST mark-read with that `_id`.
+4. Mark-read is idempotent — safe to retry; the server preserves the first `read_at`.
+5. Apply to visitor and agent mirrored messages so unread counts stay accurate.
 
 ### Redis (session monitors only)
 
@@ -1174,7 +1207,7 @@ When the team member views a mirrored message in the monitor UI, call the existi
 | Piece                                    | Location                                                                                                                                          |
 | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Monitor start/stop controllers           | `controllers/elysium_atlas_controller_files/atlas_team_member_chat_controllers.py`                                                                |
-| Visitor + agent + takeover mirror emits | `services/elysium_atlas_services/atlas_team_member_emit_services.py` → `mirror_takeover_*_to_monitors`, `emit_monitor_*` |
+| Visitor + agent + tool + takeover mirror emits | `services/elysium_atlas_services/atlas_team_member_emit_services.py` → `mirror_takeover_*_to_monitors`, `emit_monitor_*` |
 | Monitor registry (Redis)                 | `services/elysium_atlas_services/atlas_redis_services.py`                                                                                         |
 | Orchestration on `atlas-team-member-message` | `atlas_team_member_chat_controllers.py` → visitor emit, then `mirror_takeover_team_member_reply_to_monitors` |
 | Orchestration on `atlas-visitor-message` (takeover) | `atlas_chat_controllers.py` → `route_visitor_message_to_team_member` → `mirror_takeover_visitor_message_to_monitors` |
