@@ -20,5 +20,5 @@ def decrypt_plugin_secret(encrypted_value: str) -> str:
     """Restore a plugin secret previously stored with encrypt_plugin_secret."""
     key = _derive_key(settings.APPLICATION_PASSKEY)
     encrypted = urlsafe_b64decode(encrypted_value.encode("ascii"))
-    data = bytes(encrypted[i] ^ key[i % len(key)] for i in range(len(data)))
+    data = bytes(encrypted[i] ^ key[i % len(key)] for i in range(len(encrypted)))
     return data.decode("utf-8")
