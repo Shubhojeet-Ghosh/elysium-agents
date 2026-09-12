@@ -377,12 +377,16 @@ async def chat_with_agent_v1(agent_id, message, sid=None, chat_session_id=None, 
         )
 
         tool_ids = (agent_data or {}).get("tool_ids") or []
+        plugin_ids = (agent_data or {}).get("plugin_ids") or []
         tool_calling_config = normalize_tool_calling_config(
             (agent_data or {}).get("tool_calling_config")
         )
         tool_turn_messages = None
-        if tool_ids and tool_calling_config.get("enabled"):
-            logger.info(f"{chat_log} Checking registered tools for this turn (count={len(tool_ids)})")
+        if (tool_ids or plugin_ids) and tool_calling_config.get("enabled"):
+            logger.info(
+                f"{chat_log} Checking registered tools/plugins for this turn "
+                f"(tools={len(tool_ids)}, plugins={len(plugin_ids)})"
+            )
             tool_temperature = agent_data.get("temperature", 0.5) if agent_data else 0.5
             tool_step_start = time.perf_counter()
             conversation_id = (chat_session_data or {}).get("conversation_id")
@@ -402,6 +406,7 @@ async def chat_with_agent_v1(agent_id, message, sid=None, chat_session_id=None, 
                         status=record.get("status") or "success",
                         request_payload_truncated=bool(record.get("request_payload_truncated")),
                         response_payload_truncated=bool(record.get("response_payload_truncated")),
+                        execution_kind=record.get("execution_kind"),
                         created_at=record.get("created_at"),
                     )
                 emit_payload = serialize_chat_message_for_client(stored) if stored else record
@@ -420,6 +425,7 @@ async def chat_with_agent_v1(agent_id, message, sid=None, chat_session_id=None, 
                 tool_turn_messages = await run_agent_tool_calling_round(
                     messages,
                     tool_ids,
+                    plugin_ids=plugin_ids,
                     tool_calling_config=tool_calling_config,
                     temperature=tool_temperature,
                     on_tool_call=persist_and_emit_tool_call,

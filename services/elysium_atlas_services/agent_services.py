@@ -121,6 +121,23 @@ async def normalize_agent_tool_ids_in_request(
     return None
 
 
+async def normalize_agent_plugin_ids_in_request(
+    request_data: Dict[str, Any],
+    team_id: str,
+) -> str | None:
+    """Validate plugin_ids when present on an agent request. Mutates request_data in place."""
+    if "plugin_ids" not in request_data:
+        return None
+
+    from services.elysium_atlas_services.atlas_plugin_services import validate_agent_plugin_ids
+
+    normalized, error = await validate_agent_plugin_ids(team_id, request_data["plugin_ids"])
+    if error:
+        return error
+    request_data["plugin_ids"] = normalized
+    return None
+
+
 async def capture_pre_update_agent_status(agent_id: str, request_data: Dict[str, Any]) -> None:
     """Store the agent's current status so it can be restored after re-indexing."""
     agent = await get_agent_by_id(agent_id)
@@ -174,6 +191,9 @@ async def create_agent_document(initial_data: Optional[Dict[str, Any]] = None) -
         if "tool_ids" not in document:
             document["tool_ids"] = []
 
+        if "plugin_ids" not in document:
+            document["plugin_ids"] = []
+
         if "tool_calling_config" not in document:
             document["tool_calling_config"] = get_default_tool_calling_config()
 
@@ -218,6 +238,9 @@ async def initialize_agent_build_update(requestData: Dict[str, Any]) -> bool:
 
         if "tool_ids" in requestData:
             updates["tool_ids"] = requestData["tool_ids"]
+
+        if "plugin_ids" in requestData:
+            updates["plugin_ids"] = requestData["plugin_ids"]
 
         if updates:
             await update_agent_fields(agent_id, updates)
@@ -355,6 +378,9 @@ async def fetch_agent_document(agent_id: str) -> Optional[Dict[str, Any]]:
             if "tool_ids" not in document:
                 document["tool_ids"] = []
 
+            if "plugin_ids" not in document:
+                document["plugin_ids"] = []
+
             document["tool_calling_config"] = normalize_tool_calling_config(
                 document.get("tool_calling_config")
             )
@@ -419,6 +445,9 @@ async def initialize_agent_update(requestData: Dict[str, Any]) -> bool:
 
         if "tool_ids" in requestData:
             updates["tool_ids"] = requestData["tool_ids"]
+
+        if "plugin_ids" in requestData:
+            updates["plugin_ids"] = requestData["plugin_ids"]
 
         if updates:
             await update_agent_fields(agent_id, updates)
@@ -558,6 +587,7 @@ async def update_agent_basic_attributes(agent_id: str, requestData: Dict[str, An
             "lead_collection_config",
             "human_handover_config",
             "tool_ids",
+            "plugin_ids",
             "tool_calling_config",
         ]
         

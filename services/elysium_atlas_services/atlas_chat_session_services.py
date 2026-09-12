@@ -1335,6 +1335,7 @@ async def create_and_store_tool_call_message(
     parent_user_message_id: str | None = None,
     request_payload_truncated: bool = False,
     response_payload_truncated: bool = False,
+    execution_kind: str | None = None,
     created_at: datetime.datetime | None = None,
 ) -> Dict[str, Any] | None:
     """
@@ -1370,6 +1371,8 @@ async def create_and_store_tool_call_message(
             "status": status if status in {"success", "error"} else "success",
             "created_at": coerce_utc_datetime(created_at),
         }
+        if execution_kind:
+            document["execution_kind"] = execution_kind
         if resolved_conversation_id is not None:
             document["conversation_id"] = resolved_conversation_id
         if parent_user_message_id:

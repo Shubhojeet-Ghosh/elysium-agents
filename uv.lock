@@ -405,7 +405,7 @@ wheels = [
 
 [[package]]
 name = "elysium-agents"
-version = "0.2.96"
+version = "0.3.3"
 source = { virtual = "." }
 dependencies = [
     { name = "anthropic" },
@@ -421,6 +421,7 @@ dependencies = [
     { name = "playwright" },
     { name = "pydantic-settings" },
     { name = "pyjwt" },
+    { name = "pymysql" },
     { name = "python-dotenv" },
     { name = "python-socketio" },
     { name = "qdrant-client" },
@@ -444,6 +445,7 @@ requires-dist = [
     { name = "playwright", specifier = ">=1.40.0" },
     { name = "pydantic-settings", specifier = ">=2.12.0" },
     { name = "pyjwt", specifier = ">=2.8.0" },
+    { name = "pymysql", specifier = ">=1.1.0" },
     { name = "python-dotenv", specifier = ">=1.2.1" },
     { name = "python-socketio", specifier = ">=5.11.0" },
     { name = "qdrant-client", specifier = ">=1.18.0,<1.19.0" },
@@ -1580,6 +1582,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/7e/af/78c13179961e418396ec6ef53c0f1c855f1e9f1176d10909e8345d65366a/pymongo-4.15.5-cp314-cp314t-win32.whl", hash = "sha256:7c285614a3e8570b03174a25db642e449b0e7f77a6c9e487b73b05c9bf228ee6", size = 1044015, upload-time = "2025-12-02T18:44:05.318Z" },
     { url = "https://files.pythonhosted.org/packages/b0/d5/49012f03418dce976124da339f3a6afbe6959cb0468ca6302596fe272926/pymongo-4.15.5-cp314-cp314t-win_amd64.whl", hash = "sha256:aae7d96f7b2b1a2753349130797543e61e93ee2ace8faa7fbe0565e2eb5d815f", size = 1078481, upload-time = "2025-12-02T18:44:07.215Z" },
     { url = "https://files.pythonhosted.org/packages/5e/fc/f352a070d8ff6f388ce344c5ddb82348a38e0d1c99346fa6bfdef07134fe/pymongo-4.15.5-cp314-cp314t-win_arm64.whl", hash = "sha256:576a7d4b99465d38112c72f7f3d345f9d16aeeff0f923a3b298c13e15ab4f0ad", size = 1051166, upload-time = "2025-12-02T18:44:09.048Z" },
+]
+
+[[package]]
+name = "pymysql"
+version = "1.2.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/c9/bc/1c6a92f385940f727daeecf3bacaf186e03875dff57197801046c583bcf0/pymysql-1.2.0.tar.gz", hash = "sha256:6c7b17ca686988104d7426c27895b455cdeea3e9d3ceb1270f0c3704fead8c33", size = 49021, upload-time = "2026-05-19T08:26:22.302Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c4/bd/2534e130295c8cfd4f0a2e31623baab7502278f1e97bcfe61db75656a77f/pymysql-1.2.0-py3-none-any.whl", hash = "sha256:62169ce6d5510f08e140c5e7990ee884a9764024e4a9a27b2cc11f1099322ae0", size = 45716, upload-time = "2026-05-19T08:26:20.974Z" },
 ]
 
 [[package]]

@@ -244,6 +244,27 @@ async def create_mongo_indexes():
         )
         logger.info("Compound index created on atlas_tools.team_id, updated_at, _id")
 
+        atlas_plugins_collection = get_collection("atlas_plugins")
+        await atlas_plugins_collection.create_index("team_id", name="team_id_1")
+        logger.info("Index created on atlas_plugins.team_id")
+        await atlas_plugins_collection.create_index(
+            [("team_id", 1), ("name", 1)],
+            name="team_id_name_1",
+            unique=True,
+        )
+        logger.info("Unique compound index created on atlas_plugins.team_id, name")
+        await atlas_plugins_collection.create_index(
+            [("team_id", 1), ("display_name", 1)],
+            name="team_id_display_name_1",
+            unique=True,
+        )
+        logger.info("Unique compound index created on atlas_plugins.team_id, display_name")
+        await atlas_plugins_collection.create_index(
+            [("team_id", 1), ("updated_at", -1), ("_id", -1)],
+            name="team_id_updated_at_id_1",
+        )
+        logger.info("Compound index created on atlas_plugins.team_id, updated_at, _id")
+
         atlas_support_tickets_collection = get_collection("atlas_support_tickets")
         await atlas_support_tickets_collection.create_index(
             "ticket_number",

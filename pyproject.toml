@@ -1,6 +1,6 @@
 [project]
 name = "elysium-agents"
-version = "0.3.03"
+version = "0.3.04"
 description = "A repository to demonstrate the working of AI Agents for Elysium."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -24,4 +24,5 @@ dependencies = [
     "anthropic>=0.34.0",
     "docx2txt>=0.9",
     "xai-sdk>=1.5.0",
+    "pymysql>=1.1.0",
 ]

@@ -20,6 +20,7 @@ from services.elysium_atlas_services.agent_services import (
     requires_agent_reindex,
     capture_pre_update_agent_status,
     normalize_agent_tool_ids_in_request,
+    normalize_agent_plugin_ids_in_request,
     strip_deprecated_agent_request_fields,
 )
 from services.elysium_atlas_services.team_auth_services import (
@@ -174,6 +175,51 @@ async def _validate_agent_tool_ids_for_request(
     return None
 
 
+async def _validate_agent_plugin_ids_for_request(
+    request_data: dict,
+    team_id: str | None,
+) -> JSONResponse | None:
+    if "plugin_ids" not in request_data:
+        return None
+    if not team_id:
+        return JSONResponse(
+            status_code=400,
+            content={"success": False, "message": "Cannot validate plugin_ids without team context."},
+        )
+    error = await normalize_agent_plugin_ids_in_request(request_data, team_id)
+    if error:
+        return JSONResponse(status_code=400, content={"success": False, "message": error})
+    return None
+
+
+async def _validate_tool_plugin_name_clash(
+    request_data: dict,
+    team_id: str | None,
+    agent_id: str | None = None,
+) -> JSONResponse | None:
+    if "tool_ids" not in request_data and "plugin_ids" not in request_data:
+        return None
+    if not team_id:
+        return None
+
+    from services.elysium_atlas_services.agent_db_operations import get_agent_by_id
+    from services.elysium_atlas_services.atlas_plugin_services import validate_attached_function_names
+
+    tool_ids = request_data.get("tool_ids")
+    plugin_ids = request_data.get("plugin_ids")
+    if tool_ids is None or plugin_ids is None:
+        agent = await get_agent_by_id(agent_id) if agent_id else None
+        if tool_ids is None:
+            tool_ids = (agent or {}).get("tool_ids") or []
+        if plugin_ids is None:
+            plugin_ids = (agent or {}).get("plugin_ids") or []
+
+    error = await validate_attached_function_names(team_id, tool_ids or [], plugin_ids or [])
+    if error:
+        return JSONResponse(status_code=400, content={"success": False, "message": error})
+    return None
+
+
 def _schedule_kb_index_jobs(background_tasks: BackgroundTasks, request_data: dict) -> None:
     for kb_id, source_type in pop_kb_index_jobs(request_data):
         background_tasks.add_task(index_kb_item, kb_id, source_type)
@@ -281,6 +327,15 @@ async def pre_build_agent_operations_controller(requestData: Dict[str, Any],user
             return tool_ids_error
         initial_data["tool_ids"] = requestData.get("tool_ids", [])
 
+        plugin_ids_error = await _validate_agent_plugin_ids_for_request(requestData, team_id)
+        if plugin_ids_error:
+            return plugin_ids_error
+        initial_data["plugin_ids"] = requestData.get("plugin_ids", [])
+
+        clash_error = await _validate_tool_plugin_name_clash(requestData, team_id)
+        if clash_error:
+            return clash_error
+
         agent_id = await create_agent_document(initial_data)
         if agent_id is None:
             return JSONResponse(status_code=500, content={"success": False, "message": "Failed to create the agent."})
@@ -310,6 +365,14 @@ async def build_update_agent_controller_v1(requestData,userData,background_tasks
         tool_ids_error = await _validate_agent_tool_ids_for_request(requestData, team_id)
         if tool_ids_error:
             return tool_ids_error
+
+        plugin_ids_error = await _validate_agent_plugin_ids_for_request(requestData, team_id)
+        if plugin_ids_error:
+            return plugin_ids_error
+
+        clash_error = await _validate_tool_plugin_name_clash(requestData, team_id, agent_id)
+        if clash_error:
+            return clash_error
 
         if not agent_id:
             session_context = parse_session_team_context(userData)
@@ -501,6 +564,14 @@ async def update_agent_controller_v1(requestData,userData,background_tasks):
         tool_ids_error = await _validate_agent_tool_ids_for_request(requestData, team_id)
         if tool_ids_error:
             return tool_ids_error
+
+        plugin_ids_error = await _validate_agent_plugin_ids_for_request(requestData, team_id)
+        if plugin_ids_error:
+            return plugin_ids_error
+
+        clash_error = await _validate_tool_plugin_name_clash(requestData, team_id, agent_id)
+        if clash_error:
+            return clash_error
 
         if request_has_kb_payload(requestData) and not team_id:
             return JSONResponse(

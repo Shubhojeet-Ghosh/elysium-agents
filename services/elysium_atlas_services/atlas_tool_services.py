@@ -212,6 +212,11 @@ async def create_tool(team_id: str, user_id: str, request: CreateToolRequest) ->
     if await check_tool_name_exists(team_id, request.name):
         return {"success": False, "message": "A tool with this name already exists for this team."}
 
+    from services.elysium_atlas_services.atlas_plugin_services import check_plugin_name_exists
+
+    if await check_plugin_name_exists(team_id, request.name):
+        return {"success": False, "message": "A plugin with this name already exists for this team. Tool name must be unique across tools and plugins."}
+
     current_time = datetime.now(timezone.utc)
     document = {
         "team_id": team_id,
@@ -301,6 +306,13 @@ async def update_tool(tool_id: str, request: UpdateToolRequest) -> dict[str, Any
         if request.name is not None:
             if await check_tool_name_exists(existing["team_id"], request.name, exclude_tool_id=tool_id):
                 return {"success": False, "message": "A tool with this name already exists for this team."}
+            from services.elysium_atlas_services.atlas_plugin_services import check_plugin_name_exists
+
+            if await check_plugin_name_exists(existing["team_id"], request.name):
+                return {
+                    "success": False,
+                    "message": "A plugin with this name already exists for this team. Tool name must be unique across tools and plugins.",
+                }
             updates["name"] = request.name
 
         if request.display_name is not None:

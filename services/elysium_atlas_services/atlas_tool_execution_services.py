@@ -211,6 +211,7 @@ def build_tool_call_observability_record(
     tool_name: str,
     request_payload: dict[str, Any],
     tool_result: str,
+    execution_kind: str = "http",
 ) -> dict[str, Any]:
     """Structured tool call record for persistence and monitor emit."""
     capped_request, request_truncated = cap_observability_payload(request_payload)
@@ -224,6 +225,7 @@ def build_tool_call_observability_record(
         "request_payload_truncated": request_truncated,
         "response_payload_truncated": response_truncated,
         "status": "error" if _is_tool_result_error(tool_result) else "success",
+        "execution_kind": execution_kind,
         "created_at": datetime.datetime.now(datetime.timezone.utc),
     }
 
@@ -245,6 +247,7 @@ async def run_agent_tool_calling_round(
     messages: list[dict[str, Any]],
     tool_ids: list[str],
     *,
+    plugin_ids: list[str] | None = None,
     tool_calling_config: dict[str, Any] | None = None,
     temperature: float = 0.3,
     on_tool_call: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
@@ -254,13 +257,15 @@ async def run_agent_tool_calling_round(
 
     Returns messages to insert before the current user message on the final response
     call (assistant role, plain text — compatible with Claude and other chat APIs).
-    Returns None when no tools run this turn.
+    Returns None when no tools or plugins run this turn.
 
-    on_tool_call is fired in the background after each HTTP tool execution (success or
+    on_tool_call is fired in the background after each HTTP or plugin execution (success or
     error) so persist/emit cannot block the orchestration loop.
     """
     from config.atlas_tool_calling_config import normalize_tool_calling_config
     from services.deepseek_services import deepseek_chat_completion_with_tools
+    from services.elysium_atlas_services.atlas_plugin_execution_services import execute_atlas_plugin
+    from services.elysium_atlas_services.atlas_plugin_services import get_active_plugins_by_ids
 
     config = normalize_tool_calling_config(tool_calling_config)
     if not config.get("enabled"):
@@ -272,11 +277,13 @@ async def run_agent_tool_calling_round(
     stop_on_error = config["stop_on_error"]
 
     tool_documents = await get_active_tools_by_ids(tool_ids)
-    if not tool_documents:
+    plugin_documents = await get_active_plugins_by_ids(plugin_ids or [])
+    if not tool_documents and not plugin_documents:
         return None
 
-    tools = build_openai_tools_definitions(tool_documents)
+    tools = build_openai_tools_definitions(tool_documents + plugin_documents)
     tools_lookup = _tools_by_name(tool_documents)
+    plugins_lookup = _tools_by_name(plugin_documents)
     working_messages = list(messages)
     final_turn_messages: list[dict[str, Any]] = []
     executions = 0
@@ -325,7 +332,9 @@ async def run_agent_tool_calling_round(
 
             parsed_arguments: dict[str, Any] = {}
             tool_document = tools_lookup.get(function_name)
-            if not tool_document:
+            plugin_document = plugins_lookup.get(function_name)
+            execution_kind = "http"
+            if not tool_document and not plugin_document:
                 logger.warning(f"LLM requested unknown tool '{function_name}'; skipping execution")
                 tool_result = json.dumps({"error": True, "message": f"Unknown tool: {function_name}"})
             else:
@@ -341,7 +350,11 @@ async def run_agent_tool_calling_round(
                     logger.warning(f"Invalid JSON arguments for tool '{function_name}': {raw_arguments}")
                     parsed_arguments = {}
 
-                tool_result = await execute_atlas_tool(tool_document, parsed_arguments)
+                if plugin_document:
+                    execution_kind = "plugin"
+                    tool_result = await execute_atlas_plugin(plugin_document, parsed_arguments)
+                else:
+                    tool_result = await execute_atlas_tool(tool_document, parsed_arguments)
 
             executions += 1
             resolved_tool_name = function_name or "unknown"
@@ -350,6 +363,7 @@ async def run_agent_tool_calling_round(
                     tool_name=resolved_tool_name,
                     request_payload=parsed_arguments,
                     tool_result=tool_result,
+                    execution_kind=execution_kind,
                 )
                 asyncio.create_task(
                     _notify_tool_call_observer(on_tool_call, dict(observability_record))

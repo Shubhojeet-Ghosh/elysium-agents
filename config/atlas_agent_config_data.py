@@ -37,6 +37,7 @@ ELYSIUM_ATLAS_AGENT_CONFIG_DATA = {
         "lead_collection_config": get_default_lead_collection_config(),
         "human_handover_config": get_default_human_handover_config(),
         "tool_ids": [],
+        "plugin_ids": [],
         "tool_calling_config": get_default_tool_calling_config(),
     },
     "agent_task_progress": {
