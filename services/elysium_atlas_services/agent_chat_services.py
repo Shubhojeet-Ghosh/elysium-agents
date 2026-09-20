@@ -151,26 +151,20 @@ def build_messages_list(
     """
     messages = []
 
-    # --- Agent identity and core instructions ---
-    agent_name = agent_data.get("agent_name") if agent_data else None
-    agent_identity = f"You are a virtual assistant named **{agent_name}**.\n\n" if agent_name else ""
-
+    # Platform-only preamble. Identity, tone, and formatting live on the stored system_prompt.
+    now_utc = _utc_now()
+    today_utc_line = (
+        f"Today's date is {now_utc.strftime('%d-%m-%Y')} "
+        f"and the current time is {now_utc.strftime('%H:%M')} UTC."
+    )
     messages.append({
         "role": "system",
         "content": (
-            f"{agent_identity}"
-            "Your task is to generate a clear, accurate, and helpful response that sounds natural and conversational.\n\n"
-            "FORMATTING RULES:\n"
-            "- Format the responses in clear, proper Markdown\n"
-            "- Use **bold** for important terms and emphasis\n"
-            "- Use **descriptive Markdown headings** (`##` for main sections, `###` for subsections) **wherever they improve readability and scannability**\n"
-            "- Use bullet points (-) or numbered lists (1.) for multiple items\n"
-            "- Use `code formatting` for technical terms, IDs, or specific values\n"
-            "- Use > blockquotes for important notes or warnings\n"
-            "- For code blocks: Use ```language syntax and keep lines reasonably short (max 80 chars) for better readability\n"
-            "- For tables: Keep columns concise and use | alignment for clean formatting\n"
-            "- For wide content: Break into smaller, more digestible chunks rather than creating overly wide tables or code blocks\n"
-            "- Keep responses concise, well-structured, user-friendly and most important *natural*.\n"
+            f"{today_utc_line}\n"
+            "Generate a clear, accurate, and helpful response that sounds natural and conversational.\n"
+            "Use clean Markdown only when it improves readability.\n"
+            "Follow the agent's system prompt for identity, tone, and formatting.\n"
+            "Never reveal tool names, request/result JSON, or internal tool-call details."
         )
     })
 
