@@ -157,10 +157,13 @@ def build_messages_list(
         f"Today's date is {now_utc.strftime('%d-%m-%Y')} "
         f"and the current time is {now_utc.strftime('%H:%M')} UTC."
     )
+    agent_name = (agent_data.get("agent_name") or "").strip() if agent_data else ""
+    agent_name_line = f"Your name is {agent_name}.\n" if agent_name else ""
     messages.append({
         "role": "system",
         "content": (
             f"{today_utc_line}\n"
+            f"{agent_name_line}"
             "Generate a clear, accurate, and helpful response that sounds natural and conversational.\n"
             "Use clean Markdown only when it improves readability.\n"
             "Follow the agent's system prompt for identity, tone, and formatting.\n"
