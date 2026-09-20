@@ -154,7 +154,7 @@ def build_messages_list(
     # Platform-only preamble. Identity, tone, and formatting live on the stored system_prompt.
     now_utc = _utc_now()
     today_utc_line = (
-        f"Today's date is {now_utc.strftime('%d-%m-%Y')} "
+        f"Today's date is {now_utc.day} {now_utc.strftime('%B %Y')} "
         f"and the current time is {now_utc.strftime('%H:%M')} UTC."
     )
     agent_name = (agent_data.get("agent_name") or "").strip() if agent_data else ""
