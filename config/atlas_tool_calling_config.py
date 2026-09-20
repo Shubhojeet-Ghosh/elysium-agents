@@ -5,6 +5,7 @@ Extend ALLOWED_TOOL_CALLING_FIELDS and FIELD_VALIDATORS when adding new keys.
 
 from config.atlas_tool_config import (
     ABSOLUTE_MAX_TOOL_EXECUTIONS_PER_TURN,
+    ABSOLUTE_MAX_TOOL_HISTORY_IN_LLM,
     ABSOLUTE_MAX_TOOL_ROUNDS,
 )
 
@@ -13,12 +14,16 @@ MAX_ROUNDS_KEY = "max_rounds"
 MAX_EXECUTIONS_PER_TURN_KEY = "max_executions_per_turn"
 PARALLEL_CALLS_PER_ROUND_KEY = "parallel_calls_per_round"
 STOP_ON_ERROR_KEY = "stop_on_error"
+INCLUDE_TOOL_HISTORY_IN_LLM_KEY = "include_tool_history_in_llm"
+MAX_TOOL_HISTORY_IN_LLM_KEY = "max_tool_history_in_llm"
 
 DEFAULT_MAX_ROUNDS = 5
 DEFAULT_MAX_EXECUTIONS_PER_TURN = 10
+DEFAULT_MAX_TOOL_HISTORY_IN_LLM = 10
 
 MAX_ROUNDS_MIN = 1
 MAX_EXECUTIONS_PER_TURN_MIN = 1
+MAX_TOOL_HISTORY_IN_LLM_MIN = 1
 
 DEFAULT_TOOL_CALLING_CONFIG: dict = {
     ENABLED_KEY: True,
@@ -26,6 +31,8 @@ DEFAULT_TOOL_CALLING_CONFIG: dict = {
     MAX_EXECUTIONS_PER_TURN_KEY: DEFAULT_MAX_EXECUTIONS_PER_TURN,
     PARALLEL_CALLS_PER_ROUND_KEY: True,
     STOP_ON_ERROR_KEY: False,
+    INCLUDE_TOOL_HISTORY_IN_LLM_KEY: False,
+    MAX_TOOL_HISTORY_IN_LLM_KEY: DEFAULT_MAX_TOOL_HISTORY_IN_LLM,
 }
 
 ALLOWED_TOOL_CALLING_FIELDS = frozenset(DEFAULT_TOOL_CALLING_CONFIG.keys())
@@ -78,12 +85,33 @@ def _validate_stop_on_error(value) -> tuple[bool, str | None]:
     return True, None
 
 
+def _validate_include_tool_history_in_llm(value) -> tuple[bool, str | None]:
+    if not isinstance(value, bool):
+        return False, f"{INCLUDE_TOOL_HISTORY_IN_LLM_KEY} must be a boolean."
+    return True, None
+
+
+def _validate_max_tool_history_in_llm(value) -> tuple[bool, str | None]:
+    if not isinstance(value, int) or isinstance(value, bool):
+        return False, f"{MAX_TOOL_HISTORY_IN_LLM_KEY} must be an integer."
+
+    if value < MAX_TOOL_HISTORY_IN_LLM_MIN or value > ABSOLUTE_MAX_TOOL_HISTORY_IN_LLM:
+        return (
+            False,
+            f"{MAX_TOOL_HISTORY_IN_LLM_KEY} must be between "
+            f"{MAX_TOOL_HISTORY_IN_LLM_MIN} and {ABSOLUTE_MAX_TOOL_HISTORY_IN_LLM}.",
+        )
+    return True, None
+
+
 FIELD_VALIDATORS = {
     ENABLED_KEY: _validate_enabled,
     MAX_ROUNDS_KEY: _validate_max_rounds,
     MAX_EXECUTIONS_PER_TURN_KEY: _validate_max_executions_per_turn,
     PARALLEL_CALLS_PER_ROUND_KEY: _validate_parallel_calls_per_round,
     STOP_ON_ERROR_KEY: _validate_stop_on_error,
+    INCLUDE_TOOL_HISTORY_IN_LLM_KEY: _validate_include_tool_history_in_llm,
+    MAX_TOOL_HISTORY_IN_LLM_KEY: _validate_max_tool_history_in_llm,
 }
 
 

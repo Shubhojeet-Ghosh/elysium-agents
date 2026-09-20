@@ -8,6 +8,7 @@ from services.elysium_atlas_services.atlas_chat_session_services import (
     create_and_store_chat_messages,
     create_and_store_tool_call_message,
     get_chat_session_data,
+    get_llm_chat_history_for_session,
     coerce_utc_datetime,
     format_utc_datetime_for_client,
     serialize_chat_message_for_client,
@@ -17,9 +18,13 @@ from services.elysium_atlas_services.atlas_chat_session_services import (
 from config.llm_models_config import resolve_model_handler, DEFAULT_MODEL
 from config.atlas_tool_config import get_tool_result_message_role
 from config.atlas_tool_calling_config import normalize_tool_calling_config
+from config.llm_context_config import normalize_llm_context_config
 from config.atlas_chat_config import CHAT_MESSAGE_ROLE_TOOL, CHAT_MESSAGE_ROLES_HIDDEN_FROM_LLM
 from config.retrieval_strategy_config import DEFAULT_RETRIEVAL_STRATEGY
-from services.elysium_atlas_services.atlas_tool_execution_services import run_agent_tool_calling_round
+from services.elysium_atlas_services.atlas_tool_execution_services import (
+    format_stored_tool_message_for_llm,
+    run_agent_tool_calling_round,
+)
 
 import asyncio
 import json
@@ -194,7 +199,13 @@ def build_messages_list(
     if chat_history:
         for hist_msg in chat_history:
             raw_role = hist_msg.get("role", "user")
-            if raw_role == CHAT_MESSAGE_ROLE_TOOL or raw_role in CHAT_MESSAGE_ROLES_HIDDEN_FROM_LLM:
+            if raw_role == CHAT_MESSAGE_ROLE_TOOL:
+                messages.append({
+                    "role": tool_result_role,
+                    "content": format_stored_tool_message_for_llm(hist_msg),
+                })
+                continue
+            if raw_role in CHAT_MESSAGE_ROLES_HIDDEN_FROM_LLM:
                 continue
             if raw_role in ("agent", "human"):
                 role = "assistant"
@@ -262,10 +273,27 @@ async def chat_with_agent_v1(agent_id, message, sid=None, chat_session_id=None, 
             get_agent_by_id(agent_id),
             list_ready_kb_ids_for_agent(agent_id),
         )
-        chat_history = chat_session_data.get("messages", []) if chat_session_data else []
+        tool_calling_config = normalize_tool_calling_config(
+            (agent_data or {}).get("tool_calling_config")
+        )
+        llm_context_config = normalize_llm_context_config(
+            (agent_data or {}).get("llm_context_config")
+        )
+        conversation_id = (chat_session_data or {}).get("conversation_id")
+        chat_history = []
+        if chat_session_id:
+            chat_history = await get_llm_chat_history_for_session(
+                agent_id,
+                chat_session_id,
+                conversation_id,
+                tool_calling_config,
+                llm_context_config,
+            )
         logger.info(
             f"{chat_log} load_session_agent_kb_ids done in {(time.perf_counter() - step_start) * 1000:.0f}ms "
-            f"(history_messages={len(chat_history)}, ready_kb_ids={len(ready_kb_ids)})"
+            f"(history_messages={len(chat_history)}, ready_kb_ids={len(ready_kb_ids)}, "
+            f"max_chat_history_messages={llm_context_config.get('max_chat_history_messages')}, "
+            f"include_tool_history={tool_calling_config.get('include_tool_history_in_llm')})"
         )
 
         monitor_sids = additional_params.get("_monitor_sids") or []
@@ -378,9 +406,6 @@ async def chat_with_agent_v1(agent_id, message, sid=None, chat_session_id=None, 
 
         tool_ids = (agent_data or {}).get("tool_ids") or []
         plugin_ids = (agent_data or {}).get("plugin_ids") or []
-        tool_calling_config = normalize_tool_calling_config(
-            (agent_data or {}).get("tool_calling_config")
-        )
         tool_turn_messages = None
         if (tool_ids or plugin_ids) and tool_calling_config.get("enabled"):
             logger.info(

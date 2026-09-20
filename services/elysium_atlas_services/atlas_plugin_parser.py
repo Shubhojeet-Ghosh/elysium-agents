@@ -1,4 +1,4 @@
-"""Parse and validate Atlas plugin Python source (AST only — does not execute)."""
+"""Parse and validate Atlas plugin Python source (AST only — does not execute run())."""
 
 from __future__ import annotations
 
@@ -114,6 +114,82 @@ def _class_by_name(tree: ast.Module, class_name: str) -> ast.ClassDef | None:
     return None
 
 
+def _extract_module_bindings(tree: ast.Module) -> dict[str, ast.AST]:
+    """Collect top-level assignment value nodes for static resolution in PluginInputs."""
+    bindings: dict[str, ast.AST] = {}
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            name = _assignment_target_name(node.targets[0])
+            if name:
+                bindings[name] = node.value
+            continue
+        if isinstance(node, ast.AnnAssign) and node.value is not None:
+            name = _assignment_target_name(node.target)
+            if name:
+                bindings[name] = node.value
+    return bindings
+
+
+def _resolve_static_value(
+    node: ast.AST,
+    bindings: dict[str, ast.AST],
+    *,
+    stack: set[str] | None = None,
+) -> Any:
+    """
+    Resolve a static plugin value from literals, string concatenation, containers,
+    and references to other module-level constants. Does not execute plugin code.
+    """
+    if stack is None:
+        stack = set()
+
+    string_value = _constant_string(node)
+    if string_value is not None:
+        return string_value
+
+    if isinstance(node, ast.Constant):
+        return node.value
+
+    if isinstance(node, ast.Name):
+        if node.id in stack:
+            raise PluginParseError(f"Circular reference to '{node.id}' in plugin constants.")
+        if node.id not in bindings:
+            raise PluginParseError(
+                f"PluginInputs references unknown module constant '{node.id}'."
+            )
+        stack.add(node.id)
+        try:
+            return _resolve_static_value(bindings[node.id], bindings, stack=stack)
+        finally:
+            stack.discard(node.id)
+
+    if isinstance(node, ast.List):
+        return [_resolve_static_value(item, bindings, stack=stack) for item in node.elts]
+
+    if isinstance(node, ast.Tuple):
+        return tuple(_resolve_static_value(item, bindings, stack=stack) for item in node.elts)
+
+    if isinstance(node, ast.Dict):
+        resolved: dict[Any, Any] = {}
+        for key_node, value_node in zip(node.keys, node.values):
+            if key_node is None:
+                raise PluginParseError("Dict unpacking is not allowed in PluginInputs values.")
+            key = _resolve_static_value(key_node, bindings, stack=stack)
+            if not isinstance(key, (str, int, float, bool, type(None))):
+                raise PluginParseError("PluginInputs dict keys must be static scalar values.")
+            resolved[key] = _resolve_static_value(value_node, bindings, stack=stack)
+        return resolved
+
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
+        operand = _resolve_static_value(node.operand, bindings, stack=stack)
+        if isinstance(operand, (int, float)):
+            return +operand if isinstance(node.op, ast.UAdd) else -operand
+
+    raise PluginParseError(
+        "PluginInputs values must be built from literals, containers, and module-level constants."
+    )
+
+
 def _class_assignments(class_node: ast.ClassDef) -> list[tuple[str, ast.AST]]:
     assignments: list[tuple[str, ast.AST]] = []
     for node in class_node.body:
@@ -144,6 +220,7 @@ def _parse_inputs(tree: ast.Module) -> list[ToolParameterInput]:
     if class_node is None:
         return []
 
+    module_bindings = _extract_module_bindings(tree)
     parameters: list[ToolParameterInput] = []
     names: list[str] = []
     for attr_name, value_node in _class_assignments(class_node):
@@ -153,11 +230,14 @@ def _parse_inputs(tree: ast.Module) -> list[ToolParameterInput]:
                 "and contain only lowercase letters, numbers, and underscores."
             )
         try:
-            raw = ast.literal_eval(value_node)
-        except (ValueError, TypeError):
+            raw = _resolve_static_value(value_node, module_bindings)
+        except PluginParseError:
+            raise
+        except Exception as exc:
             raise PluginParseError(
-                f"PluginInputs.{attr_name} must be a literal dict of type/description/required."
-            ) from None
+                f"PluginInputs.{attr_name} must be a dict of type/description/required "
+                f"built from literals or module-level constants."
+            ) from exc
         if not isinstance(raw, dict):
             raise PluginParseError(f"PluginInputs.{attr_name} must be a dict.")
         payload = {"name": attr_name, **raw}

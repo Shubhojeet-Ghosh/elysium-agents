@@ -102,7 +102,9 @@ async def execute_atlas_plugin(plugin_document: dict[str, Any], arguments: dict[
     stderr = completed.stderr
     stdout = completed.stdout
     if stderr:
-        logger.debug(f"Plugin '{plugin_name}' stderr bytes={len(stderr)}")
+        stderr_text = stderr.decode("utf-8", errors="replace").strip()
+        if stderr_text:
+            logger.info(f"Plugin '{plugin_name}' debug output:\n{stderr_text}")
 
     raw = (stdout or b"").decode("utf-8", errors="replace").strip()
     if not raw:

@@ -57,6 +57,7 @@ Creates the `atlas_agents` document with defaults and returns `agent_id`. Does *
 | `retrieval_strategy`     | `string`   | No       | `"simple"` \| `"orchestrated"`. Default `"simple"`                   |
 | `llm_model`              | `string`   | No       | Must be a supported model ID. Default `"gpt-4o-mini"`                |
 | `lead_collection_config` | `object`   | No       | See [Lead collection config](#lead-collection-config)                |
+| `llm_context_config`     | `object`   | No       | See [LLM context config](#llm-context-config)                        |
 | `tool_ids`               | `string[]` | No       | Team tool Mongo `_id`s. Default `[]`. Max 50                         |
 | `plugin_ids`             | `string[]` | No       | Team plugin Mongo `_id`s. Default `[]`. Max 20                       |
 
@@ -313,6 +314,7 @@ Applied synchronously on every update call (even when re-index is also triggered
 | `placeholder_text`       | `string`   | Chat input placeholder                                                                                                              |
 | `retrieval_strategy`     | `string`   | `"simple"` \| `"orchestrated"`                                                                                                      |
 | `lead_collection_config` | `object`   | Partial merge — see below                                                                                                           |
+| `llm_context_config`     | `object`   | Partial merge — see [LLM context config](#llm-context-config)                                                                       |
 | `tool_ids`               | `string[]` | Team tool IDs. Max 50                                                                                                               |
 | `plugin_ids`             | `string[]` | Team plugin IDs. Max 20                                                                                                             |
 | `agent_status`           | `string`   | `"active"` \| `"inactive"` \| `"disabled"` — applied immediately on non-re-index path; on re-index path applied after job completes |
@@ -337,6 +339,32 @@ When `enable_lead_capturing` is `true`, `collection_trigger_prompt` (10–500 ch
 **Update:** partial object merged into stored config (only sent keys change).
 
 **Dedicated CRUD APIs:** see [frontend-lead-collection-api-guide.md](./frontend-lead-collection-api-guide.md).
+
+---
+
+### LLM context config
+
+Controls how many past **user/agent** messages are sent to the main agent LLM (orchestration + reply). See [frontend-tools-api-guide.md](./frontend-tools-api-guide.md#llm-context-config-llm_context_config) for full runtime behavior.
+
+| Key | Type | Default | Max |
+|-----|------|---------|-----|
+| `max_chat_history_messages` | `integer` | `10` | `100` |
+
+**Create:** full object replaces defaults.
+
+**Update:** partial object merged into stored config.
+
+```json
+{
+  "llm_context_config": {
+    "max_chat_history_messages": 25
+  }
+}
+```
+
+Does **not** change lead collection, human handover, or visitor widget history restore limits.
+
+---
 
 ```json
 {

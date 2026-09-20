@@ -131,6 +131,41 @@ def format_tool_result_for_llm(tool_name: str, tool_result: str) -> str:
     return f"This is the tool call result/s : {capped_result}"
 
 
+def _stringify_tool_history_payload(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    return json.dumps(value, ensure_ascii=False)
+
+
+def format_stored_tool_message_for_llm(stored_message: dict[str, Any]) -> str:
+    """Format a persisted atlas_chat_mesages tool row for LLM chat history."""
+    tool_name = (
+        stored_message.get("tool_name")
+        or stored_message.get("content")
+        or "unknown"
+    )
+    request_payload = stored_message.get("request_payload")
+    response_payload = stored_message.get("response_payload")
+
+    request_text = _stringify_tool_history_payload(request_payload)
+    response_text = _stringify_tool_history_payload(response_payload)
+    capped_response = cap_tool_result_for_llm(tool_name, response_text)
+
+    lines = [f"Tool call: {tool_name}"]
+    if request_text:
+        lines.append(f"Request: {request_text}")
+    lines.append(f"Result: {capped_response}")
+    if stored_message.get("status") == "error":
+        lines.append("Status: error")
+    if stored_message.get("request_payload_truncated"):
+        lines.append("[Note: stored request payload was truncated for observability.]")
+    if stored_message.get("response_payload_truncated"):
+        lines.append("[Note: stored response payload was truncated for observability.]")
+    return "\n".join(lines)
+
+
 async def execute_atlas_tool(tool_document: dict[str, Any], arguments: dict[str, Any]) -> str:
     """Execute an external HTTP tool call and return a stringified response for the LLM."""
     method = str(tool_document.get("http_method", "GET")).upper()
@@ -303,19 +338,41 @@ async def run_agent_tool_calling_round(
             logger.info(f"Tool calling finished after round {round_index}: no further tool_calls")
             break
 
+        known_calls = []
+        unknown_names = []
+        for tool_call in tool_calls:
+            function_name = tool_call.get("function", {}).get("name")
+            if function_name in tools_lookup or function_name in plugins_lookup:
+                known_calls.append(tool_call)
+            else:
+                unknown_names.append(function_name or "unknown")
+
+        if unknown_names:
+            logger.warning(
+                "LLM requested tool(s) not attached to this agent; skipping: "
+                + ", ".join(unknown_names)
+            )
+
+        if not known_calls:
+            logger.info(
+                f"Tool calling finished after round {round_index}: "
+                "no attached tools/plugins requested"
+            )
+            break
+
         assistant_message = tool_response.get("assistant_message")
         if assistant_message:
-            working_messages.append(assistant_message)
+            working_messages.append({**assistant_message, "tool_calls": known_calls})
         else:
             working_messages.append(
                 {
                     "role": "assistant",
                     "content": tool_response.get("content"),
-                    "tool_calls": tool_calls,
+                    "tool_calls": known_calls,
                 }
             )
 
-        calls_to_run = tool_calls if parallel_calls else tool_calls[:1]
+        calls_to_run = known_calls if parallel_calls else known_calls[:1]
         round_stop = False
 
         for tool_call in calls_to_run:
@@ -333,28 +390,31 @@ async def run_agent_tool_calling_round(
             parsed_arguments: dict[str, Any] = {}
             tool_document = tools_lookup.get(function_name)
             plugin_document = plugins_lookup.get(function_name)
-            execution_kind = "http"
             if not tool_document and not plugin_document:
-                logger.warning(f"LLM requested unknown tool '{function_name}'; skipping execution")
-                tool_result = json.dumps({"error": True, "message": f"Unknown tool: {function_name}"})
-            else:
-                try:
-                    parsed_arguments = (
-                        json.loads(raw_arguments)
-                        if isinstance(raw_arguments, str)
-                        else raw_arguments
-                    )
-                    if not isinstance(parsed_arguments, dict):
-                        parsed_arguments = {}
-                except json.JSONDecodeError:
-                    logger.warning(f"Invalid JSON arguments for tool '{function_name}': {raw_arguments}")
-                    parsed_arguments = {}
+                logger.warning(
+                    f"LLM requested tool '{function_name}' not attached to this agent; "
+                    "skipping execution"
+                )
+                continue
 
-                if plugin_document:
-                    execution_kind = "plugin"
-                    tool_result = await execute_atlas_plugin(plugin_document, parsed_arguments)
-                else:
-                    tool_result = await execute_atlas_tool(tool_document, parsed_arguments)
+            execution_kind = "http"
+            try:
+                parsed_arguments = (
+                    json.loads(raw_arguments)
+                    if isinstance(raw_arguments, str)
+                    else raw_arguments
+                )
+                if not isinstance(parsed_arguments, dict):
+                    parsed_arguments = {}
+            except json.JSONDecodeError:
+                logger.warning(f"Invalid JSON arguments for tool '{function_name}': {raw_arguments}")
+                parsed_arguments = {}
+
+            if plugin_document:
+                execution_kind = "plugin"
+                tool_result = await execute_atlas_plugin(plugin_document, parsed_arguments)
+            else:
+                tool_result = await execute_atlas_tool(tool_document, parsed_arguments)
 
             executions += 1
             resolved_tool_name = function_name or "unknown"

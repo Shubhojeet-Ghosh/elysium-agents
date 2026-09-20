@@ -88,6 +88,8 @@ Controls **how** attached tools run during visitor chat. Stored on each `atlas_a
 | `max_executions_per_turn` | `integer` | `10` | **Yes** | Hard cap on total HTTP tool calls per visitor message |
 | `parallel_calls_per_round` | `boolean` | `true` | **Yes** | When `true`, multiple independent tools may run in the same round; when `false`, only one tool runs per round |
 | `stop_on_error` | `boolean` | `false` | Hidden | When `true`, stop further tool rounds after a tool returns an error payload |
+| `include_tool_history_in_llm` | `boolean` | `false` | **Yes** | When `true`, past tool call request/response rows are injected into both the tool orchestration LLM and the final response LLM (chronological order). When `false`, only user/agent text history is sent (current default) |
+| `max_tool_history_in_llm` | `integer` | `10` | **Yes** (when history enabled) | Max number of **past** persisted tool rows to include in LLM prompts. Only applies when `include_tool_history_in_llm === true`. Current-turn tool results are always included when tools run |
 
 ### Validation limits
 
@@ -95,6 +97,7 @@ Controls **how** attached tools run during visitor chat. Stored on each `atlas_a
 |-------|-----|-----|
 | `max_rounds` | `1` | `10` |
 | `max_executions_per_turn` | `1` | `20` |
+| `max_tool_history_in_llm` | `1` | `20` |
 
 Partial updates merge into the stored config (same pattern as `lead_collection_config`). Unknown keys return `400`.
 
@@ -103,6 +106,56 @@ Partial updates merge into the stored config (same pattern as `lead_collection_c
 - **`max_rounds`** — How many times the agent can *think, call tools, see results, and think again* before answering. Use **3–5** when tools depend on each other (e.g. lookup customer → fetch orders).
 - **`max_executions_per_turn`** — Total number of tool HTTP calls allowed in one visitor message (cost/latency guardrail).
 - **`parallel_calls_per_round`** — When on, independent tools can run together in one step. Turn off if APIs are rate-limited or must run strictly one at a time.
+- **`include_tool_history_in_llm`** — Turn on for multi-step flows where later turns depend on earlier tool outcomes (e.g. member verification before doctor lookup). Off by default to save tokens.
+- **`max_tool_history_in_llm`** — Caps how many persisted `role: "tool"` rows are replayed into LLM prompts. User/agent text history is capped separately by `llm_context_config.max_chat_history_messages` (default `10`, max `100`).
+
+---
+
+## LLM context config (`llm_context_config`)
+
+Controls how much **user/agent conversation history** is injected into the main agent LLM prompts (tool orchestration + final reply). Applies to **all agents**, with or without tools.
+
+| Field | Type | Default | UI | Description |
+|-------|------|---------|-----|-------------|
+| `max_chat_history_messages` | `integer` | `10` | **Yes** | Max past user/agent text messages in LLM prompts (chronological). Does **not** affect lead collection, human handover, or visitor widget session restore |
+
+### Validation limits
+
+| Field | Min | Max |
+|-------|-----|-----|
+| `max_chat_history_messages` | `1` | `100` |
+
+Partial updates merge into the stored config (same pattern as `tool_calling_config`). Unknown keys return `400`.
+
+**Create / update endpoints:** same as `tool_ids` — `pre-build-agent-operations`, `build-agent`, `update-agent`.
+
+**Create example:**
+
+```json
+{
+  "agent_name": "Care Coordinator",
+  "llm_context_config": {
+    "max_chat_history_messages": 20
+  }
+}
+```
+
+**Partial update example:**
+
+```json
+{
+  "agent_id": "674a1b2c3d4e5f6789012345",
+  "llm_context_config": {
+    "max_chat_history_messages": 30
+  }
+}
+```
+
+**Read:** `llm_context_config` is returned on `get-agent-details`. Older agents without the field receive defaults when read.
+
+**UI copy:** Higher values improve long multi-turn conversations but increase token usage, cost, and latency.
+
+**Not affected:** Lead collection and human handover keep their own internal history limits and never receive tool rows.
 
 ### Agent APIs that accept `tool_calling_config`
 
@@ -124,7 +177,9 @@ Same endpoints as `tool_ids`:
     "enabled": true,
     "max_rounds": 5,
     "max_executions_per_turn": 10,
-    "parallel_calls_per_round": true
+    "parallel_calls_per_round": true,
+    "include_tool_history_in_llm": false,
+    "max_tool_history_in_llm": 10
   }
 }
 ```
@@ -159,7 +214,16 @@ When a visitor sends a message and the agent has non-empty `tool_ids` with `tool
 
 **Chained tools:** Round 1 might call `find_customer`; round 2 sees that result and calls `get_order_status`. No explicit dependency graph is required — the orchestrator infers order from tool descriptions and prior results.
 
-**UI recommendation:** Show `max_rounds`, `max_executions_per_turn`, and `parallel_calls_per_round` only when at least one tool is selected. Hide `stop_on_error` (server default `false`).
+**Past tool history in LLM (`include_tool_history_in_llm`):**
+
+| Setting | Tool orchestration LLM | Final response LLM | Lead collection / human handover |
+|---------|------------------------|--------------------|--------------------------------|
+| `false` (default) | User/agent text only (+ current-turn tools) | User/agent text only (+ current-turn tools) | User/agent text only (unchanged) |
+| `true` | User/agent + up to `max_tool_history_in_llm` past tool rows, chronologically merged | Same | **Still user/agent text only** — these subsystems never receive tool history |
+
+When enabled, persisted tool rows are formatted as plain text (tool name, request payload, response payload) and interleaved by `created_at` with user/agent messages. The server fetches a slightly larger Mongo window so user/agent rows are not dropped when many tools ran recently.
+
+**UI recommendation:** Show `max_rounds`, `max_executions_per_turn`, and `parallel_calls_per_round` only when at least one tool is selected. Show `include_tool_history_in_llm` and `max_tool_history_in_llm` when tools or plugins are selected (history applies to plugins too). Hide `stop_on_error` (server default `false`).
 
 ---
 
@@ -174,6 +238,8 @@ Each HTTP tool execution is stored as its **own** `atlas_chat_mesages` row (`rol
 | Atlas live monitor | Yes — socket event `tool_call_from_agent` after each tool HTTP returns (success or error) |
 | Atlas session history | Yes — `get-agent-fields` with `include_tool_calls: true` |
 | Visitor widget | **Never** — not on the visitor socket; `get-agent-fields` omits `role: "tool"` unless `include_tool_calls` is true |
+| Agent LLM (orchestration + reply) | Only when `tool_calling_config.include_tool_history_in_llm === true` (past rows). Current-turn tools are always visible to both LLMs when tools run |
+| Lead collection / human handover LLMs | **Never** — always user/agent text only |
 
 Human takeover does not run tools. `tool_call_from_agent` is AI-monitor only.
 
@@ -204,10 +270,10 @@ Tool rows sit **between** the visitor message that triggered them and the agent 
 | `content` | `string` | Same as `tool_name` (fallback for generic message renderers) |
 | `tool_name` | `string` | Atlas tool `name` (LLM function name) |
 | `request_payload` | `object` or truncated `string` | LLM function arguments (not auth tokens) |
-| `response_payload` | `object`, `string`, or truncated `string` | Parsed JSON body when possible; `{ "error": true, ... }` on timeout/4xx/unknown tool |
+| `response_payload` | `object`, `string`, or truncated `string` | Parsed JSON body when possible; `{ "error": true, ... }` on timeout/4xx |
 | `request_payload_truncated` | `boolean` | True when request JSON exceeded 16 000 characters |
 | `response_payload_truncated` | `boolean` | True when response JSON exceeded 16 000 characters |
-| `status` | `"success"` \| `"error"` | Error includes HTTP failures, timeouts, and unknown tool names |
+| `status` | `"success"` \| `"error"` | Error includes HTTP failures and timeouts |
 | `parent_user_message_id` | `string` | Visitor `message_id` for this turn |
 | `created_at` | `string` | When the HTTP call finished — use this for ordering |
 
@@ -319,6 +385,14 @@ Send as an **array** in the request. The API stores them as OpenAI JSON Schema.
 | `enum_values` | `string[]` | If `type` is `"enum"` | Unique, non-empty allowed values (max 50) |
 | `items_type` | `string` | If `type` is `"array"` | Element type: `"string"`, `"number"`, `"integer"`, or `"boolean"` |
 | `properties` | `array` | If `type` is `"object"` | Nested parameters (max 20). No nested `object` types |
+
+> **Schema vs values (important for the UI)**  
+> The create/edit form defines the **parameter schema** — the shape of arguments the LLM may send when it calls the tool. You are **not** collecting sample array items or a filled-in object instance.  
+> - **enum** → user enters the list of **allowed values** (`enum_values`)  
+> - **array** → user picks the **element type** (`items_type`); the LLM supplies the actual array at chat time  
+> - **object** → user defines **nested field rows** (`properties`); the LLM supplies the object payload at chat time  
+>
+> See [Parameter builder UI (enum, array, object)](#parameter-builder-ui-enum-array-object) for wireframes and form state.
 
 #### Supported `type` values
 
@@ -775,10 +849,309 @@ Always handle `403` gracefully; membership and role can change after login.
 1. **Basic info** — `display_name`, `name` (function identifier), `description` (label as “When should the AI call this tool?”)
 2. **API** — `api_url`, `http_method`
 3. **Authorization** — radio: None / API Key → if API Key: Header vs Query, param name, token input (password field), Bearer toggle for header
-4. **Parameters** — repeatable rows: name, type (`string` \| `number` \| `integer` \| `boolean` \| `enum` \| `array` \| `object`), description, required checkbox
-   - **enum** → show multi-value input for `enum_values`
-   - **array** → show `items_type` dropdown
-   - **object** → nested sub-rows for `properties` (one level only; no nested objects)
+4. **Parameters** — repeatable rows (see [Parameter builder UI](#parameter-builder-ui-enum-array-object) below)
+
+### Parameter builder UI (enum, array, object)
+
+Each **top-level parameter** is one card/row with:
+
+| Control | Always shown | Notes |
+|---------|--------------|-------|
+| Name | Yes | snake_case, e.g. `order_id`, `tags`, `address` |
+| Type | Yes | Dropdown — see per-type extras below |
+| Description | Yes | Shown to the LLM; label as “What is this argument?” |
+| Required | Yes | Checkbox — maps to API `required: true` |
+
+When the user changes **Type**, show or hide the extra controls below. Do **not** send `enum_values`, `items_type`, or `properties` for scalar types (`string`, `number`, `integer`, `boolean`).
+
+#### Scalar types (`string`, `number`, `integer`, `boolean`)
+
+No extra fields. One row → one API object:
+
+```json
+{ "name": "order_id", "type": "string", "description": "The order ID", "required": true }
+```
+
+#### Enum (reference — already working)
+
+| Extra control | Maps to API |
+|---------------|-------------|
+| Multi-value chips / “Add value” input | `enum_values: string[]` |
+
+```
+┌─ Parameter ─────────────────────────────────────────────┐
+│ Name: unit          Type: [enum ▼]     [✓] Required     │
+│ Description: Temperature unit for the reading             │
+│ Allowed values: [celsius ×] [fahrenheit ×]  [+ Add]     │
+└───────────────────────────────────────────────────────────┘
+```
+
+Submit:
+
+```json
+{
+  "name": "unit",
+  "type": "enum",
+  "description": "Temperature unit for the reading",
+  "required": true,
+  "enum_values": ["celsius", "fahrenheit"]
+}
+```
+
+#### Array — what to show and what to send
+
+**What the user configures:** only the **type of each element** (`items_type`). They do **not** enter example tags, IDs, or list items.
+
+| Extra control | Options | Maps to API |
+|---------------|---------|-------------|
+| “Element type” dropdown | `string`, `number`, `integer`, `boolean` | `items_type` |
+
+Helper copy: *“When the AI calls this tool, it will pass a JSON array whose items are all of this type.”*
+
+```
+┌─ Parameter ─────────────────────────────────────────────┐
+│ Name: tags          Type: [array ▼]    [ ] Required       │
+│ Description: Product tags to filter by                    │
+│ Element type: [string ▼]   ← items_type                   │
+└───────────────────────────────────────────────────────────┘
+```
+
+**Form state (TypeScript):**
+
+```typescript
+interface ArrayParameterRow {
+  name: string;
+  type: "array";
+  description: string;
+  required: boolean;
+  items_type: "string" | "number" | "integer" | "boolean";
+}
+```
+
+**Submit to `create-tool` / `update-tool`:**
+
+```json
+{
+  "name": "tags",
+  "type": "array",
+  "description": "Product tags to filter by",
+  "required": false,
+  "items_type": "string"
+}
+```
+
+**After save — read from `tool.parameters` (OpenAI schema):**
+
+```json
+"tags": {
+  "type": "array",
+  "items": { "type": "string" },
+  "description": "Product tags to filter by"
+}
+```
+
+**Load into edit form:** if `def.type === "array"`, set `type: "array"` and `items_type` from `def.items.type` (see `schemaPropertyToRow` below).
+
+**Detail / read-only view:** show e.g. `tags — array of string (optional)`.
+
+**Defaults when user picks type `array`:** set `items_type: "string"` so submit is valid without an extra click.
+
+**Not supported:** array of enum, array of object, or nested arrays. Only scalar `items_type`.
+
+#### Object — what to show and what to send
+
+**What the user configures:** the **fields inside the object** (`properties`). Each nested field is a mini parameter row (same types as top-level **except** `object` — one level only).
+
+| Extra UI | Maps to API |
+|----------|-------------|
+| Indented “Object fields” section with **Add field** | `properties: ToolNestedParameterInput[]` |
+
+Each **nested row** has: name, type (`string` \| `number` \| `integer` \| `boolean` \| `enum` \| `array`), description, required checkbox — plus enum/array extras on that nested row when applicable.
+
+```
+┌─ Parameter ─────────────────────────────────────────────┐
+│ Name: address       Type: [object ▼]   [✓] Required     │
+│ Description: Delivery address for the shipment            │
+│                                                           │
+│   Object fields                          [+ Add field]    │
+│   ┌─ Field ───────────────────────────────────────────┐  │
+│   │ city      [string ▼]  [✓] Req  City name          │  │
+│   └───────────────────────────────────────────────────┘  │
+│   ┌─ Field ───────────────────────────────────────────┐  │
+│   │ zip_code  [string ▼]  [ ] Req  Postal code        │  │
+│   └───────────────────────────────────────────────────┘  │
+└───────────────────────────────────────────────────────────┘
+```
+
+**Form state:**
+
+```typescript
+interface NestedParameterRow {
+  name: string;
+  type: "string" | "number" | "integer" | "boolean" | "enum" | "array";
+  description: string;
+  required: boolean;
+  enum_values?: string[];
+  items_type?: "string" | "number" | "integer" | "boolean";
+}
+
+interface ObjectParameterRow {
+  name: string;
+  type: "object";
+  description: string;
+  required: boolean;
+  properties: NestedParameterRow[];
+}
+```
+
+**Submit:**
+
+```json
+{
+  "name": "address",
+  "type": "object",
+  "description": "Delivery address for the shipment",
+  "required": true,
+  "properties": [
+    {
+      "name": "city",
+      "type": "string",
+      "description": "City name",
+      "required": true
+    },
+    {
+      "name": "zip_code",
+      "type": "string",
+      "description": "Postal code",
+      "required": false
+    }
+  ]
+}
+```
+
+**Nested enum inside object** — same chip UI as top-level enum, on the nested row:
+
+```json
+{
+  "name": "status",
+  "type": "enum",
+  "description": "Shipment status filter",
+  "required": false,
+  "enum_values": ["pending", "shipped", "delivered"]
+}
+```
+
+**Nested array inside object** — element type dropdown on the nested row:
+
+```json
+{
+  "name": "sku_list",
+  "type": "array",
+  "description": "SKUs to include",
+  "required": true,
+  "items_type": "string"
+}
+```
+
+**After save — stored schema:**
+
+```json
+"address": {
+  "type": "object",
+  "description": "Delivery address for the shipment",
+  "properties": {
+    "city": { "type": "string", "description": "City name" },
+    "zip_code": { "type": "string", "description": "Postal code" }
+  },
+  "required": ["city"]
+}
+```
+
+**Load into edit form:** if `def.type === "object"`, map each entry in `def.properties` with `schemaPropertyToRow` and nested `def.required` (see below).
+
+**Detail / read-only view:** indent nested fields, e.g.:
+
+```
+address (object, required) — Delivery address for the shipment
+  • city — string, required
+  • zip_code — string, optional
+```
+
+**Validation before submit:**
+
+- `object` must have **at least one** nested field (`properties.length >= 1`)
+- Nested names unique within that object
+- Switching a row from `object` → `array` clears `properties`; switching to scalar clears `properties`, `items_type`, and `enum_values`
+
+#### Full create-tool example (mixed types)
+
+Request body fragment for `POST .../create-tool`:
+
+```json
+{
+  "name": "search_products",
+  "display_name": "Search products",
+  "description": "Search the product catalog by filters",
+  "api_url": "https://api.example.com/products/search",
+  "http_method": "POST",
+  "auth": { "type": "none" },
+  "parameters": [
+    {
+      "name": "query",
+      "type": "string",
+      "description": "Free-text search query",
+      "required": true
+    },
+    {
+      "name": "tags",
+      "type": "array",
+      "description": "Product tags to filter by",
+      "required": false,
+      "items_type": "string"
+    },
+    {
+      "name": "unit",
+      "type": "enum",
+      "description": "Weight unit for min_weight",
+      "required": false,
+      "enum_values": ["kg", "lb"]
+    },
+    {
+      "name": "filters",
+      "type": "object",
+      "description": "Structured filters",
+      "required": false,
+      "properties": [
+        {
+          "name": "min_weight",
+          "type": "number",
+          "description": "Minimum product weight",
+          "required": false
+        },
+        {
+          "name": "in_stock_only",
+          "type": "boolean",
+          "description": "Only return in-stock items",
+          "required": false
+        }
+      ]
+    }
+  ]
+}
+```
+
+At chat time the LLM might call this tool with runtime arguments like:
+
+```json
+{
+  "query": "running shoes",
+  "tags": ["sports", "footwear"],
+  "unit": "kg",
+  "filters": { "min_weight": 0.5, "in_stock_only": true }
+}
+```
+
+Those runtime values are **not** entered in the tool builder — only the schema above is.
 
 ### Edit form — token field UX
 
@@ -794,7 +1167,17 @@ Always handle `403` gracefully; membership and role can change after login.
 
 ### Parameters form ↔ API
 
-**Submit (create/update)** — convert form rows to array (handle type-specific fields):
+**Suggested `ParameterRow` union (form state):**
+
+```typescript
+type ParameterRow =
+  | { name: string; type: ToolScalarType; description: string; required: boolean }
+  | { name: string; type: "enum"; description: string; required: boolean; enum_values: string[] }
+  | { name: string; type: "array"; description: string; required: boolean; items_type: ToolArrayItemType }
+  | { name: string; type: "object"; description: string; required: boolean; properties: NestedParameterRow[] };
+```
+
+**Submit (create/update)** — convert form rows to the API `parameters` array (handle type-specific fields):
 
 ```typescript
 function rowToParameter(row: ParameterRow): ToolParameterInput {
@@ -933,11 +1316,18 @@ interface ToolCallingConfig {
   max_executions_per_turn?: number;
   parallel_calls_per_round?: boolean;
   stop_on_error?: boolean;
+  include_tool_history_in_llm?: boolean;
+  max_tool_history_in_llm?: number;
+}
+
+interface LlmContextConfig {
+  max_chat_history_messages?: number;
 }
 
 interface AgentToolSettings {
   tool_ids?: string[];
   tool_calling_config?: ToolCallingConfig;
+  llm_context_config?: LlmContextConfig;
 }
 
 interface CreateToolRequest {

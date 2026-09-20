@@ -15,6 +15,7 @@ ATLAS_TOOL_OBSERVABILITY_MAX_CHARS: int = 16_000
 # Hard caps for agent tool_calling_config (user values are clamped during validation).
 ABSOLUTE_MAX_TOOL_ROUNDS: int = 10
 ABSOLUTE_MAX_TOOL_EXECUTIONS_PER_TURN: int = 20
+ABSOLUTE_MAX_TOOL_HISTORY_IN_LLM: int = 20
 
 ToolResultMessageRole = Literal["assistant", "system"]
 

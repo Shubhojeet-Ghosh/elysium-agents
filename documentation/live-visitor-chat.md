@@ -1128,7 +1128,7 @@ Example `tool_call_from_agent` (AI monitor only — **never** sent to the visito
 }
 ```
 
-`status` is `"error"` when the HTTP call timed out, returned 4xx/5xx, or the model named an unknown tool. Payloads longer than 16 000 characters are stored/emitted as a string preview with `request_payload_truncated` / `response_payload_truncated: true`.
+`status` is `"error"` when the HTTP call timed out or returned 4xx/5xx. Payloads longer than 16 000 characters are stored/emitted as a string preview with `request_payload_truncated` / `response_payload_truncated: true`.
 
 Do not use tool rows as `last_message` in the sessions list — the server already excludes them.
 

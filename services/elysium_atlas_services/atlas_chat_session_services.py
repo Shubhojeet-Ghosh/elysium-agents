@@ -17,6 +17,101 @@ import re
 
 logger = get_logger()
 
+LLM_CHAT_HISTORY_FETCH_MAX = 200
+
+
+def _message_history_key(message: Dict[str, Any]) -> str:
+    mongo_id = message.get("_id")
+    if mongo_id is not None:
+        return str(mongo_id)
+    message_id = message.get("message_id")
+    if message_id:
+        return str(message_id)
+    return f"{message.get('role')}:{message.get('created_at')}"
+
+
+def trim_chat_history_for_llm(
+    messages: list[Dict[str, Any]],
+    max_user_agent_messages: int,
+    max_tool_messages: int,
+) -> list[Dict[str, Any]]:
+    """Keep the most recent user/agent and tool rows, merged in chronological order."""
+    if not messages or max_user_agent_messages <= 0:
+        return []
+
+    kept_keys: set[str] = set()
+
+    non_tool_count = 0
+    for message in reversed(messages):
+        if message.get("role") == CHAT_MESSAGE_ROLE_TOOL:
+            continue
+        if non_tool_count >= max_user_agent_messages:
+            continue
+        kept_keys.add(_message_history_key(message))
+        non_tool_count += 1
+
+    tool_count = 0
+    for message in reversed(messages):
+        if message.get("role") != CHAT_MESSAGE_ROLE_TOOL:
+            continue
+        if tool_count >= max_tool_messages:
+            continue
+        kept_keys.add(_message_history_key(message))
+        tool_count += 1
+
+    return [message for message in messages if _message_history_key(message) in kept_keys]
+
+
+async def get_llm_chat_history_for_session(
+    agent_id: str,
+    chat_session_id: str,
+    conversation_id: str | None,
+    tool_calling_config: dict[str, Any] | None,
+    llm_context_config: dict[str, Any] | None = None,
+) -> list[Dict[str, Any]]:
+    """
+    Load chat history for main agent LLM prompts (tool orchestration + final response).
+
+    When include_tool_history_in_llm is false (default), only user/agent text rows are
+    returned. When true, up to max_tool_history_in_llm tool rows are merged chronologically
+    with the user/agent window.
+    """
+    from config.atlas_tool_calling_config import (
+        INCLUDE_TOOL_HISTORY_IN_LLM_KEY,
+        MAX_TOOL_HISTORY_IN_LLM_KEY,
+        normalize_tool_calling_config,
+    )
+    from config.llm_context_config import resolve_max_chat_history_messages
+
+    max_user_agent_messages = resolve_max_chat_history_messages(llm_context_config)
+    config = normalize_tool_calling_config(tool_calling_config)
+    if not config.get(INCLUDE_TOOL_HISTORY_IN_LLM_KEY):
+        return await get_chat_messages_for_session(
+            agent_id,
+            chat_session_id,
+            limit=max_user_agent_messages,
+            conversation_id=conversation_id,
+            exclude_roles=list(CHAT_MESSAGE_ROLES_HIDDEN_FROM_LLM),
+        )
+
+    max_tool_history = int(config.get(MAX_TOOL_HISTORY_IN_LLM_KEY, 10))
+    fetch_limit = min(
+        max_user_agent_messages + (max_tool_history * 2),
+        LLM_CHAT_HISTORY_FETCH_MAX,
+    )
+    messages = await get_chat_messages_for_session(
+        agent_id,
+        chat_session_id,
+        limit=fetch_limit,
+        conversation_id=conversation_id,
+        exclude_roles=None,
+    )
+    return trim_chat_history_for_llm(
+        messages,
+        max_user_agent_messages=max_user_agent_messages,
+        max_tool_messages=max_tool_history,
+    )
+
 
 def coerce_utc_datetime(value) -> datetime.datetime:
     """

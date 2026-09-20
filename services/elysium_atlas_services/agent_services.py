@@ -18,6 +18,11 @@ from config.atlas_tool_calling_config import (
     merge_tool_calling_config,
     normalize_tool_calling_config,
 )
+from config.llm_context_config import (
+    get_default_llm_context_config,
+    merge_llm_context_config,
+    normalize_llm_context_config,
+)
 from bson import ObjectId
 from services.elysium_atlas_services.agent_db_operations import update_agent_status, update_agent_fields, update_agent_current_task, get_agent_by_id, get_agent_fields_by_id
 import asyncio
@@ -197,6 +202,9 @@ async def create_agent_document(initial_data: Optional[Dict[str, Any]] = None) -
         if "tool_calling_config" not in document:
             document["tool_calling_config"] = get_default_tool_calling_config()
 
+        if "llm_context_config" not in document:
+            document["llm_context_config"] = get_default_llm_context_config()
+
         result = await collection.insert_one(document)
         agent_id = str(result.inserted_id)
 
@@ -232,6 +240,7 @@ async def initialize_agent_build_update(requestData: Dict[str, Any]) -> bool:
             "lead_collection_config",
             "human_handover_config",
             "tool_calling_config",
+            "llm_context_config",
         ):
             if field in requestData and requestData[field] is not None:
                 updates[field] = requestData[field]
@@ -383,6 +392,9 @@ async def fetch_agent_document(agent_id: str) -> Optional[Dict[str, Any]]:
 
             document["tool_calling_config"] = normalize_tool_calling_config(
                 document.get("tool_calling_config")
+            )
+            document["llm_context_config"] = normalize_llm_context_config(
+                document.get("llm_context_config")
             )
 
             deprecated_present = any(field in document for field in DEPRECATED_AGENT_STORED_FIELDS)
@@ -537,6 +549,32 @@ async def normalize_human_handover_config_for_update(
     return None
 
 
+async def normalize_llm_context_config_for_update(
+    agent_id: str,
+    request_data: Dict[str, Any],
+) -> str | None:
+    """
+    If llm_context_config is present, validate partial fields and merge into request_data.
+
+    Returns:
+        Error message when invalid, otherwise None.
+    """
+    if "llm_context_config" not in request_data:
+        return None
+
+    agent = await get_agent_by_id(agent_id)
+    existing = agent.get("llm_context_config") if agent else None
+    merged, error_message = merge_llm_context_config(
+        existing,
+        request_data["llm_context_config"],
+    )
+    if error_message:
+        return error_message
+
+    request_data["llm_context_config"] = merged
+    return None
+
+
 async def normalize_tool_calling_config_for_update(
     agent_id: str,
     request_data: Dict[str, Any],
@@ -589,6 +627,7 @@ async def update_agent_basic_attributes(agent_id: str, requestData: Dict[str, An
             "tool_ids",
             "plugin_ids",
             "tool_calling_config",
+            "llm_context_config",
         ]
         
         updates = {}
