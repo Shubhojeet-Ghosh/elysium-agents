@@ -156,6 +156,13 @@ async def create_mongo_indexes():
         logger.info(
             "Compound index created on atlas_chat_sessions.agent_id and handover.status"
         )
+        await atlas_chat_sessions_collection.create_index(
+            [("agent_id", 1), ("created_at", 1)],
+            name="agent_id_created_at_index",
+        )
+        logger.info(
+            "Compound index created on atlas_chat_sessions.agent_id and created_at"
+        )
 
         atlas_team_member_presence_collection = get_collection("atlas_team_member_presence")
         await atlas_team_member_presence_collection.create_index(
@@ -228,6 +235,13 @@ async def create_mongo_indexes():
         logger.info("Index created on atlas_chat_mesages.created_at")
         await atlas_chat_mesages_collection.create_index([("agent_id", 1), ("chat_session_id", 1)], name="agent_id_chat_session_id_index_messages")
         logger.info("Compound index created on atlas_chat_mesages.agent_id and chat_session_id")
+        await atlas_chat_mesages_collection.create_index(
+            [("agent_id", 1), ("role", 1), ("created_at", 1)],
+            name="agent_id_role_created_at_index_messages",
+        )
+        logger.info(
+            "Compound index created on atlas_chat_mesages.agent_id, role, created_at"
+        )
 
         atlas_tools_collection = get_collection("atlas_tools")
         await atlas_tools_collection.create_index("team_id", name="team_id_1")

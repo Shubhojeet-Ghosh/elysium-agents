@@ -12,6 +12,7 @@ from routes.elysium_atlas.atlas_kb_items_routes import atlas_kb_items_router
 from routes.elysium_atlas.atlas_support_tickets_routes import atlas_support_tickets_router
 from routes.elysium_atlas.human_handover_routes import human_handover_router
 from routes.elysium_atlas.lead_collection_routes import lead_collection_router
+from routes.elysium_atlas.atlas_dashboard_routes import atlas_dashboard_router
 from routes.demo.demo_customer_inquiry_routes import demo_customer_inquiry_router
 from routes.elysium_chat_routers.elysium_chat_router import elysium_chat_router
 
@@ -29,5 +30,6 @@ main_router.include_router(atlas_kb_items_router)
 main_router.include_router(atlas_support_tickets_router)
 main_router.include_router(human_handover_router)
 main_router.include_router(lead_collection_router)
+main_router.include_router(atlas_dashboard_router)
 main_router.include_router(demo_customer_inquiry_router)
 main_router.include_router(elysium_chat_router)
