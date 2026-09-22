@@ -65,22 +65,27 @@ Creates the `atlas_agents` document with defaults and returns `agent_id`. Does *
 
 ### Supported `llm_model` values
 
-| Model ID                      |
-| ----------------------------- |
-| `gpt-4o-mini`                 |
-| `gpt-4.1-mini`                |
-| `gpt-5-nano-2025-08-07`       |
-| `openai/gpt-oss-120b`         |
-| `openai/gpt-oss-20b`          |
-| `claude-3-7-sonnet-latest`    |
-| `claude-sonnet-4-0`           |
-| `claude-sonnet-4-5`           |
-| `claude-haiku-4-5`            |
-| `grok-4-1-fast-non-reasoning` |
-| `grok-4-1-fast-reasoning`     |
-| `grok-code-fast-1`            |
-| `deepseek-v4-flash`           |
-| `deepseek-v4-pro`             |
+Source of truth: `config/llm_models_config.py` (`MODEL_REGISTRY`).
+
+Each registry entry may include `deprecated: true`. **Do not show deprecated models in create/update model pickers.** They remain valid for agents that already use them (API still accepts the ID), but users should not be able to select them for new agents or switch an agent to them.
+
+| Model ID                      | Deprecated |
+| ----------------------------- | ---------- |
+| `gpt-4o-mini`                 |            |
+| `gpt-4.1-mini`                |            |
+| `gpt-5-nano-2025-08-07`       |            |
+| `openai/gpt-oss-120b`         |            |
+| `openai/gpt-oss-20b`          |            |
+| `qwen/qwen3.8-27b`            |            |
+| `claude-3-7-sonnet-latest`    | Yes        |
+| `claude-sonnet-4-0`           | Yes        |
+| `claude-sonnet-4-5`           |            |
+| `claude-haiku-4-5`            |            |
+| `grok-4-1-fast-non-reasoning` |            |
+| `grok-4-1-fast-reasoning`     |            |
+| `grok-code-fast-1`            |            |
+| `deepseek-v4-flash`           |            |
+| `deepseek-v4-pro`             |            |
 
 ### Example request
 

@@ -20,6 +20,7 @@ DEFAULT_MODEL = "gpt-4o-mini"
 # - family: logical family/grouping of the model
 # - mode: "chat" | "reasoning" | other future modes
 # - handler: callable that will be invoked for this model
+# - deprecated: optional bool; when True, hide from frontend model pickers
 MODEL_REGISTRY: Dict[str, Dict[str, Any]] = {
     # Non-reasoning (temperature-enabled) chat
     "gpt-4o-mini": {
@@ -49,15 +50,22 @@ MODEL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "mode": "reasoning",
         "handler": groq_chat_completions,
     },
+    "qwen/qwen3.8-27b": {
+        "family": "groq",
+        "mode": "reasoning",
+        "handler": groq_chat_completions,
+    },
      "claude-3-7-sonnet-latest": {
         "family": "claude",
         "mode": "non-reasoning",
         "handler": claude_chat_completion_non_reasoning,
+        "deprecated": True,
     },
      "claude-sonnet-4-0": {
         "family": "claude",
         "mode": "non-reasoning",
         "handler": claude_chat_completion_non_reasoning,
+        "deprecated": True,
     },
     "claude-sonnet-4-5": {
         "family": "claude",
