@@ -6,6 +6,7 @@ from config.atlas_chat_config import (
     clamp_chat_session_list_page_size,
     validate_chat_session_search_query,
     CHAT_MESSAGE_ROLE_TOOL,
+    CHAT_MESSAGE_ROLES_HIDDEN_FROM_LLM,
     CHAT_MESSAGE_ROLES_HIDDEN_FROM_LAST_MESSAGE,
 )
 import datetime
