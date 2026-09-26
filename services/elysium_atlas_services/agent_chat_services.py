@@ -290,7 +290,8 @@ async def chat_with_agent_v1(agent_id, message, sid=None, chat_session_id=None, 
             f"{chat_log} load_session_agent_kb_ids done in {(time.perf_counter() - step_start) * 1000:.0f}ms "
             f"(history_messages={len(chat_history)}, ready_kb_ids={len(ready_kb_ids)}, "
             f"max_chat_history_messages={llm_context_config.get('max_chat_history_messages')}, "
-            f"include_tool_history={tool_calling_config.get('include_tool_history_in_llm')})"
+            f"include_tool_history={tool_calling_config.get('include_tool_history_in_llm')}, "
+            f"tool_calling_model={tool_calling_config.get('tool_calling_model')})"
         )
 
         monitor_sids = additional_params.get("_monitor_sids") or []

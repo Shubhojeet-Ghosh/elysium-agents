@@ -1,6 +1,6 @@
 # Custom Plugins APIs — frontend guide
 
-Reference for building the **team custom plugins** UI in Elysium Atlas. Plugins are Python functions the LLM can call like tools. The **plugin file** is the source of truth for name, description, and typed inputs. At chat runtime, attached plugins share DeepSeek orchestration with HTTP tools, then results are passed to the agent’s main LLM.
+Reference for building the **team custom plugins** UI in Elysium Atlas. Plugins are Python functions the LLM can call like tools. The **plugin file** is the source of truth for name, description, and typed inputs. At chat runtime, attached plugins share the agent’s configured tool-calling model orchestration with HTTP tools, then results are passed to the agent’s main LLM.
 
 **Architecture plan:** [atlas-plugins-plan.md](./atlas-plugins-plan.md)
 

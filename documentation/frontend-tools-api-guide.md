@@ -1,6 +1,6 @@
 # Custom Tools APIs — frontend guide
 
-Reference for building the **team custom tools** UI in Elysium Atlas. Tools are external HTTP integrations configured like OpenAI function calling. At chat runtime, attached tools are orchestrated via DeepSeek (multi-round when configured), then results are passed to the agent’s main LLM for the visitor-facing reply.
+Reference for building the **team custom tools** UI in Elysium Atlas. Tools are external HTTP integrations configured like OpenAI function calling. At chat runtime, attached tools are orchestrated via the agent’s configured **tool-calling model** (multi-round when configured), then results are passed to the agent’s main LLM for the visitor-facing reply.
 
 **Base path:** `/elysium-agents/elysium-atlas/tools`
 
@@ -90,6 +90,7 @@ Controls **how** attached tools run during visitor chat. Stored on each `atlas_a
 | `stop_on_error` | `boolean` | `false` | Hidden | When `true`, stop further tool rounds after a tool returns an error payload |
 | `include_tool_history_in_llm` | `boolean` | `false` | **Yes** | When `true`, past tool call request/response rows are injected into both the tool orchestration LLM and the final response LLM (chronological order). When `false`, only user/agent text history is sent (current default) |
 | `max_tool_history_in_llm` | `integer` | `10` | **Yes** (when history enabled) | Max number of **past** persisted tool rows to include in LLM prompts. Only applies when `include_tool_history_in_llm === true`. Current-turn tool results are always included when tools run |
+| `tool_calling_model` | `string` | `deepseek-v4-pro` | **Yes** | Model used for tool/plugin orchestration. Legacy agents without this field default to `deepseek-v4-pro`. See supported values below |
 
 ### Validation limits
 
@@ -100,6 +101,30 @@ Controls **how** attached tools run during visitor chat. Stored on each `atlas_a
 | `max_tool_history_in_llm` | `1` | `20` |
 
 Partial updates merge into the stored config (same pattern as `lead_collection_config`). Unknown keys return `400`.
+
+### Supported `tool_calling_model` values
+
+| Model ID | Provider | Notes |
+|----------|----------|-------|
+| `deepseek-v4-pro` | DeepSeek | **Default** for legacy agents and new agents unless overridden |
+| `deepseek-v4-flash` | DeepSeek | Faster/cheaper DeepSeek option |
+| `gpt-4o-mini` | OpenAI | Chat Completions tools API |
+| `gpt-4.1-mini` | OpenAI | Chat Completions tools API |
+| `gpt-5.4-mini` | OpenAI | Chat Completions tools API; sends agent `temperature` |
+| `gpt-5-nano-2025-08-07` | OpenAI | Chat Completions tools with `reasoning_effort: "none"` |
+| `gpt-6-astra` | OpenAI | Uses OpenAI **Responses API** for tool calling (required by OpenAI) |
+| `gpt-6-sol` | OpenAI | Chat Completions tools with `reasoning_effort: "none"` |
+| `gpt-6-luna` | OpenAI | Chat Completions tools with `reasoning_effort: "none"` |
+| `gpt-5.6-sol` | OpenAI | Chat Completions tools with `reasoning_effort: "none"` |
+| `gpt-5.6-terra` | OpenAI | Chat Completions tools with `reasoning_effort: "none"` |
+| `gpt-5.6-luna` | OpenAI | Chat Completions tools with `reasoning_effort: "none"` |
+| `claude-sonnet-4-5` | Claude | Messages API `tool_use` / `tool_result`; sends agent `temperature` |
+| `claude-haiku-4-5` | Claude | Messages API `tool_use` / `tool_result`; sends agent `temperature` |
+| `claude-sonnet-5` | Claude | Messages API `tool_use` / `tool_result`; orchestration omits `temperature` |
+
+**Deprecated (API-valid, hide from picker):** `claude-3-7-sonnet-latest`, `claude-sonnet-4-0`
+
+**UI guidance:** Show this picker when the agent has tools or plugins attached. It is independent of `llm_model` (the visitor reply model). Invalid model IDs return `400`. Hide rows where `deprecated === true`.
 
 ### What the settings mean (for UI copy)
 
@@ -175,6 +200,7 @@ Same endpoints as `tool_ids`:
   "tool_ids": ["674a1b2c3d4e5f6789012345"],
   "tool_calling_config": {
     "enabled": true,
+    "tool_calling_model": "gpt-4o-mini",
     "max_rounds": 5,
     "max_executions_per_turn": 10,
     "parallel_calls_per_round": true,
@@ -205,7 +231,7 @@ Same endpoints as `tool_ids`:
 When a visitor sends a message and the agent has non-empty `tool_ids` with `tool_calling_config.enabled === true`:
 
 1. Knowledge retrieval and prompt assembly run as today.
-2. **Tool orchestration** (DeepSeek `deepseek-v4-pro`):
+2. **Tool orchestration** (`tool_calling_config.tool_calling_model`, default `deepseek-v4-pro`):
    - Up to `max_rounds` cycles.
    - Each cycle: model may call zero or more tools → HTTP execution → results fed back to the orchestrator.
    - Stops when the model calls no tools, limits are hit, or `stop_on_error` triggers.
@@ -1312,6 +1338,7 @@ interface ToolAuthInput {
 }
 interface ToolCallingConfig {
   enabled?: boolean;
+  tool_calling_model?: string;
   max_rounds?: number;
   max_executions_per_turn?: number;
   parallel_calls_per_round?: boolean;

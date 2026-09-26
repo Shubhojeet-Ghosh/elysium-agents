@@ -19,7 +19,6 @@ from services.mongo_services import get_collection
 logger = get_logger()
 
 COLLECTION_NAME = "atlas_tools"
-TOOL_CALL_MODEL = "deepseek-v4-pro"
 TOOL_HTTP_TIMEOUT_SECONDS = 30.0
 
 
@@ -288,7 +287,7 @@ async def run_agent_tool_calling_round(
     on_tool_call: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
 ) -> list[dict[str, Any]] | None:
     """
-    Run multi-round tool orchestration via DeepSeek for this chat turn.
+    Run multi-round tool orchestration for this chat turn.
 
     Returns messages to insert before the current user message on the final response
     call (assistant role, plain text — compatible with Claude and other chat APIs).
@@ -297,12 +296,14 @@ async def run_agent_tool_calling_round(
     on_tool_call is fired in the background after each HTTP or plugin execution (success or
     error) so persist/emit cannot block the orchestration loop.
     """
-    from config.atlas_tool_calling_config import normalize_tool_calling_config
-    from services.deepseek_services import deepseek_chat_completion_with_tools
+    from config.atlas_tool_calling_config import TOOL_CALLING_MODEL_KEY, normalize_tool_calling_config
+    from config.tool_calling_models_config import DEFAULT_TOOL_CALLING_MODEL
     from services.elysium_atlas_services.atlas_plugin_execution_services import execute_atlas_plugin
     from services.elysium_atlas_services.atlas_plugin_services import get_active_plugins_by_ids
+    from services.llm_tool_calling_services import chat_completion_with_tools
 
     config = normalize_tool_calling_config(tool_calling_config)
+    tool_calling_model = config.get(TOOL_CALLING_MODEL_KEY) or DEFAULT_TOOL_CALLING_MODEL
     if not config.get("enabled"):
         return None
 
@@ -324,9 +325,9 @@ async def run_agent_tool_calling_round(
     executions = 0
 
     for round_index in range(max_rounds):
-        tool_response = await deepseek_chat_completion_with_tools(
+        tool_response = await chat_completion_with_tools(
             {
-                "model": TOOL_CALL_MODEL,
+                "model": tool_calling_model,
                 "messages": working_messages,
                 "tools": tools,
                 "temperature": temperature,

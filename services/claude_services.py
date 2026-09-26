@@ -324,3 +324,194 @@ async def claude_chat_completion_non_reasoning(params: Dict[str, Any]) -> Union[
         logger.error(f"Error calling Claude chat completion: {e}")
         raise
 
+
+CLAUDE_TOOL_CALLING_DEFAULT_MAX_TOKENS = 2048
+
+
+def convert_openai_tools_to_claude(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Convert OpenAI-style tool definitions to Claude Messages API tools."""
+    converted: list[dict[str, Any]] = []
+    for tool in tools:
+        if tool.get("type") != "function":
+            continue
+        function = tool.get("function") or {}
+        converted.append(
+            {
+                "name": function.get("name"),
+                "description": function.get("description") or "",
+                "input_schema": function.get("parameters")
+                or {"type": "object", "properties": {}},
+            }
+        )
+    return converted
+
+
+def _append_claude_tool_result(
+    claude_messages: list[dict[str, Any]],
+    tool_call_id: str,
+    content: str,
+) -> None:
+    block = {
+        "type": "tool_result",
+        "tool_use_id": tool_call_id,
+        "content": content,
+    }
+    if (
+        claude_messages
+        and claude_messages[-1]["role"] == "user"
+        and isinstance(claude_messages[-1]["content"], list)
+        and claude_messages[-1]["content"]
+        and claude_messages[-1]["content"][0].get("type") == "tool_result"
+    ):
+        claude_messages[-1]["content"].append(block)
+        return
+
+    claude_messages.append({"role": "user", "content": [block]})
+
+
+def chat_messages_to_claude_messages(
+    messages: list[dict[str, Any]],
+) -> tuple[str, list[dict[str, Any]]]:
+    """Convert OpenAI-style orchestration messages to Claude Messages API format."""
+    system_parts: list[str] = []
+    claude_messages: list[dict[str, Any]] = []
+
+    for message in messages:
+        role = message.get("role")
+        if role == "system":
+            content = message.get("content")
+            if content:
+                system_parts.append(str(content))
+            continue
+
+        if role == "user":
+            claude_messages.append({"role": "user", "content": message.get("content") or ""})
+            continue
+
+        if role == "assistant":
+            content = message.get("content")
+            tool_calls = message.get("tool_calls") or []
+            if tool_calls:
+                blocks: list[dict[str, Any]] = []
+                if content:
+                    blocks.append({"type": "text", "text": content})
+                for tool_call in tool_calls:
+                    function = tool_call.get("function") or {}
+                    raw_arguments = function.get("arguments") or "{}"
+                    try:
+                        parsed_arguments = (
+                            json.loads(raw_arguments)
+                            if isinstance(raw_arguments, str)
+                            else raw_arguments
+                        )
+                    except json.JSONDecodeError:
+                        parsed_arguments = {}
+                    if not isinstance(parsed_arguments, dict):
+                        parsed_arguments = {}
+                    blocks.append(
+                        {
+                            "type": "tool_use",
+                            "id": tool_call.get("id"),
+                            "name": function.get("name"),
+                            "input": parsed_arguments,
+                        }
+                    )
+                claude_messages.append({"role": "assistant", "content": blocks})
+            else:
+                claude_messages.append({"role": "assistant", "content": content or ""})
+            continue
+
+        if role == "tool":
+            _append_claude_tool_result(
+                claude_messages,
+                str(message.get("tool_call_id") or ""),
+                str(message.get("content") or ""),
+            )
+
+    return "\n\n".join(system_parts), claude_messages
+
+
+def parse_claude_tool_response(response: Any) -> dict[str, Any]:
+    """Normalize Claude tool_use output into the shared orchestration result shape."""
+    tool_calls_payload: list[dict[str, Any]] = []
+    text_parts: list[str] = []
+
+    for block in getattr(response, "content", None) or []:
+        block_type = getattr(block, "type", None)
+        if block_type == "text":
+            text = getattr(block, "text", None)
+            if text:
+                text_parts.append(text)
+            continue
+
+        if block_type == "tool_use":
+            tool_input = getattr(block, "input", None) or {}
+            tool_calls_payload.append(
+                {
+                    "id": block.id,
+                    "type": "function",
+                    "function": {
+                        "name": block.name,
+                        "arguments": json.dumps(tool_input),
+                    },
+                }
+            )
+
+    content = "".join(text_parts) if text_parts else None
+    assistant_message: dict[str, Any] = {"role": "assistant", "content": content}
+    if tool_calls_payload:
+        assistant_message["tool_calls"] = tool_calls_payload
+
+    return {
+        "content": content,
+        "tool_calls": tool_calls_payload or None,
+        "assistant_message": assistant_message,
+    }
+
+
+async def claude_chat_completion_with_tools(params: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Non-streaming Messages API call with Claude tool definitions.
+
+    Accepts OpenAI-style tools/messages used by Atlas orchestration and returns the
+    shared tool-calling payload consumed by ``run_agent_tool_calling_round``.
+    """
+    model = params.get("model", "claude-sonnet-4-5")
+    messages = params.get("messages") or []
+    tools = params.get("tools") or []
+    temperature = params.get("temperature", 0.3)
+    is_sonnet_5 = model == CLAUDE_SONNET_5_MODEL
+
+    if not isinstance(messages, list) or len(messages) == 0:
+        logger.warning("claude_chat_completion_with_tools called without messages")
+        return {"content": None, "tool_calls": None, "assistant_message": None}
+
+    try:
+        client = get_claude_async_client()
+        system_content, claude_messages = chat_messages_to_claude_messages(messages)
+        api_params: dict[str, Any] = {
+            "model": model,
+            "messages": claude_messages,
+            "tools": convert_openai_tools_to_claude(tools),
+            "max_tokens": (
+                CLAUDE_SONNET_5_DEFAULT_MAX_TOKENS
+                if is_sonnet_5
+                else CLAUDE_TOOL_CALLING_DEFAULT_MAX_TOKENS
+            ),
+        }
+        if not is_sonnet_5:
+            api_params["temperature"] = temperature
+        if system_content.strip():
+            api_params["system"] = system_content.strip()
+
+        response = await client.messages.create(**api_params)
+        parsed = parse_claude_tool_response(response)
+        logger.debug(
+            f"Claude tool completion model={model}, "
+            f"tool_calls={len(parsed.get('tool_calls') or [])}"
+        )
+        return parsed
+    except Exception as e:
+        logger.error(f"Error calling Claude tool completion: {e}", exc_info=True)
+        raise
+

@@ -8,6 +8,10 @@ from config.atlas_tool_config import (
     ABSOLUTE_MAX_TOOL_HISTORY_IN_LLM,
     ABSOLUTE_MAX_TOOL_ROUNDS,
 )
+from config.tool_calling_models_config import (
+    DEFAULT_TOOL_CALLING_MODEL,
+    validate_tool_calling_model,
+)
 
 ENABLED_KEY = "enabled"
 MAX_ROUNDS_KEY = "max_rounds"
@@ -16,6 +20,7 @@ PARALLEL_CALLS_PER_ROUND_KEY = "parallel_calls_per_round"
 STOP_ON_ERROR_KEY = "stop_on_error"
 INCLUDE_TOOL_HISTORY_IN_LLM_KEY = "include_tool_history_in_llm"
 MAX_TOOL_HISTORY_IN_LLM_KEY = "max_tool_history_in_llm"
+TOOL_CALLING_MODEL_KEY = "tool_calling_model"
 
 DEFAULT_MAX_ROUNDS = 5
 DEFAULT_MAX_EXECUTIONS_PER_TURN = 10
@@ -33,6 +38,7 @@ DEFAULT_TOOL_CALLING_CONFIG: dict = {
     STOP_ON_ERROR_KEY: False,
     INCLUDE_TOOL_HISTORY_IN_LLM_KEY: False,
     MAX_TOOL_HISTORY_IN_LLM_KEY: DEFAULT_MAX_TOOL_HISTORY_IN_LLM,
+    TOOL_CALLING_MODEL_KEY: DEFAULT_TOOL_CALLING_MODEL,
 }
 
 ALLOWED_TOOL_CALLING_FIELDS = frozenset(DEFAULT_TOOL_CALLING_CONFIG.keys())
@@ -104,6 +110,11 @@ def _validate_max_tool_history_in_llm(value) -> tuple[bool, str | None]:
     return True, None
 
 
+def _validate_tool_calling_model(value) -> tuple[bool, str | None]:
+    is_valid, _, error_message = validate_tool_calling_model(value)
+    return is_valid, error_message
+
+
 FIELD_VALIDATORS = {
     ENABLED_KEY: _validate_enabled,
     MAX_ROUNDS_KEY: _validate_max_rounds,
@@ -112,6 +123,7 @@ FIELD_VALIDATORS = {
     STOP_ON_ERROR_KEY: _validate_stop_on_error,
     INCLUDE_TOOL_HISTORY_IN_LLM_KEY: _validate_include_tool_history_in_llm,
     MAX_TOOL_HISTORY_IN_LLM_KEY: _validate_max_tool_history_in_llm,
+    TOOL_CALLING_MODEL_KEY: _validate_tool_calling_model,
 }
 
 
@@ -124,6 +136,9 @@ def normalize_tool_calling_config(config: dict | None) -> dict:
     for key in ALLOWED_TOOL_CALLING_FIELDS:
         if key in config and config[key] is not None:
             normalized[key] = config[key]
+
+    if not normalized.get(TOOL_CALLING_MODEL_KEY):
+        normalized[TOOL_CALLING_MODEL_KEY] = DEFAULT_TOOL_CALLING_MODEL
 
     return normalized
 

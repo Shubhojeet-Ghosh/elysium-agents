@@ -99,7 +99,9 @@ Each registry entry may include `deprecated: true`. **Do not show deprecated mod
 
 `claude-sonnet-5` uses adaptive thinking by default (effort `high`, not configurable). Chat does not send `temperature` for it; Anthropic returns 400 when that field is set. The visitor still receives only the text reply. Thinking tokens count toward the output limit, so this model uses a 4096-token cap instead of the 500-token cap used by the older Claude models.
 
-GPT-6 (`gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna`) and GPT-5.6 (`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`) are reasoning models, same as `gpt-5-nano-2025-08-07`. The create/update payload is unchanged: send the model ID as `llm_model`. `temperature` is still stored on the agent, but chat does not send it for these models. OpenAI rejects `temperature` unless reasoning effort is `none`, and GPT-6 Astra does not support `none`. GPT-5.6 and GPT-6 Sol/Luna use OpenAI's default effort, `medium`, when it is omitted. Replies stay on Chat Completions and still stream as plain text. Tool calls are unchanged — they run on the existing DeepSeek orchestration path, then the selected model writes the visitor reply.
+GPT-6 (`gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna`) and GPT-5.6 (`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`) are reasoning models, same as `gpt-5-nano-2025-08-07`. The create/update payload is unchanged: send the model ID as `llm_model`. `temperature` is still stored on the agent, but chat does not send it for these models. OpenAI rejects `temperature` unless reasoning effort is `none`, and GPT-6 Astra does not support `none`. GPT-5.6 and GPT-6 Sol/Luna use OpenAI's default effort, `medium`, when it is omitted. Replies stay on Chat Completions and still stream as plain text.
+
+**Tool/plugin orchestration** is configured separately via `tool_calling_config.tool_calling_model` (default `deepseek-v4-pro` for legacy agents). All OpenAI and Claude response models above are also valid tool-calling models; see [frontend-tools-api-guide.md](./frontend-tools-api-guide.md). The visitor reply still uses `llm_model`.
 
 ### Example request
 

@@ -241,3 +241,229 @@ async def openai_structured_output(
     except Exception as e:
         logger.error(f"Error calling structured output parsing: {e}")
         raise
+
+
+def serialize_assistant_tool_message(message: Any) -> dict[str, Any]:
+    """Convert an OpenAI assistant message (with optional tool_calls) to chat messages format."""
+    payload: dict[str, Any] = {
+        "role": "assistant",
+        "content": message.content,
+    }
+    if message.tool_calls:
+        payload["tool_calls"] = [
+            {
+                "id": tool_call.id,
+                "type": tool_call.type,
+                "function": {
+                    "name": tool_call.function.name,
+                    "arguments": tool_call.function.arguments,
+                },
+            }
+            for tool_call in message.tool_calls
+        ]
+    return payload
+
+
+def chat_messages_to_responses_input(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Convert Chat Completions messages to Responses API input items."""
+    items: list[dict[str, Any]] = []
+    for message in messages:
+        role = message.get("role")
+        if role in ("user", "system", "developer"):
+            items.append({"role": role, "content": message.get("content") or ""})
+            continue
+
+        if role == "assistant":
+            content = message.get("content")
+            if content:
+                items.append({"role": "assistant", "content": content})
+            for tool_call in message.get("tool_calls") or []:
+                function = tool_call.get("function") or {}
+                items.append(
+                    {
+                        "type": "function_call",
+                        "call_id": tool_call.get("id"),
+                        "name": function.get("name"),
+                        "arguments": function.get("arguments") or "{}",
+                    }
+                )
+            continue
+
+        if role == "tool":
+            items.append(
+                {
+                    "type": "function_call_output",
+                    "call_id": message.get("tool_call_id"),
+                    "output": message.get("content") or "",
+                }
+            )
+
+    return items
+
+
+def convert_tools_to_responses_format(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Convert Chat Completions tool definitions to Responses API tool definitions."""
+    converted: list[dict[str, Any]] = []
+    for tool in tools:
+        if tool.get("type") != "function":
+            continue
+        function = tool.get("function") or {}
+        converted.append(
+            {
+                "type": "function",
+                "name": function.get("name"),
+                "description": function.get("description") or "",
+                "parameters": function.get("parameters") or {"type": "object", "properties": {}},
+            }
+        )
+    return converted
+
+
+def _extract_responses_message_text(item: Any) -> str | None:
+    content = getattr(item, "content", None)
+    if not content:
+        return None
+
+    text_parts: list[str] = []
+    for part in content:
+        part_type = getattr(part, "type", None)
+        if part_type == "output_text":
+            text = getattr(part, "text", None)
+            if text:
+                text_parts.append(text)
+    return "".join(text_parts) if text_parts else None
+
+
+def parse_responses_tool_output(response: Any) -> dict[str, Any]:
+    """Normalize Responses API output into the shared tool-calling result shape."""
+    tool_calls_payload: list[dict[str, Any]] = []
+    content_parts: list[str] = []
+
+    for item in response.output or []:
+        item_type = getattr(item, "type", None)
+        if item_type == "function_call":
+            tool_calls_payload.append(
+                {
+                    "id": item.call_id,
+                    "type": "function",
+                    "function": {
+                        "name": item.name,
+                        "arguments": item.arguments,
+                    },
+                }
+            )
+            continue
+
+        if item_type == "message":
+            message_text = _extract_responses_message_text(item)
+            if message_text:
+                content_parts.append(message_text)
+
+    content = "".join(content_parts) if content_parts else None
+    assistant_message: dict[str, Any] = {"role": "assistant", "content": content}
+    if tool_calls_payload:
+        assistant_message["tool_calls"] = tool_calls_payload
+
+    return {
+        "content": content,
+        "tool_calls": tool_calls_payload or None,
+        "assistant_message": assistant_message,
+    }
+
+
+async def openai_chat_completion_with_tools(params: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Non-streaming Chat Completions call with OpenAI-style tool definitions.
+
+    Reasoning models must use ``reasoning_effort="none"`` for function tools on
+    Chat Completions (OpenAI rejects default reasoning effort with tools).
+    """
+    model = params.get("model", "gpt-4o-mini")
+    messages = params.get("messages") or []
+    tools = params.get("tools") or []
+    temperature = params.get("temperature", 0.3)
+
+    if not isinstance(messages, list) or len(messages) == 0:
+        logger.warning("openai_chat_completion_with_tools called without messages")
+        return {"content": None, "tool_calls": None, "assistant_message": None}
+
+    try:
+        from config.llm_models_config import get_model_config
+
+        client = get_openai_client()
+        model_config = get_model_config(model)
+        request_kwargs: dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "tools": tools,
+        }
+        if model_config.get("mode") == "non-reasoning":
+            request_kwargs["temperature"] = temperature
+        else:
+            # GPT-5.6 / GPT-6 Sol/Luna etc.: tools on Chat Completions require none.
+            request_kwargs["reasoning_effort"] = "none"
+
+        response = await client.chat.completions.create(**request_kwargs)
+        message = response.choices[0].message if response.choices else None
+        if not message:
+            return {"content": None, "tool_calls": None, "assistant_message": None}
+
+        tool_calls_payload = None
+        if message.tool_calls:
+            tool_calls_payload = [
+                {
+                    "id": tool_call.id,
+                    "type": tool_call.type,
+                    "function": {
+                        "name": tool_call.function.name,
+                        "arguments": tool_call.function.arguments,
+                    },
+                }
+                for tool_call in message.tool_calls
+            ]
+
+        assistant_message = serialize_assistant_tool_message(message)
+        logger.debug(
+            f"OpenAI Chat Completions tool call model={model}, "
+            f"tool_calls={len(tool_calls_payload or [])}"
+        )
+        return {
+            "content": message.content,
+            "tool_calls": tool_calls_payload,
+            "assistant_message": assistant_message,
+        }
+    except Exception as e:
+        logger.error(f"Error calling OpenAI Chat Completions tool completion: {e}", exc_info=True)
+        raise
+
+
+async def openai_responses_completion_with_tools(params: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Non-streaming Responses API call with tool definitions.
+
+    Required for ``gpt-6-astra`` tool calling per OpenAI docs.
+    """
+    model = params.get("model", "gpt-6-astra")
+    messages = params.get("messages") or []
+    tools = params.get("tools") or []
+
+    if not isinstance(messages, list) or len(messages) == 0:
+        logger.warning("openai_responses_completion_with_tools called without messages")
+        return {"content": None, "tool_calls": None, "assistant_message": None}
+
+    try:
+        client = get_openai_client()
+        response = await client.responses.create(
+            model=model,
+            tools=convert_tools_to_responses_format(tools),
+            input=chat_messages_to_responses_input(messages),
+        )
+        parsed = parse_responses_tool_output(response)
+        logger.debug(
+            f"OpenAI Responses tool call model={model}, "
+            f"tool_calls={len(parsed.get('tool_calls') or [])}"
+        )
+        return parsed
+    except Exception as e:
+        logger.error(f"Error calling OpenAI Responses tool completion: {e}", exc_info=True)
+        raise
