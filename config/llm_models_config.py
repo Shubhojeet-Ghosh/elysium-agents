@@ -33,9 +33,47 @@ MODEL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "mode": "non-reasoning",
         "handler": openai_chat_completion_non_reasoning,
     },
-    # Reasoning-oriented (no temperature)
+    # Defaults to reasoning effort "none", so temperature is valid.
+    "gpt-5.4-mini": {
+        "family": "openai-gpt-5.4-mini",
+        "mode": "non-reasoning",
+        "handler": openai_chat_completion_non_reasoning,
+    },
+    # Reasoning models. Chat Completions text replies only — do not send
+    # temperature or function tools. GPT-5.6 and GPT-6 Sol/Luna default to
+    # reasoning effort "medium" when omitted. GPT-6 Astra does not support "none".
     "gpt-5-nano-2025-08-07": {
         "family": "openai-gpt-5-nano",
+        "mode": "reasoning",
+        "handler": openai_chat_completion_reasoning,
+    },
+    "gpt-6-astra": {
+        "family": "openai-gpt-6",
+        "mode": "reasoning",
+        "handler": openai_chat_completion_reasoning,
+    },
+    "gpt-6-sol": {
+        "family": "openai-gpt-6",
+        "mode": "reasoning",
+        "handler": openai_chat_completion_reasoning,
+    },
+    "gpt-6-luna": {
+        "family": "openai-gpt-6",
+        "mode": "reasoning",
+        "handler": openai_chat_completion_reasoning,
+    },
+    "gpt-5.6-sol": {
+        "family": "openai-gpt-5.6",
+        "mode": "reasoning",
+        "handler": openai_chat_completion_reasoning,
+    },
+    "gpt-5.6-terra": {
+        "family": "openai-gpt-5.6",
+        "mode": "reasoning",
+        "handler": openai_chat_completion_reasoning,
+    },
+    "gpt-5.6-luna": {
+        "family": "openai-gpt-5.6",
         "mode": "reasoning",
         "handler": openai_chat_completion_reasoning,
     },
@@ -73,6 +111,12 @@ MODEL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "handler": claude_chat_completion_non_reasoning,
     },
      "claude-haiku-4-5": {
+        "family": "claude",
+        "mode": "non-reasoning",
+        "handler": claude_chat_completion_non_reasoning,
+    },
+    # Adaptive thinking is on by default. The chat handler omits temperature.
+    "claude-sonnet-5": {
         "family": "claude",
         "mode": "non-reasoning",
         "handler": claude_chat_completion_non_reasoning,

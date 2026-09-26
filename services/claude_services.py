@@ -8,6 +8,11 @@ from config.settings import settings
 
 logger = get_logger()
 
+# Sonnet 5 rejects non-default temperature, top_p, and top_k.
+# Adaptive thinking is on by default and shares the max_tokens budget with the reply.
+CLAUDE_SONNET_5_MODEL = "claude-sonnet-5"
+CLAUDE_SONNET_5_DEFAULT_MAX_TOKENS = 4096
+
 # Initialize Anthropic client
 _claude_client: Optional[Anthropic] = None
 _claude_async_client: Optional[AsyncAnthropic] = None
@@ -243,7 +248,13 @@ async def claude_chat_completion_non_reasoning(params: Dict[str, Any]) -> Union[
     model = params.get("model", "claude-sonnet-4-5")
     messages = params.get("messages") or []
     temperature = params.get("temperature", 0.7)
-    max_completion_tokens = params.get("max_completion_tokens", 500)
+    is_sonnet_5 = model == CLAUDE_SONNET_5_MODEL
+    if "max_completion_tokens" in params:
+        max_completion_tokens = params["max_completion_tokens"]
+    elif is_sonnet_5:
+        max_completion_tokens = CLAUDE_SONNET_5_DEFAULT_MAX_TOKENS
+    else:
+        max_completion_tokens = 500
     stream = bool(params.get("stream", False))
 
     if not isinstance(messages, list) or len(messages) == 0:
@@ -270,9 +281,10 @@ async def claude_chat_completion_non_reasoning(params: Dict[str, Any]) -> Union[
             "model": model,
             "messages": filtered_messages,  # Only user/assistant messages
             "max_tokens": max_completion_tokens,  # Claude uses max_tokens instead of max_completion_tokens
-            "temperature": temperature,
             "stream": stream,
         }
+        if not is_sonnet_5:
+            api_params["temperature"] = temperature
         
         # Add system parameter if we have system content
         if system_content.strip():
@@ -283,10 +295,17 @@ async def claude_chat_completion_non_reasoning(params: Dict[str, Any]) -> Union[
         if stream:
             async def stream_generator() -> AsyncGenerator[str, None]:
                 async for chunk in response:
-                    if hasattr(chunk, 'delta') and hasattr(chunk.delta, 'text'):
-                        yield chunk.delta.text
-                    elif hasattr(chunk, 'content_block') and hasattr(chunk.content_block, 'text'):
-                        yield chunk.content_block.text
+                    delta = getattr(chunk, "delta", None)
+                    if getattr(delta, "type", None) == "text_delta":
+                        text = getattr(delta, "text", None)
+                        if text:
+                            yield text
+                        continue
+                    content_block = getattr(chunk, "content_block", None)
+                    if getattr(content_block, "type", None) == "text":
+                        text = getattr(content_block, "text", None)
+                        if text:
+                            yield text
 
             logger.debug(f"Claude chat completion using model={model}, temperature={temperature}, stream=True")
             return stream_generator()
@@ -295,7 +314,7 @@ async def claude_chat_completion_non_reasoning(params: Dict[str, Any]) -> Union[
         content = ""
         if hasattr(response, 'content') and response.content:
             for block in response.content:
-                if hasattr(block, 'text'):
+                if getattr(block, "type", None) == "text" and getattr(block, "text", None):
                     content += block.text
         
         logger.debug(f"Claude chat completion using model={model}, temperature={temperature}, stream=False")
