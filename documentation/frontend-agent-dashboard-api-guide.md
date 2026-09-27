@@ -30,7 +30,7 @@ See [frontend-agents-rbac-guide.md](./frontend-agents-rbac-guide.md).
 | Series | Source | Meaning |
 |--------|--------|---------|
 | Sessions (`count`) | `atlas_chat_sessions.created_at` | New captured sessions in the bucket, **including sessions with no visitor message** |
-| Visitor messages (`visitor_message_count`) | `atlas_chat_mesages` where `role` is `user` | Visitor messages **sent** in the bucket, including messages on sessions that started earlier |
+| Visitor messages (`visitor_message_count`) | `atlas_chat_messages` where `role` is `user` | Visitor messages **sent** in the bucket, including messages on sessions that started earlier |
 
 These are independent. A returning visitor can add messages with **0** new sessions that day.
 

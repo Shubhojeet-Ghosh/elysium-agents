@@ -20,7 +20,7 @@ Visitor message
 | Orchestration limits | `atlas_agents.tool_calling_config` |
 | Chat entrypoint | `services/.../agent_chat_services.py` → `chat_with_agent_v1` |
 | Tool execution | `services/.../atlas_tool_execution_services.py` |
-| Tool audit / monitor emit | `atlas_chat_mesages` `role: "tool"` + `tool_call_from_agent` (fire-and-forget) |
+| Tool audit / monitor emit | `atlas_chat_messages` `role: "tool"` + `tool_call_from_agent` (fire-and-forget) |
 | Demo HTTP APIs | `routes/demo/demo_customer_inquiry_routes.py` |
 
 **Why two LLMs?** Tool calling uses OpenAI-style `tools` + `tool` roles. The final model might be Claude/Grok and only accepts plain messages. So **DeepSeek decides and runs tools**; results are injected as **plain-text assistant messages** for the final model.

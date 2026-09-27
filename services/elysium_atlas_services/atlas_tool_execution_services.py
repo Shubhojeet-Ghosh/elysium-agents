@@ -139,7 +139,7 @@ def _stringify_tool_history_payload(value: Any) -> str:
 
 
 def format_stored_tool_message_for_llm(stored_message: dict[str, Any]) -> str:
-    """Format a persisted atlas_chat_mesages tool row for LLM chat history."""
+    """Format a persisted atlas_chat_messages tool row for LLM chat history."""
     tool_name = (
         stored_message.get("tool_name")
         or stored_message.get("content")

@@ -4,7 +4,7 @@
 
 **Goal:** When an agent has human handover enabled, the AI detects visitor intent to speak with a real person (via LLM, no widget button). The session is flagged for the team dashboard, the visitor is told their request was registered, a name/email contact form is shown, and a team member can manually take over using the existing takeover flow. While waiting, the AI continues to answer normally.
 
-**Scope:** Atlas widget visitor ↔ AI agent chat (`chat_with_agent_v1` / `atlas-visitor-message`), persisted in `atlas_chat_sessions` / `atlas_chat_mesages`. Reuses existing human takeover (`in_conversation_with`, `atlas-team-member-start-conversation`). No push/email notifications, no visitor cancel, no auto-assignment in v1.
+**Scope:** Atlas widget visitor ↔ AI agent chat (`chat_with_agent_v1` / `atlas-visitor-message`), persisted in `atlas_chat_sessions` / `atlas_chat_messages`. Reuses existing human takeover (`in_conversation_with`, `atlas-team-member-start-conversation`). No push/email notifications, no visitor cancel, no auto-assignment in v1.
 
 ---
 

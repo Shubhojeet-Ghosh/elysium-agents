@@ -4,7 +4,7 @@
 
 **Goal:** Let agent owners and admins configure **per-agent** when and which contact fields to collect during live visitor chat. Team **members** can view rules but not change them. The AI answers normally until a trigger rule fires, then asks for missing fields one at a time. Once all required fields are captured, lead logic is removed from the LLM for the rest of the session.
 
-**Scope:** Atlas widget visitor ↔ AI agent chat (`chat_with_agent_v1`), persisted in `atlas_chat_sessions` / `atlas_chat_mesages`. Human takeover paths are out of scope for proactive collection triggers in Phase 1.
+**Scope:** Atlas widget visitor ↔ AI agent chat (`chat_with_agent_v1`), persisted in `atlas_chat_sessions` / `atlas_chat_messages`. Human takeover paths are out of scope for proactive collection triggers in Phase 1.
 
 ---
 

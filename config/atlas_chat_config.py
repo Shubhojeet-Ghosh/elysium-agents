@@ -24,7 +24,7 @@ CHAT_SESSION_STATUS_ACTIVE = "active"
 CHAT_SESSION_STATUS_IN_CONVERSATION = "in_conversation"
 CHAT_SESSION_STATUS_RESOLVED = "resolved"
 
-# atlas_chat_mesages.role for persisted tool HTTP calls (audit / monitor UI).
+# atlas_chat_messages.role for persisted tool HTTP calls (audit / monitor UI).
 CHAT_MESSAGE_ROLE_TOOL = "tool"
 CHAT_MESSAGE_ROLES_HIDDEN_FROM_LLM = frozenset({CHAT_MESSAGE_ROLE_TOOL})
 CHAT_MESSAGE_ROLES_HIDDEN_FROM_LAST_MESSAGE = frozenset({CHAT_MESSAGE_ROLE_TOOL})

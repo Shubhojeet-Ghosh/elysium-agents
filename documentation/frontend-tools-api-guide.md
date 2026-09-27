@@ -21,7 +21,7 @@ All routes require `Authorization: Bearer <session_jwt>`. The JWT must include `
 | Secrets | API keys/tokens are **never returned** after save; responses include `auth.token_configured: true` |
 | Agent linking | Agents store attached tools in `tool_ids` (array of `atlas_tools._id` strings) |
 | Runtime orchestration | Per-agent `tool_calling_config` controls multi-round tool execution during chat |
-| Chat audit | Each tool HTTP call is stored as `role: "tool"` on `atlas_chat_mesages` and mirrored to monitors |
+| Chat audit | Each tool HTTP call is stored as `role: "tool"` on `atlas_chat_messages` and mirrored to monitors |
 
 ---
 
@@ -255,7 +255,7 @@ When enabled, persisted tool rows are formatted as plain text (tool name, reques
 
 ## Tool calls in chat (monitors + history)
 
-Each HTTP tool execution is stored as its **own** `atlas_chat_mesages` row (`role: "tool"`) and mirrored live to session monitors. Persist and socket emit run in the background and do **not** delay the visitor reply.
+Each HTTP tool execution is stored as its **own** `atlas_chat_messages` row (`role: "tool"`) and mirrored live to session monitors. Persist and socket emit run in the background and do **not** delay the visitor reply.
 
 ### Who sees them
 

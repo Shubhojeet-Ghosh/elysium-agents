@@ -18,7 +18,7 @@ from services.mongo_services import get_collection
 logger = get_logger()
 
 CHAT_SESSIONS_COLLECTION = "atlas_chat_sessions"
-CHAT_MESSAGES_COLLECTION = "atlas_chat_mesages"
+CHAT_MESSAGES_COLLECTION = "atlas_chat_messages"
 AGENTS_COLLECTION = "atlas_agents"
 VISITOR_MESSAGE_ROLE = "user"
 
@@ -195,7 +195,7 @@ async def get_chat_session_counts(
     Count new sessions and visitor messages per UTC day or month.
 
     Sessions use atlas_chat_sessions.created_at (including sessions with no
-    visitor message). Visitor messages use atlas_chat_mesages with role=user
+    visitor message). Visitor messages use atlas_chat_messages with role=user
     and the message created_at, including messages on older sessions.
     """
     start_at, end_at, granularity = resolve_dashboard_date_window(date_range)

@@ -225,22 +225,22 @@ async def create_mongo_indexes():
             "Compound index created on atlas_chat_session_audits.chat_session_id, created_at"
         )
 
-        # Create indexes for atlas_chat_mesages collection
-        atlas_chat_mesages_collection = get_collection("atlas_chat_mesages")
-        await atlas_chat_mesages_collection.create_index("agent_id", name="agent_id_index_messages")
-        logger.info("Index created on atlas_chat_mesages.agent_id")
-        await atlas_chat_mesages_collection.create_index("chat_session_id", name="chat_session_id_index_messages")
-        logger.info("Index created on atlas_chat_mesages.chat_session_id")
-        await atlas_chat_mesages_collection.create_index("created_at", name="created_at_index_messages")
-        logger.info("Index created on atlas_chat_mesages.created_at")
-        await atlas_chat_mesages_collection.create_index([("agent_id", 1), ("chat_session_id", 1)], name="agent_id_chat_session_id_index_messages")
-        logger.info("Compound index created on atlas_chat_mesages.agent_id and chat_session_id")
-        await atlas_chat_mesages_collection.create_index(
+        # Create indexes for atlas_chat_messages collection
+        atlas_chat_messages_collection = get_collection("atlas_chat_messages")
+        await atlas_chat_messages_collection.create_index("agent_id", name="agent_id_index_messages")
+        logger.info("Index created on atlas_chat_messages.agent_id")
+        await atlas_chat_messages_collection.create_index("chat_session_id", name="chat_session_id_index_messages")
+        logger.info("Index created on atlas_chat_messages.chat_session_id")
+        await atlas_chat_messages_collection.create_index("created_at", name="created_at_index_messages")
+        logger.info("Index created on atlas_chat_messages.created_at")
+        await atlas_chat_messages_collection.create_index([("agent_id", 1), ("chat_session_id", 1)], name="agent_id_chat_session_id_index_messages")
+        logger.info("Compound index created on atlas_chat_messages.agent_id and chat_session_id")
+        await atlas_chat_messages_collection.create_index(
             [("agent_id", 1), ("role", 1), ("created_at", 1)],
             name="agent_id_role_created_at_index_messages",
         )
         logger.info(
-            "Compound index created on atlas_chat_mesages.agent_id, role, created_at"
+            "Compound index created on atlas_chat_messages.agent_id, role, created_at"
         )
 
         atlas_tools_collection = get_collection("atlas_tools")

@@ -202,7 +202,7 @@ def build_chat_message_document_from_payload(
     conversation_id: str | None = None,
 ) -> Dict[str, Any] | None:
     """
-    Build a single atlas_chat_mesages document with UTC datetime created_at.
+    Build a single atlas_chat_messages document with UTC datetime created_at.
     """
     if not payload or not isinstance(payload, dict):
         if payload is not None:
@@ -231,7 +231,113 @@ def build_chat_message_document_from_payload(
     if team_member_id is not None:
         doc["team_member_id"] = team_member_id
 
+    read_at = payload.get("read_at")
+    if read_at is not None:
+        doc["read_at"] = coerce_utc_datetime(read_at)
+
     return doc
+
+
+async def get_agent_welcome_message(agent_id: str) -> str | None:
+    """Return the agent welcome_message, falling back to the platform default."""
+    default_welcome_message = ELYSIUM_ATLAS_AGENT_CONFIG_DATA.get("agent_init_config", {}).get(
+        "welcome_message"
+    )
+    try:
+        if not agent_id:
+            return default_welcome_message
+
+        collection = get_collection("atlas_agents")
+        agent_oid = ObjectId(agent_id) if isinstance(agent_id, str) else agent_id
+        agent_doc = await collection.find_one({"_id": agent_oid}, {"welcome_message": 1})
+        if not agent_doc:
+            return default_welcome_message
+
+        welcome_message = agent_doc.get("welcome_message")
+        if welcome_message is None:
+            return default_welcome_message
+
+        normalized = str(welcome_message).strip()
+        return normalized or default_welcome_message
+    except Exception as e:
+        logger.error(f"Error fetching welcome_message for agent_id {agent_id}: {str(e)}")
+        return default_welcome_message
+
+
+async def persist_session_welcome_message_if_needed(
+    agent_id: str,
+    chat_session_id: str,
+    conversation_id: str | None,
+) -> Dict[str, Any] | None:
+    """
+    Persist the agent welcome message as the first agent row for a conversation thread.
+
+    Skips when the conversation already has messages or welcome_message is empty.
+    """
+    try:
+        if not agent_id or not chat_session_id or not conversation_id:
+            return None
+
+        welcome_message = await get_agent_welcome_message(agent_id)
+        if not welcome_message:
+            return None
+
+        messages_collection = get_collection("atlas_chat_messages")
+        conversation_query = {
+            "agent_id": agent_id,
+            "chat_session_id": chat_session_id,
+            "conversation_id": conversation_id,
+        }
+        existing_count = await messages_collection.count_documents(conversation_query)
+        if existing_count > 0:
+            existing_welcome = await messages_collection.find_one(
+                {**conversation_query, "role": "agent"},
+                sort=[("created_at", 1)],
+            )
+            return (
+                serialize_chat_message_for_client(existing_welcome)
+                if existing_welcome
+                else None
+            )
+
+        now = datetime.datetime.now(datetime.timezone.utc)
+        message_doc = build_chat_message_document_from_payload(
+            {
+                "message_id": str(uuid.uuid4()),
+                "role": "agent",
+                "content": welcome_message,
+                "created_at": now,
+                "read_at": now,
+            },
+            chat_session_id,
+            agent_id,
+            conversation_id,
+        )
+        if not message_doc:
+            return None
+
+        result = await messages_collection.insert_one(message_doc)
+        message_doc["_id"] = str(result.inserted_id)
+
+        sessions_collection = get_collection("atlas_chat_sessions")
+        await sessions_collection.update_one(
+            {"chat_session_id": chat_session_id, "agent_id": agent_id},
+            {"$set": {"last_message_at": now}},
+        )
+
+        logger.info(
+            "Persisted welcome message for chat_session_id=%s agent_id=%s conversation_id=%s",
+            chat_session_id,
+            agent_id,
+            conversation_id,
+        )
+        return serialize_chat_message_for_client(message_doc)
+    except Exception as e:
+        logger.error(
+            f"Error persisting welcome message for chat_session_id={chat_session_id} "
+            f"agent_id={agent_id}: {str(e)}"
+        )
+        return None
 
 
 async def get_chat_session_data(requestData: Dict[str, Any]) -> Dict[str, Any] | None:
@@ -299,6 +405,11 @@ async def get_chat_session_data(requestData: Dict[str, Any]) -> Dict[str, Any] |
             
             # Retrieve messages for the session, scoped to the current conversation
             exclude_roles = requestData.get("exclude_roles")
+            await persist_session_welcome_message_if_needed(
+                agent_id,
+                chat_session_id,
+                document.get("conversation_id"),
+            )
             messages = await get_chat_messages_for_session(
                 agent_id,
                 chat_session_id,
@@ -342,9 +453,20 @@ async def get_chat_session_data(requestData: Dict[str, Any]) -> Dict[str, Any] |
             result = await collection.insert_one(document)
             document["_id"] = str(result.inserted_id)
             document = serialize_chat_session_document_for_api(document)
-            
-            # For new session, messages will be empty
-            document["messages"] = []
+
+            exclude_roles = requestData.get("exclude_roles")
+            await persist_session_welcome_message_if_needed(
+                agent_id,
+                chat_session_id,
+                document.get("conversation_id"),
+            )
+            document["messages"] = await get_chat_messages_for_session(
+                agent_id,
+                chat_session_id,
+                limit=limit,
+                conversation_id=document.get("conversation_id"),
+                exclude_roles=exclude_roles,
+            )
             document = await enrich_chat_session_with_handler_name(document)
 
             logger.info(f"Created new chat session document with chat_session_id: {chat_session_id} and agent_id: {agent_id}")
@@ -381,7 +503,7 @@ async def get_chat_messages_for_session(
             logger.warning("agent_id and chat_session_id are required")
             return []
 
-        collection = get_collection("atlas_chat_mesages")
+        collection = get_collection("atlas_chat_messages")
 
         query: Dict[str, Any] = {"agent_id": agent_id, "chat_session_id": chat_session_id}
         if conversation_id:
@@ -630,6 +752,12 @@ async def ensure_chat_session_for_visitor(
         logger.info(
             f"Created chat session on visitor connect: chat_session_id={chat_session_id} "
             f"agent_id={agent_id}"
+        )
+
+        await persist_session_welcome_message_if_needed(
+            agent_id,
+            chat_session_id,
+            document.get("conversation_id"),
         )
 
         from services.elysium_atlas_services.atlas_chat_session_audit_services import (
@@ -1140,7 +1268,7 @@ def _build_team_member_chat_sessions_base_query(
 
 async def enrich_team_member_chat_session_rows(documents: list[dict]) -> list[dict]:
     """Add last_message and unread counts to team-member chat session API rows."""
-    messages_collection = get_collection("atlas_chat_mesages")
+    messages_collection = get_collection("atlas_chat_messages")
 
     async def _get_last_message(chat_session_id, agent_id, conversation_id):
         if not (chat_session_id and agent_id and conversation_id):
@@ -1348,7 +1476,7 @@ async def create_and_store_chat_messages(
     agent_message_payload: Dict[str, Any] | None = None,
 ) -> list[Dict[str, Any]]:
     """
-    Build and persist chat messages into the atlas_chat_mesages collection.
+    Build and persist chat messages into the atlas_chat_messages collection.
 
     This single service handles validation, building documents, and storing them.
     Returns the stored documents with inserted ids stringified. Returns an empty
@@ -1381,7 +1509,7 @@ async def create_and_store_chat_messages(
         if not messages:
             return []
 
-        collection = get_collection("atlas_chat_mesages")
+        collection = get_collection("atlas_chat_messages")
         result = await collection.insert_many(messages)
 
         # Attach inserted ids for downstream use.
@@ -1474,7 +1602,7 @@ async def create_and_store_tool_call_message(
         if parent_user_message_id:
             document["parent_user_message_id"] = parent_user_message_id
 
-        collection = get_collection("atlas_chat_mesages")
+        collection = get_collection("atlas_chat_messages")
         result = await collection.insert_one(document)
         document["_id"] = str(result.inserted_id)
 
@@ -1559,6 +1687,12 @@ async def rotate_conversation_id(agent_id: str, chat_session_id: str) -> Dict[st
             {"_id": 1}
         )
         if not document:
+            await ensure_chat_session_for_visitor(agent_id, chat_session_id)
+            document = await collection.find_one(
+                {"chat_session_id": chat_session_id, "agent_id": agent_id},
+                {"_id": 1},
+            )
+        if not document:
             logger.warning(
                 f"No chat session found for chat_session_id={chat_session_id} agent_id={agent_id}"
             )
@@ -1571,6 +1705,13 @@ async def rotate_conversation_id(agent_id: str, chat_session_id: str) -> Dict[st
             {"$set": {"conversation_id": new_conversation_id}}
         )
 
+        welcome_message = await persist_session_welcome_message_if_needed(
+            agent_id,
+            chat_session_id,
+            new_conversation_id,
+        )
+        messages = [welcome_message] if welcome_message else []
+
         logger.info(
             f"Rotated conversation_id to {new_conversation_id} for "
             f"chat_session_id={chat_session_id} agent_id={agent_id}"
@@ -1580,6 +1721,7 @@ async def rotate_conversation_id(agent_id: str, chat_session_id: str) -> Dict[st
             "chat_session_id": chat_session_id,
             "agent_id": agent_id,
             "conversation_id": new_conversation_id,
+            "messages": messages,
         }
 
     except Exception as e:
@@ -2009,7 +2151,7 @@ async def get_chat_message_by_object_id(
     if not ObjectId.is_valid(message_object_id):
         return None
 
-    collection = get_collection("atlas_chat_mesages")
+    collection = get_collection("atlas_chat_messages")
     return await collection.find_one(
         {
             "_id": ObjectId(message_object_id),
@@ -2030,7 +2172,7 @@ async def resolve_chat_message_identifier(
     if not message_identifier or not agent_id or not chat_session_id:
         return None
 
-    collection = get_collection("atlas_chat_mesages")
+    collection = get_collection("atlas_chat_messages")
     base_query = {"agent_id": agent_id, "chat_session_id": chat_session_id}
 
     if ObjectId.is_valid(message_identifier):
@@ -2119,7 +2261,7 @@ async def get_last_chat_message_for_session(
     if conversation_id:
         query["conversation_id"] = conversation_id
 
-    collection = get_collection("atlas_chat_mesages")
+    collection = get_collection("atlas_chat_messages")
     msg = await collection.find_one(query, sort=[("created_at", -1)])
     return serialize_chat_message_for_client(msg) if msg else None
 
@@ -2200,7 +2342,7 @@ async def count_unread_visitor_messages(
         if conversation_id:
             query["conversation_id"] = conversation_id
 
-        collection = get_collection("atlas_chat_mesages")
+        collection = get_collection("atlas_chat_messages")
         return await collection.count_documents(query)
 
     except Exception as e:
@@ -2215,7 +2357,7 @@ async def mark_chat_message_as_read(
     read_by: str | None = None,
 ) -> Dict[str, Any]:
     """
-    Set read_at on an atlas_chat_mesages document (UTC datetime).
+    Set read_at on an atlas_chat_messages document (UTC datetime).
     message_identifier may be the Mongo _id or the client UUID in message_id.
     read_by: user _id of the first reader (audit); stored only on the first read.
     Idempotent: preserves the first read_at and read_by if already set.
@@ -2234,7 +2376,7 @@ async def mark_chat_message_as_read(
             return {"success": False, "message": "Message not found"}
 
         message_object_id = str(message["_id"])
-        collection = get_collection("atlas_chat_mesages")
+        collection = get_collection("atlas_chat_messages")
         existing_read_at = message.get("read_at")
         if existing_read_at:
             read_at = coerce_utc_datetime(existing_read_at)
