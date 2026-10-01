@@ -1,7 +1,7 @@
 from typing import List, Optional, Dict, Any, AsyncGenerator, Union, Type, TypeVar
 import asyncio
 from xai_sdk import Client
-from xai_sdk.chat import user, system
+from xai_sdk.chat import assistant, developer, system, tool_result, user
 from pydantic import BaseModel
 from logging_config import get_logger
 from config.settings import settings
@@ -9,6 +9,10 @@ from config.settings import settings
 T = TypeVar('T', bound=BaseModel)
 
 logger = get_logger()
+
+# grok-4.7 cannot disable reasoning. xAI's default is "high"; visitor chat uses "medium".
+GROK_REASONING_EFFORT = "medium"
+_GROK_MODELS_WITH_REASONING_EFFORT = frozenset({"grok-4.7"})
 
 # Initialize Grok client
 _grok_client: Optional[Client] = None
@@ -31,6 +35,32 @@ def get_grok_client() -> Client:
     return _grok_client
 
 
+def _append_chat_messages(chat: Any, messages: list) -> None:
+    """Append every prompt message. Prior agent replies use the assistant role."""
+    for msg in messages:
+        role = msg.get("role")
+        content = msg.get("content", "")
+        if not isinstance(content, str):
+            content = "" if content is None else str(content)
+
+        if role == "system":
+            chat.append(system(content))
+        elif role == "user":
+            chat.append(user(content))
+        elif role == "assistant":
+            chat.append(assistant(content))
+        elif role == "developer":
+            chat.append(developer(content))
+        elif role == "tool":
+            tool_call_id = msg.get("tool_call_id")
+            chat.append(tool_result(content, tool_call_id=tool_call_id))
+        elif role == "function":
+            chat.append(assistant(content))
+        else:
+            logger.warning(f"Unknown Grok message role {role}; sending as user")
+            chat.append(user(content))
+
+
 async def grok_chat_completion(params: Dict[str, Any]) -> Union[str, AsyncGenerator[str, None]]:
     """
     General chat completion with Grok using xAI SDK.
@@ -41,6 +71,9 @@ async def grok_chat_completion(params: Dict[str, Any]) -> Union[str, AsyncGenera
             - model (str): Defaults to "grok-4"
             - temperature (float): Not directly supported in xAI SDK, logged as warning
             - stream (bool): Defaults to False, supports streaming
+
+    ``grok-4.7`` is called with ``reasoning_effort`` ``medium``. Older Grok IDs
+    do not accept that parameter.
 
     Returns:
         str (non-stream) or async generator of str (stream)
@@ -58,6 +91,10 @@ async def grok_chat_completion(params: Dict[str, Any]) -> Union[str, AsyncGenera
     if temperature != 0.7:
         logger.warning(f"Temperature {temperature} not supported in xAI SDK")
 
+    create_kwargs: dict[str, Any] = {"model": model}
+    if model in _GROK_MODELS_WITH_REASONING_EFFORT:
+        create_kwargs["reasoning_effort"] = GROK_REASONING_EFFORT
+
     try:
         if stream:
             async def stream_generator() -> AsyncGenerator[str, None]:
@@ -66,16 +103,8 @@ async def grok_chat_completion(params: Dict[str, Any]) -> Union[str, AsyncGenera
                 def producer():
                     try:
                         client = get_grok_client()
-                        chat = client.chat.create(model=model)
-                        for msg in messages:
-                            role = msg.get('role')
-                            content = msg.get('content', '')
-                            if role == 'system':
-                                chat.append(system(content))
-                            elif role == 'user':
-                                chat.append(user(content))
-                            else:
-                                logger.warning(f"Unsupported role {role}, skipping message")
+                        chat = client.chat.create(**create_kwargs)
+                        _append_chat_messages(chat, messages)
                         for response, chunk in chat.stream():
                             queue.put_nowait(chunk.content)
                         queue.put_nowait(None)  # sentinel
@@ -98,16 +127,8 @@ async def grok_chat_completion(params: Dict[str, Any]) -> Union[str, AsyncGenera
         else:
             def sync_call():
                 client = get_grok_client()
-                chat = client.chat.create(model=model)
-                for msg in messages:
-                    role = msg.get('role')
-                    content = msg.get('content', '')
-                    if role == 'system':
-                        chat.append(system(content))
-                    elif role == 'user':
-                        chat.append(user(content))
-                    else:
-                        logger.warning(f"Unsupported role {role}, skipping message")
+                chat = client.chat.create(**create_kwargs)
+                _append_chat_messages(chat, messages)
                 response = chat.sample()
                 return response.content
 

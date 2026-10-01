@@ -515,6 +515,11 @@ async def chat_with_agent_v1(agent_id, message, sid=None, chat_session_id=None, 
         if stream and hasattr(response_obj, "__aiter__"):
             first_chunk_emitted = False
             async for chunk in response_obj:
+                # Reasoning streams often yield empty deltas before visible text.
+                # Skipping them does not change the reply: the client appends chunk,
+                # and completion is the later done=true event with full_response.
+                if not chunk:
+                    continue
                 response_text += chunk
                 if sid:
                     if not first_chunk_emitted:

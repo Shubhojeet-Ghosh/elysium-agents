@@ -115,6 +115,7 @@ Partial updates merge into the stored config (same pattern as `lead_collection_c
 | `gpt-6-astra` | OpenAI | Uses OpenAI **Responses API** for tool calling (required by OpenAI) |
 | `gpt-6-sol` | OpenAI | Chat Completions tools with `reasoning_effort: "none"` |
 | `gpt-6-luna` | OpenAI | Chat Completions tools with `reasoning_effort: "none"` |
+| `gpt-6.1-sol` | OpenAI | Chat Completions tools with `reasoning_effort: "none"` |
 | `gpt-5.6-sol` | OpenAI | Chat Completions tools with `reasoning_effort: "none"` |
 | `gpt-5.6-terra` | OpenAI | Chat Completions tools with `reasoning_effort: "none"` |
 | `gpt-5.6-luna` | OpenAI | Chat Completions tools with `reasoning_effort: "none"` |

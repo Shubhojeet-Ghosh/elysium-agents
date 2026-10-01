@@ -22,7 +22,7 @@ ToolResultMessageRole = Literal["assistant", "system"]
 # Default role for injecting tool HTTP results into the final chat model prompt.
 DEFAULT_TOOL_RESULT_MESSAGE_ROLE: ToolResultMessageRole = "assistant"
 
-# xAI Grok SDK only accepts system + user roles — tool results use system for grok models.
+# Tool HTTP results are injected as system for Grok. Prior agent replies use assistant.
 GROK_TOOL_RESULT_MESSAGE_ROLE: ToolResultMessageRole = "system"
 GROK_MODEL_FAMILY = "grok"
 

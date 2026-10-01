@@ -62,6 +62,11 @@ MODEL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "mode": "reasoning",
         "handler": openai_chat_completion_reasoning,
     },
+    "gpt-6.1-sol": {
+        "family": "openai-gpt-6.1",
+        "mode": "reasoning",
+        "handler": openai_chat_completion_reasoning,
+    },
     "gpt-5.6-sol": {
         "family": "openai-gpt-5.6",
         "mode": "reasoning",
@@ -121,20 +126,29 @@ MODEL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "mode": "non-reasoning",
         "handler": claude_chat_completion_non_reasoning,
     },
-    # Grok chat
+    # Grok chat. 4.1 fast and grok-code-fast-1 stay API-valid for existing agents.
     "grok-4-1-fast-non-reasoning": {
         "family": "grok",
         "mode": "non-reasoning",
         "handler": grok_chat_completion,
+        "deprecated": True,
     },
     "grok-4-1-fast-reasoning": {
         "family": "grok",
         "mode": "reasoning",
         "handler": grok_chat_completion,
+        "deprecated": True,
     },
     "grok-code-fast-1": {
         "family": "grok",
         "mode": "non-reasoning",
+        "handler": grok_chat_completion,
+        "deprecated": True,
+    },
+    # Reasoning is always on. Chat sends effort "medium"; xAI does not allow "none".
+    "grok-4.7": {
+        "family": "grok",
+        "mode": "reasoning",
         "handler": grok_chat_completion,
     },
     # DeepSeek chat (OpenAI-compatible API — https://api.deepseek.com)
